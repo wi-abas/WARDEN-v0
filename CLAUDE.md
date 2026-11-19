@@ -96,3 +96,4 @@ Before you call a change done, run `uv run ruff check . && uv run ruff format --
 
 - Don't commit `.venv/`, `.DS_Store`, `__pycache__/` or `.env` files.
 - Commit or push only when asked.
+- Don't add `Co-Authored-By` or any Claude attribution lines to commit messages or PR descriptions.
