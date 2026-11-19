@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from warden.models import MAX_ARGUMENTS, ActionRequest, Decision, EvaluationResult
+from warden.models import MAX_ARGUMENTS, ActionRequest, Decision, EvaluationResult, Rule
 
 
 def valid_request(**overrides: object) -> dict[str, object]:
@@ -116,3 +116,26 @@ def test_result_serialises_to_plain_strings() -> None:
         "reason": "no matching rule",
         "matched_rule": None,
     }
+
+
+# --- Rules ---------------------------------------------------------------------
+
+
+def test_valid_rule_from_json() -> None:
+    rule = Rule.model_validate_json('{"id": "allow-read", "tool": "read_file", "effect": "allow"}')
+    assert rule.effect == Decision.ALLOW
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        '{"id": "r1", "tool": "read_file", "effect": "maybe"}',  # unknown effect
+        '{"id": "r1", "tool": "Read_File", "effect": "allow"}',  # bad tool name
+        '{"id": "Bad Id", "tool": "read_file", "effect": "allow"}',  # bad id
+        '{"id": "r1", "tool": "read_file"}',  # missing effect
+        '{"id": "r1", "tool": "read_file", "effect": "allow", "priority": 1}',  # extra field
+    ],
+)
+def test_bad_rules_are_rejected(raw: str) -> None:
+    with pytest.raises(ValidationError):
+        Rule.model_validate_json(raw)

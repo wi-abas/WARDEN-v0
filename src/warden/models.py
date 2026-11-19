@@ -15,6 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue
 # must never sneak past a rule written for "delete_file".
 TOOL_NAME_PATTERN = r"^[a-z0-9_.\-]{1,64}$"
 AGENT_ID_PATTERN = r"^[A-Za-z0-9_.\-]{1,128}$"
+RULE_ID_PATTERN = r"^[a-z0-9_.\-]{1,64}$"
 
 MAX_ARGUMENTS = 50
 
@@ -37,6 +38,16 @@ class ActionRequest(BaseModel):
     tool: str = Field(pattern=TOOL_NAME_PATTERN)
     # Any JSON values. May contain secrets, so never log this field.
     arguments: dict[str, JsonValue] = Field(default_factory=dict, max_length=MAX_ARGUMENTS)
+
+
+class Rule(BaseModel):
+    """One policy rule: when an agent asks for `tool`, the answer is `effect`."""
+
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+
+    id: str = Field(pattern=RULE_ID_PATTERN)
+    tool: str = Field(pattern=TOOL_NAME_PATTERN)
+    effect: Decision
 
 
 class EvaluationResult(BaseModel):
