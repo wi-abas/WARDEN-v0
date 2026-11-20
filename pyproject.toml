@@ -1,7 +1,7 @@
 [project]
 name = "warden"
 version = "0.1.0"
-description = "Add your description here"
+description = "Deterministic, local-first policy layer for AI agent tool calls"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
