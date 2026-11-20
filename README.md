@@ -120,3 +120,7 @@ uv run ruff format .           # format
 2. SQLite audit log of every decision
 3. Approval workflow bound to `action_hash`, single-use and expiring
 4. Authentication, Python SDK, MCP integration
+
+## License
+
+[MIT](LICENSE)
