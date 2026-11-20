@@ -157,3 +157,23 @@ def test_audit_db_file_deleted_while_running_still_works(tmp_path: Path) -> None
     # The table is gone, so the write fails, and the answer must be deny.
     response = client.post("/v1/evaluate", json=body("read_file", path="x"))
     assert response.json()["decision"] == "deny"
+
+
+def test_old_database_is_upgraded_and_keeps_history(tmp_path: Path) -> None:
+    path = tmp_path / "audit.db"
+    with sqlite3.connect(path) as conn:  # the table as the first version created it
+        conn.execute(
+            "CREATE TABLE decisions (id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp TEXT NOT NULL,"
+            " agent_id TEXT NOT NULL, tool TEXT NOT NULL, decision TEXT NOT NULL,"
+            " reason TEXT NOT NULL, matched_rule TEXT, action_hash TEXT)"
+        )
+        conn.execute(
+            "INSERT INTO decisions (timestamp, agent_id, tool, decision, reason)"
+            " VALUES ('2026-01-01T00:00:00+00:00', 'old', 'read_file', 'allow', 'old row')"
+        )
+    client = TestClient(create_app(DEFAULT_POLICY_PATH, audit_log=SQLiteAuditLog(path)))
+    response = client.post("/v1/evaluate", json=body("read_file", path="x"))
+    assert response.json()["decision"] == "allow"
+    entries = SQLiteAuditLog(path).recent()
+    assert [e.agent_id for e in entries] == ["agent-1", "old"]
+    assert entries[1].approval_id is None

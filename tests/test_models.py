@@ -116,6 +116,7 @@ def test_result_serialises_to_plain_strings() -> None:
         "reason": "no matching rule",
         "matched_rule": None,
         "action_hash": None,
+        "approval_id": None,
     }
 
 

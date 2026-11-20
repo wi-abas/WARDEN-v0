@@ -34,6 +34,7 @@ class AuditEntry(BaseModel):
     reason: str
     matched_rule: str | None
     action_hash: str | None
+    approval_id: str | None = None
 
     @classmethod
     def from_decision(cls, request: ActionRequest, result: EvaluationResult) -> "AuditEntry":
@@ -45,6 +46,7 @@ class AuditEntry(BaseModel):
             reason=result.reason,
             matched_rule=result.matched_rule,
             action_hash=result.action_hash,
+            approval_id=result.approval_id,
         )
 
 
@@ -65,11 +67,16 @@ CREATE TABLE IF NOT EXISTS decisions (
     decision     TEXT NOT NULL,
     reason       TEXT NOT NULL,
     matched_rule TEXT,
-    action_hash  TEXT
+    action_hash  TEXT,
+    approval_id  TEXT
 )
 """
 
-_COLUMNS = "timestamp, agent_id, tool, decision, reason, matched_rule, action_hash"
+# Columns added after the first version. Older databases get them on startup
+# (a tiny "migration"), so upgrading Warden never loses audit history.
+_ADDED_COLUMNS = {"approval_id": "TEXT"}
+
+_COLUMNS = "timestamp, agent_id, tool, decision, reason, matched_rule, action_hash, approval_id"
 
 
 class SQLiteAuditLog:
@@ -83,6 +90,11 @@ class SQLiteAuditLog:
         self.path = path
         with closing(self._connect()) as conn, conn:
             conn.execute(_SCHEMA)
+            existing = {row[1] for row in conn.execute("PRAGMA table_info(decisions)")}
+            for name, sql_type in _ADDED_COLUMNS.items():
+                if name not in existing:
+                    # Names come from the constant above, never from user input.
+                    conn.execute(f"ALTER TABLE decisions ADD COLUMN {name} {sql_type}")
 
     def _connect(self) -> sqlite3.Connection:
         return sqlite3.connect(self.path, timeout=5)
@@ -91,7 +103,7 @@ class SQLiteAuditLog:
         # "?" placeholders: values are never pasted into the SQL text (no SQL injection).
         with closing(self._connect()) as conn, conn:
             conn.execute(
-                f"INSERT INTO decisions ({_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?)",  # noqa: S608
+                f"INSERT INTO decisions ({_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",  # noqa: S608
                 (
                     entry.timestamp,
                     entry.agent_id,
@@ -100,6 +112,7 @@ class SQLiteAuditLog:
                     entry.reason,
                     entry.matched_rule,
                     entry.action_hash,
+                    entry.approval_id,
                 ),
             )
 
@@ -119,6 +132,7 @@ class SQLiteAuditLog:
                 reason=r[4],
                 matched_rule=r[5],
                 action_hash=r[6],
+                approval_id=r[7],
             )
             for r in rows
         ]

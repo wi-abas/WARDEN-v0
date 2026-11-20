@@ -18,6 +18,7 @@ TOOL_NAME_PATTERN = r"^[a-z0-9_.\-]{1,64}$"
 AGENT_ID_PATTERN = r"^[A-Za-z0-9_.\-]{1,128}$"
 RULE_ID_PATTERN = r"^[a-z0-9_.\-]{1,64}$"
 ARG_NAME_PATTERN = r"^[A-Za-z0-9_.\-]{1,64}$"
+APPROVAL_ID_PATTERN = r"^[A-Za-z0-9_\-]{16,64}$"
 
 MAX_ARGUMENTS = 50
 MAX_CONDITIONS = 20
@@ -42,6 +43,8 @@ class ActionRequest(BaseModel):
     tool: str = Field(pattern=TOOL_NAME_PATTERN)
     # Any JSON values. May contain secrets, so never log this field.
     arguments: dict[str, JsonValue] = Field(default_factory=dict, max_length=MAX_ARGUMENTS)
+    # Sent on the retry after a human approved. NOT part of the action fingerprint.
+    approval_id: str | None = Field(default=None, pattern=APPROVAL_ID_PATTERN)
 
 
 class Op(StrEnum):
@@ -120,3 +123,6 @@ class EvaluationResult(BaseModel):
     matched_rule: str | None = None
     # SHA-256 fingerprint of the exact action (see fingerprint.py), or None on errors.
     action_hash: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    # Set on require_approval (the pending approval to ask a human about) and on an
+    # allow that was granted by an approval.
+    approval_id: str | None = Field(default=None, pattern=APPROVAL_ID_PATTERN)

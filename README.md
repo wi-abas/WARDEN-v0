@@ -6,7 +6,7 @@ Before an agent runs a tool, it asks Warden. Warden checks a rulebook and answer
 
 - `allow`: run the tool
 - `deny`: don't
-- `require_approval`: a human must approve first (the approval workflow is not built yet)
+- `require_approval`: a human must approve first
 
 Warden never runs tools itself and never uses an LLM to decide.
 
@@ -38,7 +38,8 @@ curl -s -X POST http://127.0.0.1:8000/v1/evaluate \
   "decision": "require_approval",
   "reason": "matched rule 'approve-send'",
   "matched_rule": "approve-send",
-  "action_hash": "…64 hex characters…"
+  "action_hash": "…64 hex characters…",
+  "approval_id": "…32 characters…"
 }
 ```
 
@@ -46,6 +47,26 @@ curl -s -X POST http://127.0.0.1:8000/v1/evaluate \
 |---|---|
 | `GET /health` | `{"status": "ok", "rules_loaded": 3}`. `rules_loaded: 0` means the policy file is broken. |
 | `POST /v1/evaluate` | Send an action, get a decision. |
+| `GET /v1/approvals` | Admin: list pending approvals, with their arguments. |
+| `POST /v1/approvals/{id}/approve` | Admin: approve one (once). |
+| `POST /v1/approvals/{id}/deny` | Admin: deny one (once). |
+
+## Approvals
+
+1. The agent asks. A rule says `require_approval`, and the response includes an `approval_id`.
+2. You look at what's waiting and approve it. Admin calls need the key Warden prints in
+   the terminal at startup (a new one every start):
+   ```sh
+   curl -s http://127.0.0.1:8000/v1/approvals -H 'X-Warden-Admin-Key: <key>'
+   curl -s -X POST http://127.0.0.1:8000/v1/approvals/<approval_id>/approve -H 'X-Warden-Admin-Key: <key>'
+   ```
+3. The agent sends the **exact same action** again, plus `"approval_id": "<approval_id>"`,
+   and gets `allow`.
+
+An approval works **once**, only for the **exact action** that was approved (same agent,
+tool and arguments, checked via `action_hash`), and **expires after 15 minutes**. It can
+never turn a `deny` into `allow`. Each approval can be decided only once. Approvals are kept
+in memory only (arguments never touch disk), so restarting Warden clears them.
 
 ## Writing a policy
 
@@ -120,20 +141,24 @@ Each of these is covered by tests in `tests/`.
 - Request bodies over 64 KB, or of undeclared size, are refused.
 - Tool arguments are never logged or stored, and error responses never echo the input.
 - Every decision is recorded in the audit log; if recording fails, the answer is deny.
+- Approvals are single-use, expire, are bound to the exact action, and can't be
+  replayed, modified, double-decided, or used by two requests at once.
 - Every result carries an `action_hash`: a SHA-256 fingerprint of the exact action
   (agent, tool, arguments). Future approvals will be bound to it, so a changed action
   can't reuse an approval.
 
 ## Known limitations
 
-- **No authentication.** Any process on this machine can call the API.
+- **No authentication for agents.** Any process on this machine can call `/v1/evaluate`.
 - **`agent_id` is self-declared** and is not used for decisions.
 - **Warden is a checkpoint, not a sandbox.** An agent can skip asking. Enforcement depends
   on the agent runtime calling Warden and obeying the answer.
 - **Conditions check top-level arguments only**, not nested values.
 - **Deny-list rules are weaker than allow-lists.** A missing argument makes a condition
   false, so prefer "allow only when..." over "deny when...".
-- **`require_approval` cannot be granted yet.** Treat it as "not allowed" for now.
+- **The admin key is one shared secret, not real user accounts.** Any program that can
+  read your terminal output can approve. There's no record of *who* approved.
+- **Approvals are lost on restart** (in memory only).
 - **The audit log is a plain local file.** Anyone who can edit it can change history.
   Invalid requests (HTTP 422) are not recorded.
 - **The policy file is trusted.** Whoever can edit it controls every decision.
@@ -153,13 +178,14 @@ uv run ruff format .           # format
 | `src/warden/policy.py` | Loads and validates the policy file |
 | `src/warden/fingerprint.py` | Action fingerprints |
 | `src/warden/audit.py` | Audit log (SQLite) |
+| `src/warden/approvals.py` | Human approvals |
 | `src/warden/api.py` | HTTP API |
 
 ## Roadmap
 
 1. ~~Argument rules~~ (done)
 2. ~~SQLite audit log~~ (done)
-3. Approval workflow bound to `action_hash`, single-use and expiring
+3. ~~Approval workflow bound to `action_hash`, single-use and expiring~~ (done)
 4. Authentication, Python SDK, MCP integration
 
 ## License
