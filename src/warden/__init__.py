@@ -1,2 +1,1 @@
-def main() -> None:
-    print("Hello from warden!")
+"""Warden: a deterministic security and policy layer for AI agent tool calls."""
