@@ -93,6 +93,17 @@ A rule can add `when` conditions. It then matches only if **all** of them hold:
 - `true` is never treated as the number `1`.
 - Conditions only look at top-level arguments. No regex, no code.
 
+## Audit log
+
+Every decision is saved to `warden-audit.db` (SQLite, in the folder you start Warden from):
+time, agent, tool, decision, reason, matched rule and `action_hash`.
+**Tool arguments are never stored.** If the log can't be written, Warden answers
+`deny` (HTTP 503), so nothing is allowed without a record.
+
+```sh
+sqlite3 warden-audit.db "SELECT timestamp, tool, decision FROM decisions ORDER BY id DESC LIMIT 10"
+```
+
 ## Rule for clients: fail closed
 
 **Run the tool only if the response says `"decision": "allow"`.** Anything else means don't:
@@ -107,7 +118,8 @@ Each of these is covered by tests in `tests/`.
 - Any error inside Warden produces deny, never allow.
 - Strict input validation: unknown fields, wrong types and odd tool names are rejected.
 - Request bodies over 64 KB, or of undeclared size, are refused.
-- Tool arguments are never logged, and error responses never echo the input.
+- Tool arguments are never logged or stored, and error responses never echo the input.
+- Every decision is recorded in the audit log; if recording fails, the answer is deny.
 - Every result carries an `action_hash`: a SHA-256 fingerprint of the exact action
   (agent, tool, arguments). Future approvals will be bound to it, so a changed action
   can't reuse an approval.
@@ -122,6 +134,8 @@ Each of these is covered by tests in `tests/`.
 - **Deny-list rules are weaker than allow-lists.** A missing argument makes a condition
   false, so prefer "allow only when..." over "deny when...".
 - **`require_approval` cannot be granted yet.** Treat it as "not allowed" for now.
+- **The audit log is a plain local file.** Anyone who can edit it can change history.
+  Invalid requests (HTTP 422) are not recorded.
 - **The policy file is trusted.** Whoever can edit it controls every decision.
 
 ## Development
@@ -138,12 +152,13 @@ uv run ruff format .           # format
 | `src/warden/engine.py` | The decision logic |
 | `src/warden/policy.py` | Loads and validates the policy file |
 | `src/warden/fingerprint.py` | Action fingerprints |
+| `src/warden/audit.py` | Audit log (SQLite) |
 | `src/warden/api.py` | HTTP API |
 
 ## Roadmap
 
 1. ~~Argument rules~~ (done)
-2. SQLite audit log of every decision
+2. ~~SQLite audit log~~ (done)
 3. Approval workflow bound to `action_hash`, single-use and expiring
 4. Authentication, Python SDK, MCP integration
 

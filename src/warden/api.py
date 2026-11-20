@@ -4,6 +4,9 @@ Endpoints:
 - GET  /health       -> is the server up, and how many rules loaded (0 = broken policy file)
 - POST /v1/evaluate  -> send an ActionRequest, get an EvaluationResult
 
+Every decision is written to the audit log before it is returned. If the
+audit log can't be written, the answer is deny (503): no unrecorded allows.
+
 Every error response still carries "decision": "deny", so a careless client
 that only reads the decision field fails closed.
 
@@ -19,6 +22,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from warden import audit
+from warden.audit import AuditEntry, AuditLog, SQLiteAuditLog
 from warden.engine import evaluate
 from warden.models import ActionRequest, Decision, EvaluationResult
 from warden.policy import DEFAULT_POLICY_PATH, load_rules
@@ -61,9 +66,13 @@ class BodySizeLimit:
         await self.app(scope, receive, send)
 
 
-def create_app(policy_path: Path = DEFAULT_POLICY_PATH) -> FastAPI:
-    """Build the app. Rules are loaded once, here, at startup."""
+def create_app(
+    policy_path: Path = DEFAULT_POLICY_PATH, audit_log: AuditLog | None = None
+) -> FastAPI:
+    """Build the app. Rules and the audit log are set up once, here, at startup."""
     rules = load_rules(policy_path)
+    if audit_log is None:
+        audit_log = SQLiteAuditLog(audit.DEFAULT_AUDIT_PATH)
 
     app = FastAPI(title="Warden", version="0.1.0")
     app.add_middleware(BodySizeLimit)
@@ -83,9 +92,14 @@ def create_app(policy_path: Path = DEFAULT_POLICY_PATH) -> FastAPI:
     def health() -> dict[str, str | int]:
         return {"status": "ok", "rules_loaded": len(rules)}
 
-    @app.post("/v1/evaluate")
-    def evaluate_action(action: ActionRequest) -> EvaluationResult:
+    @app.post("/v1/evaluate", response_model=EvaluationResult)
+    def evaluate_action(action: ActionRequest) -> EvaluationResult | JSONResponse:
         result = evaluate(action, rules)
+        try:
+            audit_log.record(AuditEntry.from_decision(action, result))
+        except Exception as exc:
+            logger.error("audit log write failed, denying: %s", type(exc).__name__)
+            return _deny_response(503, "audit log unavailable")
         # Safe to log: tool names and rule ids are pattern-checked. Never log arguments.
         logger.info(
             "decision=%s tool=%s rule=%s", result.decision, action.tool, result.matched_rule
