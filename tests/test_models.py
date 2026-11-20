@@ -115,6 +115,7 @@ def test_result_serialises_to_plain_strings() -> None:
         "decision": "deny",
         "reason": "no matching rule",
         "matched_rule": None,
+        "action_hash": None,
     }
 
 

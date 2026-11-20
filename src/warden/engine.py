@@ -11,6 +11,7 @@ Security properties (each one is tested in tests/test_engine.py):
 import logging
 from collections.abc import Iterable
 
+from warden.fingerprint import fingerprint
 from warden.models import ActionRequest, Decision, EvaluationResult, Rule
 
 logger = logging.getLogger(__name__)
@@ -35,10 +36,13 @@ def evaluate(request: ActionRequest, rules: Iterable[Rule]) -> EvaluationResult:
 
 
 def _evaluate(request: ActionRequest, rules: Iterable[Rule]) -> EvaluationResult:
+    action_hash = fingerprint(request)
     matches = [rule for rule in rules if rule.tool == request.tool]
 
     if not matches:
-        return EvaluationResult(decision=Decision.DENY, reason="no matching rule")
+        return EvaluationResult(
+            decision=Decision.DENY, reason="no matching rule", action_hash=action_hash
+        )
 
     # Pick the most restrictive rule. On a tie, the smallest rule id wins,
     # so the answer is the same whatever order the rules are listed in.
@@ -48,4 +52,5 @@ def _evaluate(request: ActionRequest, rules: Iterable[Rule]) -> EvaluationResult
         decision=winner.effect,
         reason=f"matched rule '{winner.id}'",
         matched_rule=winner.id,
+        action_hash=action_hash,
     )

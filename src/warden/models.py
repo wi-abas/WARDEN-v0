@@ -59,3 +59,5 @@ class EvaluationResult(BaseModel):
     reason: str
     # The id of the rule that decided, or None when no rule matched (default deny).
     matched_rule: str | None = None
+    # SHA-256 fingerprint of the exact action (see fingerprint.py), or None on errors.
+    action_hash: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
