@@ -1,0 +1,7 @@
+{
+  "rules": [
+    { "id": "allow-read",   "tool": "read_file",   "effect": "allow" },
+    { "id": "approve-send", "tool": "send_email",  "effect": "require_approval" },
+    { "id": "block-delete", "tool": "delete_file", "effect": "deny" }
+  ]
+}
