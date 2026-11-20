@@ -69,6 +69,30 @@ Rules live in `policies/default.json`:
   The log says where the problem is.
 - Rules are loaded at startup. Restart the server after editing.
 
+### Argument rules
+
+A rule can add `when` conditions. It then matches only if **all** of them hold:
+
+```json
+{ "id": "big-invoice",   "tool": "send_invoice", "effect": "require_approval",
+  "when": [ { "arg": "amount", "op": "gt",  "value": 500 } ] },
+{ "id": "small-invoice", "tool": "send_invoice", "effect": "allow",
+  "when": [ { "arg": "amount", "op": "lte", "value": 500 } ] }
+```
+
+| `op` | Meaning | `value` |
+|---|---|---|
+| `eq`, `neq` | equals / doesn't equal | text, number or true/false |
+| `gt`, `gte`, `lt`, `lte` | number comparison | number |
+| `in` | is one of | list of 1–100 text/number values |
+| `startswith` | text starts with | non-empty text |
+
+- A **missing** argument makes the condition false.
+- An argument of the **wrong type** (e.g. `"50000"` as text for `gt`), or a value containing
+  `..` for `startswith`, **denies the whole request**. This stops a `deny` rule being dodged.
+- `true` is never treated as the number `1`.
+- Conditions only look at top-level arguments. No regex, no code.
+
 ## Rule for clients: fail closed
 
 **Run the tool only if the response says `"decision": "allow"`.** Anything else means don't:
@@ -94,7 +118,9 @@ Each of these is covered by tests in `tests/`.
 - **`agent_id` is self-declared** and is not used for decisions.
 - **Warden is a checkpoint, not a sandbox.** An agent can skip asking. Enforcement depends
   on the agent runtime calling Warden and obeying the answer.
-- **Rules match tool names only.** Arguments are not inspected yet.
+- **Conditions check top-level arguments only**, not nested values.
+- **Deny-list rules are weaker than allow-lists.** A missing argument makes a condition
+  false, so prefer "allow only when..." over "deny when...".
 - **`require_approval` cannot be granted yet.** Treat it as "not allowed" for now.
 - **The policy file is trusted.** Whoever can edit it controls every decision.
 
@@ -116,7 +142,7 @@ uv run ruff format .           # format
 
 ## Roadmap
 
-1. Argument rules (for example "invoices over €500 need approval")
+1. ~~Argument rules~~ (done)
 2. SQLite audit log of every decision
 3. Approval workflow bound to `action_hash`, single-use and expiring
 4. Authentication, Python SDK, MCP integration
