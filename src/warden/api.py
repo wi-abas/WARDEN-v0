@@ -19,8 +19,10 @@ Run it with `uv run warden` (listens on 127.0.0.1 only: this machine, not the ne
 """
 
 import logging
+import re
 import secrets
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 import uvicorn
@@ -31,10 +33,10 @@ from pydantic import JsonValue
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from warden import audit
-from warden.approvals import ApprovalStore, DecideError, apply_approval
-from warden.audit import AuditEntry, AuditLog, SQLiteAuditLog
+from warden.approvals import Approval, ApprovalStore, DecideError, Status, apply_approval
+from warden.audit import AuditEntry, AuditEvent, AuditLog, EventKind, SQLiteAuditLog
 from warden.engine import evaluate
-from warden.models import ActionRequest, Decision, EvaluationResult
+from warden.models import APPROVAL_ID_PATTERN, ActionRequest, Decision, EvaluationResult
 from warden.policy import DEFAULT_POLICY_PATH, load_rules
 
 logger = logging.getLogger(__name__)
@@ -58,21 +60,33 @@ class BodySizeLimit:
     bytes than Content-Length says.
     """
 
-    def __init__(self, app: ASGIApp, max_bytes: int = MAX_BODY_BYTES) -> None:
+    def __init__(
+        self,
+        app: ASGIApp,
+        max_bytes: int = MAX_BODY_BYTES,
+        on_reject: Callable[[Scope, int, str], None] = lambda scope, status, reason: None,
+    ) -> None:
         self.app = app
         self.max_bytes = max_bytes
+        self.on_reject = on_reject
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] == "http":
             headers = dict(scope["headers"])
             length = headers.get(b"content-length")
             if length is None and b"transfer-encoding" in headers:
-                await _deny_response(411, "content-length required")(scope, receive, send)
+                await self._reject(scope, receive, send, 411, "content-length required")
                 return
             if length is not None and (not length.isdigit() or int(length) > self.max_bytes):
-                await _deny_response(413, "request too large")(scope, receive, send)
+                await self._reject(scope, receive, send, 413, "request too large")
                 return
         await self.app(scope, receive, send)
+
+    async def _reject(
+        self, scope: Scope, receive: Receive, send: Send, status: int, reason: str
+    ) -> None:
+        self.on_reject(scope, status, reason)
+        await _deny_response(status, reason)(scope, receive, send)
 
 
 class _AdminKeyError(Exception):
@@ -103,23 +117,43 @@ def create_app(
         ):
             raise _AdminKeyError
 
+    def record_rejection(scope: Scope, status: int, reason: str) -> None:
+        """Audit a refused request: method and URL path only, never the body."""
+        try:
+            audit_log.record_event(
+                AuditEvent.now(
+                    EventKind.REQUEST_REJECTED,
+                    reason,
+                    http_status=status,
+                    method=str(scope.get("method", "")),
+                    path=str(scope.get("path", "")),
+                )
+            )
+        except Exception as exc:
+            # The answer is already deny, so a failed record doesn't change it.
+            logger.error("audit event write failed: %s", type(exc).__name__)
+
+    def reject(request: Request, status: int, reason: str) -> JSONResponse:
+        record_rejection(request.scope, status, reason)
+        return _deny_response(status, reason)
+
     app = FastAPI(title="Warden", version="0.1.0")
-    app.add_middleware(BodySizeLimit)
+    app.add_middleware(BodySizeLimit, on_reject=record_rejection)
 
     @app.exception_handler(RequestValidationError)
     async def invalid_request(request: Request, exc: RequestValidationError) -> JSONResponse:
         # FastAPI's default 422 echoes the input back, which may contain secrets.
-        return _deny_response(422, "invalid request")
+        return reject(request, 422, "invalid request")
 
     @app.exception_handler(_AdminKeyError)
     async def bad_admin_key(request: Request, exc: _AdminKeyError) -> JSONResponse:
-        return _deny_response(401, "admin key missing or wrong")
+        return reject(request, 401, "admin key missing or wrong")
 
     @app.exception_handler(Exception)
     async def unexpected_error(request: Request, exc: Exception) -> JSONResponse:
         # Log only the error type; never the message or a stack trace with arguments.
         logger.error("unexpected error handling request: %s", type(exc).__name__)
-        return _deny_response(500, "internal error")
+        return reject(request, 500, "internal error")
 
     @app.get("/health")
     def health() -> dict[str, str | int]:
@@ -153,23 +187,64 @@ def create_app(
             for a, seconds_left in approvals.pending()
         ]
 
-    def _decide(approval_id: str, approve: bool) -> JSONResponse:
+    def _decide(approval_id: str, approve: bool, request: Request) -> JSONResponse:
+        def audit_first(approval: Approval, new_status: Status) -> None:
+            # Runs before the approval changes. If this write fails, decide() raises
+            # and the approval stays pending: no human decision goes unrecorded.
+            kind = (
+                EventKind.APPROVAL_APPROVED
+                if new_status is Status.APPROVED
+                else EventKind.APPROVAL_DENIED
+            )
+            audit_log.record_event(
+                AuditEvent.now(
+                    kind,
+                    f"approval {new_status.value} by admin",
+                    approval_id=approval.approval_id,
+                    agent_id=approval.agent_id,
+                    tool=approval.tool,
+                    action_hash=approval.action_hash,
+                )
+            )
+
         try:
-            status = approvals.decide(approval_id, approve)
+            status = approvals.decide(approval_id, approve, before_commit=audit_first)
         except DecideError as exc:
-            if exc.not_found:
-                return JSONResponse(status_code=404, content={"error": "approval not found"})
-            return JSONResponse(status_code=409, content={"error": "approval already decided"})
+            reason = "approval not found" if exc.not_found else "approval already decided"
+            try:
+                audit_log.record_event(
+                    AuditEvent.now(
+                        EventKind.APPROVAL_DECIDE_FAILED,
+                        reason,
+                        http_status=404 if exc.not_found else 409,
+                        method=request.method,
+                        path=request.url.path,
+                        # Only keep the id if it looks like a real one.
+                        approval_id=approval_id
+                        if re.fullmatch(APPROVAL_ID_PATTERN, approval_id)
+                        else None,
+                    )
+                )
+            except Exception as audit_exc:
+                logger.error("audit event write failed: %s", type(audit_exc).__name__)
+            return JSONResponse(
+                status_code=404 if exc.not_found else 409, content={"error": reason}
+            )
+        except Exception as exc:
+            logger.error("approval not changed, audit failed: %s", type(exc).__name__)
+            return JSONResponse(
+                status_code=503, content={"error": "audit log unavailable, nothing changed"}
+            )
         logger.info("approval %s", status)  # never log the id or arguments
         return JSONResponse(content={"approval_id": approval_id, "status": status.value})
 
     @app.post("/v1/approvals/{approval_id}/approve", dependencies=[Depends(require_admin)])
-    def approve(approval_id: str) -> JSONResponse:
-        return _decide(approval_id, approve=True)
+    def approve(approval_id: str, request: Request) -> JSONResponse:
+        return _decide(approval_id, approve=True, request=request)
 
     @app.post("/v1/approvals/{approval_id}/deny", dependencies=[Depends(require_admin)])
-    def deny(approval_id: str) -> JSONResponse:
-        return _decide(approval_id, approve=False)
+    def deny(approval_id: str, request: Request) -> JSONResponse:
+        return _decide(approval_id, approve=False, request=request)
 
     return app
 

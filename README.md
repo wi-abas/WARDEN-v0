@@ -121,8 +121,15 @@ time, agent, tool, decision, reason, matched rule and `action_hash`.
 **Tool arguments are never stored.** If the log can't be written, Warden answers
 `deny` (HTTP 503), so nothing is allowed without a record.
 
+A second table, `events`, records everything else: a human approving or denying (if that
+record can't be written, the approval doesn't happen), failed approve/deny attempts, and
+rejected requests (wrong admin key, bad input, oversized body, errors), with method and URL
+path but never the body or query string. Failed approval retries keep the `approval_id`
+that was tried, so misuse is visible.
+
 ```sh
 sqlite3 warden-audit.db "SELECT timestamp, tool, decision FROM decisions ORDER BY id DESC LIMIT 10"
+sqlite3 warden-audit.db "SELECT timestamp, kind, http_status, reason FROM events ORDER BY id DESC LIMIT 10"
 ```
 
 ## Rule for clients: fail closed
@@ -160,7 +167,7 @@ Each of these is covered by tests in `tests/`.
   read your terminal output can approve. There's no record of *who* approved.
 - **Approvals are lost on restart** (in memory only).
 - **The audit log is a plain local file.** Anyone who can edit it can change history.
-  Invalid requests (HTTP 422) are not recorded.
+  Nothing limits its size yet.
 - **The policy file is trusted.** Whoever can edit it controls every decision.
 
 ## Development

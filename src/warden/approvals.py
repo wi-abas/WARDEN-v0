@@ -106,8 +106,17 @@ class ApprovalStore:
             items = [a for a in self._items.values() if a.status is Status.PENDING]
             return [(a, a.expires_at - now) for a in sorted(items, key=lambda a: a.expires_at)]
 
-    def decide(self, approval_id: str, approve: bool) -> Status:
-        """Approve or deny a pending approval, exactly once."""
+    def decide(
+        self,
+        approval_id: str,
+        approve: bool,
+        before_commit: Callable[[Approval, Status], None] = lambda a, s: None,
+    ) -> Status:
+        """Approve or deny a pending approval, exactly once.
+
+        `before_commit` runs (under the lock) before the status changes. If it raises,
+        nothing changes: used to make sure every human decision is audited first.
+        """
         with self._lock:
             self._purge_expired(self._clock())
             approval = self._items.get(approval_id)
@@ -115,8 +124,10 @@ class ApprovalStore:
                 raise DecideError(not_found=True)
             if approval.status is not Status.PENDING:
                 raise DecideError(not_found=False)
-            approval.status = Status.APPROVED if approve else Status.DENIED
-            return approval.status
+            new_status = Status.APPROVED if approve else Status.DENIED
+            before_commit(approval, new_status)
+            approval.status = new_status
+            return new_status
 
     def consume(self, approval_id: str, action_hash: str) -> bool:
         """Use an approval. True only once, only for the exact approved action."""
