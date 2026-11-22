@@ -29,7 +29,7 @@ LIMITS = {"default": {"requests_per_minute": 100000, "max_pending_approvals": 10
 
 
 def policy(tmp_path: Path) -> Path:
-    """The basic test policy with room for a flood (default quota is 50 pending)."""
+    """The basic test policy with room for a flood (default quota is 100 pending)."""
     path = tmp_path / "policy.json"
     path.write_text(json.dumps({**json.loads(BASIC_POLICY.read_text()), "limits": LIMITS}))
     return path
