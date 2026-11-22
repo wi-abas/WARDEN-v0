@@ -46,7 +46,7 @@ from warden.policy import DuplicateKeyError, no_duplicate_keys
 
 CHECKPOINT_VERSION: Literal["warden-audit-checkpoint-v1"] = "warden-audit-checkpoint-v1"
 MAX_CHECKPOINT_FILE_BYTES = 10 * 1024 * 1024
-MAX_CHECKPOINTS = 100_000
+MAX_CHECKPOINTS = 100_000  # mutation-ok: unreachable under the 10 MB limit (defence in depth)
 
 Hash = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 Table = Literal["decisions", "events"]
@@ -91,7 +91,7 @@ def make_checkpoint(path: Path, now: datetime | None = None) -> Checkpoint:
     if not report.ok:
         raise CheckpointError("the hash chain is broken: " + "; ".join(report.problems))
     heads: dict[Table, Head] = {}
-    with closing(sqlite3.connect(_uri(path), uri=True, timeout=5)) as conn:
+    with closing(sqlite3.connect(_uri(path), uri=True, timeout=5)) as conn:  # mutation-ok: timeout
         anchors = _anchors(conn)
         for table in TABLES:
             head = report.heads[table]
@@ -149,7 +149,7 @@ def check_checkpoints(path: Path, checkpoints: list[Checkpoint]) -> CheckResult:
     newest = {t: max(c.heads[t].id for c in checkpoints) for t in TABLES}
     problems: list[str] = []
     skipped = 0
-    with closing(sqlite3.connect(_uri(path), uri=True, timeout=5)) as conn:
+    with closing(sqlite3.connect(_uri(path), uri=True, timeout=5)) as conn:  # mutation-ok: timeout
         anchors = _anchors(conn)
         for number, checkpoint in enumerate(checkpoints, start=1):
             for table, head in sorted(checkpoint.heads.items()):
@@ -180,7 +180,7 @@ def _check_head(
         if anchor[1] == head.hash:
             return None
         return f"{table} row id {head.id}: hash differs (history was rewritten)"
-    if anchor is not None and head.id < anchor[0]:
+    if anchor is not None and head.id < anchor[0]:  # mutation-ok: == handled above
         return (
             f"{table} row id {head.id}: deleted by retention, and no newer checkpoint "
             f"(save checkpoints more often than the retention period)"

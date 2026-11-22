@@ -105,7 +105,11 @@ class ConfigError(ValueError):
 class ServerSpec(BaseModel):
     """How to start the real MCP server."""
 
-    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+    model_config = ConfigDict(
+        extra="forbid",
+        strict=True,  # mutation-ok: no JSON value is coerced into these text fields anyway
+        frozen=True,
+    )
 
     command: str = Field(min_length=1)
     args: tuple[str, ...] = ()
@@ -276,14 +280,17 @@ class McpProxy:
             env=server_env(spec.env, dict(os.environ)),
             limit=MAX_LINE_BYTES,
         )
+        # mutation-ok: both are set (PIPE); the assert only informs the type checker
         assert process.stdin is not None and process.stdout is not None  # noqa: S101 (PIPE)
         self._server_in = process.stdin
         server_side = asyncio.create_task(self._relay_server(process.stdout))
         client_side = asyncio.create_task(self._relay_client())
         await asyncio.wait({server_side, client_side}, return_when=asyncio.FIRST_COMPLETED)
+        # mutation-ok: `or` differs only if both sides end at the very same moment
         if client_side.done() and not server_side.done():
             # The client closed its input. Calls already accepted still get their answer
             # (each one ends: Warden has a timeout, approvals have a deadline).
+            # mutation-ok: calls never raise (they answer errors themselves)
             await asyncio.gather(*self._calls.values(), return_exceptions=True)
         else:
             client_side.cancel()
@@ -298,6 +305,7 @@ class McpProxy:
             await process.wait()
         await asyncio.wait({server_side}, timeout=SHUTDOWN_GRACE_SECONDS)
         server_side.cancel()
+        # mutation-ok: after wait() there always is a return code
         return process.returncode if process.returncode is not None else 1
 
     async def _relay_server(self, stdout: asyncio.StreamReader) -> None:
@@ -502,7 +510,7 @@ class McpProxy:
         deadline = time.monotonic() + settings.timeout_seconds
         # Rate limited (429) while polling: back off and keep waiting, never allow.
         while answer.decision is Decision.REQUIRE_APPROVAL or answer.retry_after is not None:
-            if time.monotonic() >= deadline:
+            if time.monotonic() >= deadline:  # mutation-ok: equal floats never happen
                 return Answer(Decision.DENY, "timed out waiting for a human to approve")
             await asyncio.sleep(max(settings.poll_seconds, answer.retry_after or 0.0))
             answer = await self._ask(tool, arguments, approval_id)
@@ -622,7 +630,7 @@ def stdin_reader(
     loop: asyncio.AbstractEventLoop, stream: BinaryIO
 ) -> Callable[[], Awaitable[bytes | None]]:
     """Read `stream` in a daemon thread (works on every OS, never blocks shutdown)."""
-    queue: asyncio.Queue[bytes | None] = asyncio.Queue(maxsize=64)
+    queue: asyncio.Queue[bytes | None] = asyncio.Queue(maxsize=64)  # mutation-ok: tuning
 
     def worker() -> None:
         while True:
@@ -636,6 +644,7 @@ def stdin_reader(
             if line == b"":
                 return
 
+    # mutation-ok: daemon only matters at interpreter exit
     threading.Thread(target=worker, name="warden-proxy-stdin", daemon=True).start()
     return queue.get
 

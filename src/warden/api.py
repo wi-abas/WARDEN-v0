@@ -98,7 +98,7 @@ REJECTIONS_PER_MINUTE = 60
 # Rejected requests are recorded by a background worker, never on the server's main
 # loop: if the database is locked (e.g. someone has it open), a synchronous write would
 # freeze EVERY request for up to 5 seconds. Tests switch this off to read events at once.
-RECORD_REJECTIONS_IN_BACKGROUND = True
+RECORD_REJECTIONS_IN_BACKGROUND = True  # mutation-ok: speed only
 
 
 def _deny_response(status_code: int, reason: str) -> JSONResponse:
@@ -189,7 +189,7 @@ class DuplicateKeyCheck:
         async def replay() -> Message:
             nonlocal replayed
             if not replayed:
-                replayed = True
+                replayed = True  # mutation-ok: the app reads the body only once
                 return {"type": "http.request", "body": body, "more_body": False}
             return await receive()
 
@@ -207,7 +207,7 @@ def _host_name(raw: bytes) -> str:
     host = raw.decode("latin-1").strip().lower()
     if host.startswith("["):
         return host[1 : host.find("]")] if "]" in host else ""
-    return host.rsplit(":", 1)[0] if host.count(":") == 1 else host
+    return host.rsplit(":", 1)[0] if host.count(":") == 1 else host  # mutation-ok: one ":"
 
 
 class HostCheck:
@@ -283,6 +283,7 @@ class SingleDecision(BaseModel):
     """Optional body of POST /v1/approvals/{id}/approve|deny: the action_hash the human
     was shown. When sent, it must match the approval (proof they looked at it)."""
 
+    # mutation-ok: strict/frozen can't matter: one string field, JSON never coerces to it
     model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
 
     action_hash: ActionHash
@@ -355,15 +356,17 @@ class _Warden:
     # requests can't fill the disk. The rest are counted and summarised in one event.
     rejections_per_minute: int = REJECTIONS_PER_MINUTE
     clock: Callable[[], float] = time.monotonic
-    record_in_background: bool = True
+    record_in_background: bool = True  # mutation-ok: speed only
     _events: ThreadPoolExecutor = field(
         default_factory=lambda: ThreadPoolExecutor(
-            max_workers=1, thread_name_prefix="warden-events"
+            # mutation-ok: one worker keeps events in order; tests can't see the order race
+            max_workers=1,
+            thread_name_prefix="warden-events",
         )
     )
     _limit_lock: threading.Lock = field(default_factory=threading.Lock)
     _window_start: float = -1e18
-    _window_count: int = 0
+    _window_count: int = 0  # mutation-ok: reset on the first rejection
     _suppressed: int = 0
 
     def __post_init__(self) -> None:
@@ -422,7 +425,7 @@ class _Warden:
         else:
             self._record_event_safely(event)
 
-    def flush_events(self, timeout: float = 10) -> None:
+    def flush_events(self, timeout: float = 10) -> None:  # mutation-ok: timeout
         """Wait until queued events are written (tests, shutdown)."""
         self._events.submit(lambda: None).result(timeout)
 
@@ -486,6 +489,7 @@ class _Warden:
             self.audit_log.record(AuditEntry.from_decision(action, result))
         except Exception as exc:
             logger.error("audit log write failed, denying: %s", type(exc).__name__)
+            # mutation-ok: restore() only acts on a USED approval, i.e. exactly this case
             if result.decision is Decision.ALLOW and result.approval_id is not None:
                 # The approval was used for an allow the agent will never get.
                 self.approvals.restore(result.approval_id)
@@ -824,7 +828,11 @@ def log_config() -> dict[str, Any]:
     They go through the same handler and format as Uvicorn's own lines.
     """
     config = copy.deepcopy(uvicorn.config.LOGGING_CONFIG)
-    config["loggers"]["warden"] = {"handlers": ["default"], "level": "INFO", "propagate": False}
+    config["loggers"]["warden"] = {
+        "handlers": ["default"],
+        "level": "INFO",
+        "propagate": False,  # mutation-ok: True would only print lines twice
+    }
     return config
 
 

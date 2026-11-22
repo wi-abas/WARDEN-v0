@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.3.0 (alpha, not yet tagged)
+## v0.3.0 (2026-11-22, alpha)
 
 ### Security fixes (full code review)
 - **Host-name rules**: `endswith`/`eq` with a value like `evil.com` could be dodged with

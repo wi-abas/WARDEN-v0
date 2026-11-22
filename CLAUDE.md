@@ -89,7 +89,7 @@ Use **uv** for everything. Never call `pip` directly and never edit `uv.lock` by
 | Fuzz (deep, local) | `HYPOTHESIS_PROFILE=deep uv run pytest tests/test_fuzz_targets.py` |
 | Review / decide approvals | `uv run warden approvals list --group` / `... approve ID ...` (needs `WARDEN_ADMIN_KEY`) |
 | Show / change rate limits | `uv run warden limits [set\|reset]` |
-| Mutation tests (slow) | `uv run python scripts/mutation.py --target engine` |
+| Mutation tests (slow) | `uv run python scripts/mutation.py --target engine` (CI minimum 90%; mark a reviewed, uncatchable spot with `# mutation-ok: <why>`) |
 | Benchmark | `uv run python scripts/benchmark.py` |
 
 Before calling a change done, run (no pipes that hide exit codes):
