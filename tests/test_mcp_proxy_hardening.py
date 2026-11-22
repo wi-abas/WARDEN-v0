@@ -34,6 +34,7 @@ from warden.api import create_app
 from warden.audit import SQLiteAuditLog
 from warden.client import Answer
 from warden.mcp_proxy import (
+    MAX_ANSWER_BACKLOG,
     MAX_META_INT,
     MAX_META_TEXT,
     ConfigError,
@@ -41,6 +42,7 @@ from warden.mcp_proxy import (
     ProxyConfig,
     encode,
     load_config,
+    parse_message,
 )
 from warden.models import Decision
 
@@ -437,17 +439,27 @@ def run_server_lines(
             {"server": {"command": "x"}, "allow_server_requests": allowed}, strict=False
         )
         proxy = McpProxy(config, FakeWarden(), asyncio.Queue().get, _collect(to_client))
-
-        async def capture(message: dict[str, Any]) -> None:
-            to_server.append(json.loads(encode(message)))
-
-        proxy._forward = capture  # type: ignore[method-assign]
+        proxy._server_in = _ServerInput(to_server)  # type: ignore[assignment]
         proxy._held.update(held)
         for line in lines:
             await proxy._handle_server(line)
 
     asyncio.run(main())
     return to_client, to_server
+
+
+class _ServerInput:
+    """Stands in for the server's stdin: records what the proxy writes to it."""
+
+    def __init__(self, into: list[dict[str, Any]]) -> None:
+        self.transport = self
+        self.write = _collect(into)
+
+    def is_closing(self) -> bool:
+        return False
+
+    def get_write_buffer_size(self) -> int:
+        return 0
 
 
 def _collect(into: list[dict[str, Any]]) -> Callable[[bytes], None]:
@@ -586,3 +598,156 @@ def test_real_proxy_process_refuses_a_sampling_request(tmp_path: Path) -> None:
     assert "refused server request 'sampling/createMessage'" in err.decode()
     replies = [json.loads(line) for line in log.read_text().splitlines()]
     assert {"jsonrpc": "2.0", "id": "srv-9", "error": ANY} in replies
+
+
+# --- Re-audit: attacks on this change -------------------------------------------------
+
+DEEP = b"[" * 100_000 + b"]" * 100_000
+
+
+def test_deep_nesting_from_the_client_is_refused_and_the_session_survives(
+    tmp_path: Path,
+) -> None:
+    """Found in the re-audit: RecursionError crashed the client relay (session ended)."""
+    deep_meta = b'{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"echo",'
+    deep_meta += b'"_meta":{"progressToken":' + DEEP + b"}}}"
+    deep_ping = b'{"jsonrpc":"2.0","id":2,"method":"ping","params":{"x":' + DEEP + b"}}"
+    warden = FakeWarden()
+
+    async def script(s: Session) -> None:
+        for line in (deep_meta, deep_ping):
+            s.send_raw(line + b"\n")
+            reply = await s.recv()
+            assert reply["error"]["message"] == "message nested too deeply (refused by Warden)"
+        assert (await s.roundtrip({"jsonrpc": "2.0", "id": 3, "method": "ping"}))["id"] == 3
+
+    session, _ = run_session(make_config(tmp_path), warden, script)
+    assert [m["id"] for m in session.server_saw()] == [3] and warden.asked == []
+
+
+def test_deep_nesting_that_parses_but_cant_be_encoded_is_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def too_deep(message: Any) -> bytes:
+        raise RecursionError
+
+    monkeypatch.setattr("warden.mcp_proxy.encode", too_deep)
+    with pytest.raises(Exception, match="nested too deeply"):
+        parse_message(b'{"a": [[[1]]]}')
+
+
+def test_deep_nesting_from_the_server_is_dropped(tmp_path: Path) -> None:
+    to_client, to_server = run_server_lines(
+        [
+            b'{"jsonrpc":"2.0","id":1,"result":' + DEEP + b"}",
+            b'{"jsonrpc":"2.0","id":2,"result":1}',
+        ],
+        [],
+    )
+    assert to_client == [{"jsonrpc": "2.0", "id": 2, "result": 1}] and to_server == []
+
+
+def test_server_request_flood_is_answered_and_the_session_keeps_working(tmp_path: Path) -> None:
+    flood = [
+        json.dumps({"jsonrpc": "2.0", "id": i, "method": "sampling/createMessage"})
+        for i in range(20_000)
+    ]
+
+    async def script(s: Session) -> None:
+        s.send(call("server_says", {"lines": flood}))
+        assert (await s.recv(timeout=20))["id"] == 1
+        assert (await s.roundtrip({"jsonrpc": "2.0", "id": 2, "method": "ping"}))["id"] == 2
+
+    session, _ = run_session(make_config(tmp_path), FakeWarden(), script)
+    # Answered, unless the backlog cap kicked in (depends on the OS pipe size).
+    assert 0 < len(replies_to_server(session)) <= len(flood)
+    assert session.outbox.empty()  # none of them reached the client
+
+
+class _StuckServer:
+    """A server input nobody reads: the write buffer only grows."""
+
+    def __init__(self, buffered: int) -> None:
+        self.transport = self
+        self.buffered = buffered
+        self.written: list[bytes] = []
+
+    def is_closing(self) -> bool:
+        return False
+
+    def get_write_buffer_size(self) -> int:
+        return self.buffered
+
+    def write(self, data: bytes) -> None:
+        self.written.append(data)
+        self.buffered += len(data)
+
+
+def test_answers_to_a_server_that_stops_reading_are_capped_not_awaited(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    proxy = McpProxy(make_config(tmp_path), FakeWarden(), asyncio.Queue().get, lambda b: None)
+    stuck = _StuckServer(buffered=MAX_ANSWER_BACKLOG - 10)
+    proxy._server_in = stuck  # type: ignore[assignment]
+    request = b'{"jsonrpc":"2.0","id":1,"method":"sampling/createMessage"}'
+
+    async def main() -> None:
+        for _ in range(5):  # never blocks, even though nothing is read
+            await proxy._handle_server(request)
+        await proxy._handle_server(b'{"jsonrpc":"2.0","id":2,"method":"ping"}')
+
+    asyncio.run(main())
+    assert len(stuck.written) == 1  # the rest were dropped once over the cap
+    assert caplog.text.count("isn't reading its input") == 1
+
+
+def test_answer_to_a_dead_server_does_not_crash(tmp_path: Path) -> None:
+    from test_mcp_proxy import _BrokenWriter
+
+    class Broken(_BrokenWriter):
+        transport = _StuckServer(0)
+
+    proxy = McpProxy(make_config(tmp_path), FakeWarden(), asyncio.Queue().get, lambda b: None)
+    request = b'{"jsonrpc":"2.0","id":1,"method":"roots/list"}'
+
+    async def main() -> None:
+        await proxy._handle_server(request)  # no server yet: nothing to answer
+        proxy._server_in = Broken()  # type: ignore[assignment]
+        await proxy._handle_server(request)
+
+    asyncio.run(main())
+
+
+def test_odd_server_method_names_are_not_logged(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    lines = [
+        json.dumps({"jsonrpc": "2.0", "id": 1, "method": "steal/s3cret-data here"}).encode(),
+        json.dumps({"jsonrpc": "2.0", "id": 2, "method": "sampling/createMessage"}).encode(),
+    ]
+    run_server_lines(lines, [])
+    assert "s3cret" not in caplog.text and "(unusual name)" in caplog.text
+    assert "'sampling/createMessage'" in caplog.text
+
+
+def test_server_answering_its_own_refused_request_reaches_nobody_as_a_request(
+    tmp_path: Path,
+) -> None:
+    """The server sends a request, gets refused, then 'answers' it towards the client.
+    That's just a response (the server is trusted for what it answers); it never turns
+    into a request, and the proxy doesn't answer it again."""
+    lines = [
+        b'{"jsonrpc":"2.0","id":"srv-1","method":"sampling/createMessage"}',
+        b'{"jsonrpc":"2.0","id":"srv-1","result":{"content":"x"}}',
+    ]
+    to_client, to_server = run_server_lines(lines, [])
+    assert to_client == [{"jsonrpc": "2.0", "id": "srv-1", "result": {"content": "x"}}]
+    assert len(to_server) == 1 and to_server[0]["error"]["code"] == -32601
+
+
+def test_server_request_reusing_a_held_client_id_is_still_refused(tmp_path: Path) -> None:
+    """Ids are per direction: a server request with the id of a call Warden holds is
+    refused like any other, and doesn't release or answer the held call."""
+    line = b'{"jsonrpc":"2.0","id":1,"method":"elicitation/create"}'
+    to_client, to_server = run_server_lines([line], [], held=("1",))
+    assert to_client == [] and to_server[0]["id"] == 1 and "error" in to_server[0]

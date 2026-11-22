@@ -118,4 +118,47 @@ Protects against (as before, only for clients that reach the server through the 
 
 ## Re-audit findings
 
-(Filled in at the end.)
+Every finding was reproduced before the fix and has a regression test in
+`tests/test_mcp_proxy_hardening.py`.
+
+| # | Severity | Finding | Fix |
+|---|---|---|---|
+| 1 | Medium (availability) | **Lone surrogate crashed the session** (on `main` too). A client message with `"\ud800"` anywhere parsed fine, but re-encoding it raised `UnicodeEncodeError` inside the client relay, ending the whole proxy session. With server lines now parsed too, the server side would have had the same crash. | `parse_message` refuses anything that can't be re-encoded (`-32600`); valid surrogate pairs (escaped emoji) still pass. |
+| 2 | Medium (availability) | **Deep nesting crashed the session** (on `main` too). ~200 KB of `[` raised `RecursionError` (not a `ValueError`), uncaught on both relays. | Refused as "nested too deeply" on parse and on encode; from the server: dropped. |
+| 3 | Low (availability) | **Server request flood could stall the relay.** The proxy's error answers awaited `drain()` on the server's stdin; a server that floods requests without reading its input fills the pipe (64 KB on Linux), the proxy stops reading the server's output and both sides wait forever. Not reproducible on macOS (pipes grow), real on Linux by construction. | The proxy's own answers never wait. Past 1 MB of unsent bytes they're dropped (logged once); the requests are still never forwarded. |
+| 4 | Low | **Server-chosen method names went into logs.** A refused request's method (up to 64 characters of anything) was logged escaped. | Only names matching the method pattern are logged; others show as `(unusual name)`. |
+
+Checked and holding up (tests for each):
+
+- `_meta` smuggling: look-alike keys (Cyrillic, zero-width, case), `__proto__`, nested
+  objects and lists, booleans, floats, huge numbers, long/empty/control/non-ASCII text,
+  `_meta` not an object, repeated keys inside `_meta`, deep nesting inside `_meta`. All
+  refuse the whole call; Warden is never asked and the server receives nothing.
+- Requests disguised as responses (`method` + `result`/`error`), as notifications
+  (`sampling/createMessage` without an id), with repeated `method` keys, `null`/boolean/
+  float/object ids, list `params`, extra top-level keys, batches: all dropped.
+- Response to a call the proxy still holds: dropped; the call later gets its real answer.
+- Server request reusing a held client id: ids are per direction; refused like any other,
+  the held call is unaffected.
+- A server "answering" its own refused request towards the client: arrives as a plain
+  response (the server is trusted for what it answers); never becomes a request, and the
+  proxy doesn't answer it twice.
+- Fuzzing: random server messages (400 cases per run) and random server bytes (200),
+  under random allow lists, never delivered a request outside the allow list; the
+  proxy only ever sent the server answers, never requests. Also run with 8 extra seeds,
+  with the existing client-side property.
+- Real processes: `warden proxy` as a subprocess, a live Warden HTTP server and the fake
+  MCP server sending `sampling/createMessage`: the client never saw it, the server got
+  the error, the log line named only the method.
+- Benchmark: proxy overhead per `tools/call` unchanged (~1.4 ms median).
+
+Remaining (honest):
+
+- Allowed server requests pass unchecked: Warden doesn't look at a sampling prompt or
+  what the client answers to `roots/list`.
+- The server is still trusted for what it answers (tool results, notifications, forged
+  responses to client requests other than held calls).
+- `notifications/*` from the server pass unchecked (e.g. `notifications/message` text
+  reaches the client and possibly the model).
+- Answers dropped under the flood cap leave the server waiting on its own requests
+  (its problem, by design).

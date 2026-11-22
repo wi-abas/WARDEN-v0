@@ -24,6 +24,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import sys
 import threading
 import time
@@ -42,6 +43,7 @@ logger = logging.getLogger(__name__)
 MAX_LINE_BYTES = 16 * 1024 * 1024  # one JSON-RPC message
 MAX_IN_FLIGHT = 64  # tool calls being checked (or waiting for approval) at once
 SHUTDOWN_GRACE_SECONDS = 5.0  # how long the server gets to exit after the client leaves
+MAX_ANSWER_BACKLOG = 1024 * 1024  # unsent bytes before the proxy's own answers are dropped
 
 # Requests that carry no tool side effects of their own and are needed for the protocol.
 # Anything else (resources/read, prompts/get, completion/complete, ...) must be listed in
@@ -187,10 +189,14 @@ def parse_message(line: bytes) -> Any:
         raise _Refused(INVALID_REQUEST, "repeated key in message (refused by Warden)") from None
     except ValueError:
         raise _Refused(PARSE_ERROR, "invalid JSON") from None
+    except RecursionError:  # e.g. 100,000 nested "[": would crash the relay
+        raise _Refused(INVALID_REQUEST, "message nested too deeply (refused by Warden)") from None
     try:
         encode(message)
     except UnicodeEncodeError:
         raise _Refused(INVALID_REQUEST, "invalid text in message (refused by Warden)") from None
+    except RecursionError:
+        raise _Refused(INVALID_REQUEST, "message nested too deeply (refused by Warden)") from None
     return message
 
 
@@ -201,6 +207,14 @@ def encode(message: Any) -> bytes:
 def _safe_name(text: object) -> str:
     """For log lines: no control characters, bounded length (names come from the agent)."""
     return ascii(str(text)[:64])
+
+
+def _method_for_log(method: str) -> str:
+    """A server's method name for a log line, only if it looks like a method name (so a
+    hostile server can't put data in our logs)."""
+    if len(method) <= 64 and re.fullmatch(SERVER_METHOD_PATTERN, method):
+        return _safe_name(method)
+    return "(unusual name)"
 
 
 def tool_error(request_id: JsonValue, text: str) -> dict[str, JsonValue]:
@@ -234,6 +248,7 @@ class McpProxy:
         self.allowed_server_requests = frozenset(config.allow_server_requests)
         self._calls: dict[str, asyncio.Task[None]] = {}  # in-flight tool calls by id
         self._held: set[str] = set()  # ids of tool calls not (yet) sent to the server
+        self._backlog_warned = False
         self._server_in: asyncio.StreamWriter | None = None
 
     # --- Session ----------------------------------------------------------------------
@@ -305,13 +320,13 @@ class McpProxy:
         elif kind != "request" or message["method"] in self.allowed_server_requests:
             self._reply(message)
         elif message["method"] == "ping":
-            await self._forward({"jsonrpc": "2.0", "id": message["id"], "result": {}})
+            self._answer_server({"jsonrpc": "2.0", "id": message["id"], "result": {}})
         else:
             logger.warning(
                 "refused server request %s (not in allow_server_requests)",
-                _safe_name(message["method"]),
+                _method_for_log(message["method"]),
             )
-            await self._forward(
+            self._answer_server(
                 rpc_error(message["id"], METHOD_NOT_FOUND, "request refused by Warden proxy")
             )
 
@@ -485,6 +500,23 @@ class McpProxy:
 
     def _reply(self, message: dict[str, JsonValue]) -> None:
         self.write_client(encode(message))
+
+    def _answer_server(self, message: dict[str, JsonValue]) -> None:
+        """The proxy's own answer to a server request. Never waits: a server that floods
+        requests without reading its input must not stall the relay. Past
+        MAX_ANSWER_BACKLOG unsent bytes, answers are dropped (still never forwarded)."""
+        writer = self._server_in
+        if writer is None or writer.is_closing():
+            return
+        if writer.transport.get_write_buffer_size() > MAX_ANSWER_BACKLOG:
+            if not self._backlog_warned:
+                logger.warning("MCP server isn't reading its input; dropping answers to it")
+                self._backlog_warned = True
+            return
+        try:
+            writer.write(encode(message))
+        except (ConnectionError, RuntimeError):
+            logger.error("MCP server is no longer reading its input")
 
     async def _forward(self, message: dict[str, Any]) -> None:
         writer = self._server_in
