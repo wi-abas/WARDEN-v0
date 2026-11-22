@@ -3,6 +3,9 @@
 ## Unreleased
 
 ### Hardening
+- **Stricter email check** (found by fuzzing): an address a rule compares must have a
+  plain name before the `@`. `user%evil.net@x.com` (percent hack), `host!user@x.com`
+  (bang path), `a:b@x.com`, `@x.com`, `.a@x.com`, `a..b@x.com` are now denied.
 - **Fix: deeply nested JSON** (`[[[[...]]]]` thousands deep) raised RecursionError, which
   slipped past `except ValueError`: the API answered 500 instead of 422/400 (still deny),
   and one such message ended a whole MCP proxy session. Now refused as invalid input

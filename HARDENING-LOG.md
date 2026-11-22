@@ -10,6 +10,7 @@ Runs alongside `feature/group-approvals`; avoids `approvals.py` and `api.py`.
 - [x] `warden test` (policy tests), `examples/policy-tests.json` (18 cases incl. tricks),
   CI step.
 - [x] Fix: deeply nested JSON (found while preparing fuzzing)
+- [x] Stricter email check (found by fuzzing)
 - [ ] Coverage-guided fuzzing
 - [ ] Release workflow (prepared, not run)
 - [ ] Threat model
@@ -39,6 +40,18 @@ Runs alongside `feature/group-approvals`; avoids `approvals.py` and `api.py`.
 - Chain hashes don't include any database identity, so two logs with identical rows
   have identical hashes (found while writing a test). Not a weakness for edit
   detection; documented in docs/design/audit-chain.md.
+
+- **Email routing tricks passed email rules (found by the bypass fuzz target).**
+  `_is_plain_email` refused spaces, lists, quotes and brackets but not `%` (the
+  "percent hack": `user%evil.net@example.com` is relayed to evil.net by some MTAs), `!`
+  (UUCP bang paths), `:` (group / source-route syntax), `\`, an empty local part, or
+  stray dots. An allow rule `endswith "@example.com"` allowed them. Modern MTAs mostly
+  ignore these, but Warden can't know the tool's mail stack. Now refused (stricter
+  only); 16 tests. Legit addresses (dots, `+tags`, non-English names) still pass.
+- **Fuzz oracle false alarms, investigated and not bugs**: a non-ASCII name before the
+  `@` (SMTPUTF8), a non-ASCII URL fragment, unassigned code points in a path, and
+  canonical combining characters. None move a path out of /workspace/, change a URL
+  host or an email domain. The oracles were narrowed to the real invariant.
 
 ## Blocked / needs Wissam
 
