@@ -62,7 +62,7 @@ class DuplicateKeyError(ValueError):
     last one, so {"effect": "allow", "effect": "deny"} could hide an override."""
 
 
-def _no_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+def no_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
     seen: dict[str, object] = {}
     for key, value in pairs:
         if key in seen:
@@ -74,7 +74,7 @@ def _no_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
 def parse_policy(raw: str) -> Policy:
     """Validate policy JSON. Raises DuplicateKeyError or pydantic's ValidationError."""
     try:
-        json.loads(raw, object_pairs_hook=_no_duplicate_keys)
+        json.loads(raw, object_pairs_hook=no_duplicate_keys)
     except json.JSONDecodeError:
         pass  # not valid JSON at all: let pydantic report it with its location
     return Policy.model_validate_json(raw)

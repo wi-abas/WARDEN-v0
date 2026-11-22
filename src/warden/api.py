@@ -19,6 +19,7 @@ Run it with `uv run warden` (listens on 127.0.0.1 only: this machine, not the ne
 """
 
 import copy
+import json
 import logging
 import logging.config
 import re
@@ -40,14 +41,20 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import JsonValue
 from starlette.exceptions import HTTPException as StarletteHTTPException
-from starlette.types import ASGIApp, Receive, Scope, Send
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from warden import __version__, audit
 from warden.approvals import Approval, ApprovalStore, DecideError, Status, apply_approval
 from warden.audit import AuditEntry, AuditEvent, AuditLog, EventKind, SQLiteAuditLog
 from warden.engine import evaluate
 from warden.models import APPROVAL_ID_PATTERN, ActionRequest, Decision, EvaluationResult
-from warden.policy import DEFAULT_POLICY_PATH, Policy, load_policy
+from warden.policy import (
+    DEFAULT_POLICY_PATH,
+    DuplicateKeyError,
+    Policy,
+    load_policy,
+    no_duplicate_keys,
+)
 from warden.settings import Settings
 
 logger = logging.getLogger(__name__)
@@ -102,6 +109,56 @@ class BodySizeLimit:
     ) -> None:
         self.on_reject(scope, status, reason)
         await _deny_response(status, reason)(scope, receive, send)
+
+
+class DuplicateKeyCheck:
+    """Refuses JSON bodies that repeat a key, e.g. {"tool": "read_file", "tool": "delete_file"}.
+
+    Parsers disagree on which copy wins (Python keeps the last, others the first), so the
+    tool that finally runs could act on a different value than the one Warden checked.
+    Runs after BodySizeLimit, so the body it reads is at most MAX_BODY_BYTES.
+    """
+
+    def __init__(
+        self,
+        app: ASGIApp,
+        on_reject: Callable[[Scope, int, str], None] = lambda scope, status, reason: None,
+    ) -> None:
+        self.app = app
+        self.on_reject = on_reject
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or scope.get("method") not in {"POST", "PUT", "PATCH"}:
+            await self.app(scope, receive, send)
+            return
+        chunks: list[bytes] = []
+        while True:
+            message = await receive()
+            if message["type"] != "http.request":  # client went away
+                return
+            chunks.append(message.get("body", b""))
+            if not message.get("more_body", False):
+                break
+        body = b"".join(chunks)
+        try:
+            json.loads(body, object_pairs_hook=no_duplicate_keys)
+        except DuplicateKeyError:
+            self.on_reject(scope, 422, "duplicate key in request")
+            await _deny_response(422, "duplicate key in request")(scope, receive, send)
+            return
+        except ValueError:
+            pass  # not valid JSON at all: request validation reports it
+
+        replayed = False
+
+        async def replay() -> Message:
+            nonlocal replayed
+            if not replayed:
+                replayed = True
+                return {"type": "http.request", "body": body, "more_body": False}
+            return await receive()
+
+        await self.app(scope, replay, send)
 
 
 # Host names a request may be addressed to. Anything else is refused, which stops
@@ -390,6 +447,9 @@ def create_app(
 
     app = FastAPI(title="Warden", version=__version__)
     app.state.warden = w  # for tests and debugging
+    # Middleware runs in reverse order of adding: HostCheck, then BodySizeLimit, then
+    # DuplicateKeyCheck (which may read the body, so it must come after the size limit).
+    app.add_middleware(DuplicateKeyCheck, on_reject=w.record_rejection)
     app.add_middleware(BodySizeLimit, on_reject=w.record_rejection)
     # Added last, so it runs first: refuse foreign Host headers before anything else.
     app.add_middleware(HostCheck, allowed=ALLOWED_HOSTS, on_reject=w.record_rejection)
