@@ -102,6 +102,7 @@ def test_broken_policy_file_denies_everything(tmp_path: Path) -> None:
     policy.write_text("this is not json", encoding="utf-8")
     client = TestClient(create_app(policy))
 
+    assert client.get("/health").status_code == 503
     assert client.get("/health").json()["rules_loaded"] == 0
     response = client.post("/v1/evaluate", json=body("read_file"))
     assert response.status_code == 200

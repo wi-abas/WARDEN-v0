@@ -45,7 +45,7 @@ curl -s -X POST http://127.0.0.1:8000/v1/evaluate \
 
 | Endpoint | Purpose |
 |---|---|
-| `GET /health` | `{"status": "ok", "rules_loaded": 3}`. `rules_loaded: 0` means the policy file is broken. |
+| `GET /health` | `{"status": "ok", "rules_loaded": 3}`, or HTTP 503 `"degraded"` when no rules loaded (broken or empty policy file: everything is denied). |
 | `POST /v1/evaluate` | Send an action, get a decision. |
 | `GET /v1/approvals` | Admin: list pending approvals, with their arguments. |
 | `POST /v1/approvals/{id}/approve` | Admin: approve one (once). |

@@ -1,7 +1,7 @@
 """The HTTP API that agents talk to. A thin layer: no security logic lives here.
 
 Endpoints:
-- GET  /health       -> is the server up, and how many rules loaded (0 = broken policy file)
+- GET  /health       -> "ok", or "degraded" (HTTP 503) when no rules loaded: everything is denied
 - POST /v1/evaluate  -> send an ActionRequest, get an EvaluationResult
 
 Admin only (header "X-Warden-Admin-Key", printed in the terminal at startup):
@@ -18,6 +18,7 @@ that only reads the decision field fails closed.
 Run it with `uv run warden` (listens on 127.0.0.1 only: this machine, not the network).
 """
 
+import copy
 import logging
 import re
 import secrets
@@ -26,6 +27,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 import uvicorn
+import uvicorn.config
 from fastapi import Depends, FastAPI, Header, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -156,8 +158,19 @@ def create_app(
         return reject(request, 500, "internal error")
 
     @app.get("/health")
-    def health() -> dict[str, str | int]:
-        return {"status": "ok", "rules_loaded": len(rules)}
+    def health() -> JSONResponse:
+        # No rules means every request is denied: Warden runs, but isn't doing its job.
+        # 503 lets monitoring tools notice without reading the body.
+        if not rules:
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "status": "degraded",
+                    "rules_loaded": 0,
+                    "reason": "no rules loaded, every request is denied (check the policy file)",
+                },
+            )
+        return JSONResponse(content={"status": "ok", "rules_loaded": len(rules)})
 
     @app.post("/v1/evaluate", response_model=EvaluationResult)
     def evaluate_action(action: ActionRequest) -> EvaluationResult | JSONResponse:
@@ -249,6 +262,19 @@ def create_app(
     return app
 
 
+def log_config() -> dict:
+    """Uvicorn's logging setup, plus Warden's own loggers at INFO.
+
+    Without this, Warden's log lines (decisions, policy errors) are not shown.
+    They go through the same handler and format as Uvicorn's own lines.
+    """
+    config = copy.deepcopy(uvicorn.config.LOGGING_CONFIG)
+    config["loggers"]["warden"] = {"handlers": ["default"], "level": "INFO", "propagate": False}
+    return config
+
+
 def main() -> None:
     """Start the server on this machine only."""
-    uvicorn.run("warden.api:create_app", factory=True, host=HOST, port=PORT)
+    uvicorn.run(
+        "warden.api:create_app", factory=True, host=HOST, port=PORT, log_config=log_config()
+    )
