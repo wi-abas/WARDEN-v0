@@ -16,7 +16,8 @@ Security properties (each one is tested in tests/test_engine.py):
     as text for a number check), an unclean path when the rule compares paths
     ("//etc", "/./etc", "/data/../etc", backslashes), or not one plain email
     address when the rule compares emails ("x@evil.com ", "x@evil.com.",
-    "Evil <x@evil.com>", "a@x.com, b@y.com").
+    "Evil <x@evil.com>", "a@x.com, b@y.com"), or, when the rule compares a host
+    name like "evil.com", a trailing dot, edge spaces or brackets ("x@evil.com.").
 - Most restrictive wins: DENY beats REQUIRE_APPROVAL, which beats ALLOW.
 - Fail closed: any unexpected error gives DENY, never ALLOW.
 - Deterministic: no network, no files, no randomness, no LLM. Rule order does not matter.
@@ -206,16 +207,38 @@ def _is_plain_email(text: str) -> bool:
     )
 
 
+# A host name written as plain text, e.g. "evil.com" or ".evil.com": at least two labels.
+# (".txt" or "notes" are not: a file extension isn't a host.)
+_DOMAIN_LIKE = re.compile(r"^\.?[a-z0-9-]+(\.[a-z0-9-]+)+$", re.IGNORECASE)
+
+
+def _looks_like_domain(value: str) -> bool:
+    return bool(_DOMAIN_LIKE.fullmatch(value))
+
+
+def _is_clean_domain_text(text: str) -> bool:
+    """No tricks that make text reach a host without matching it as text: a trailing
+    dot ("x@evil.com." and "evil.com." reach evil.com), spaces at the edges, or the
+    brackets and separators of display names and lists ("<x@evil.com>,")."""
+    return (
+        text == text.strip()
+        and not text.endswith(".")
+        and not any(ch in _EMAIL_TRICK_CHARS for ch in text)
+    )
+
+
 def _check_text_shape(actual: str, expected: list[str], condition: Condition) -> None:
-    """Raise if the agent's text is shaped to slip past a URL, path or email comparison."""
-    if any(_looks_like_url(e) or _looks_like_email(e) for e in expected) and any(
-        dot in actual for dot in _LOOKALIKE_DOTS
-    ):
-        raise _UncheckableArgument(condition.label)
+    """Raise if the agent's text is shaped to slip past a URL, path, email or host
+    name comparison."""
+    if any(_looks_like_url(e) or _looks_like_email(e) or _looks_like_domain(e) for e in expected):
+        if any(dot in actual for dot in _LOOKALIKE_DOTS):
+            raise _UncheckableArgument(condition.label)
     if any(_looks_like_url(e) for e in expected):
         if not _is_clean_url(actual):
             raise _UncheckableArgument(condition.label)
         return  # a URL may legitimately contain "@" in its path: skip the email check
+    if any(_looks_like_domain(e) for e in expected) and not _is_clean_domain_text(actual):
+        raise _UncheckableArgument(condition.label)
     if any(_looks_like_path(e) for e in expected) and not _is_clean_path(actual):
         raise _UncheckableArgument(condition.label)
     if any(_looks_like_email(e) for e in expected) and not _is_plain_email(actual):

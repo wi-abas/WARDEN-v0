@@ -88,7 +88,10 @@ Assuming the agent runtime calls Warden and obeys the answer:
   with the admin key (or `--yes`) can decide ids nobody looked at.
 - **Things the rules don't express.** Text checks see text, not meaning:
   `endswith "@mycompany.com"` can't tell two recipients in one string apart; nested
-  conditions don't search lists, and argument lists only cover top-level names.
+  conditions don't search lists, and argument lists only cover top-level names. A deny
+  list of IP addresses can be dodged with other spellings (`http://2130706433/` is
+  127.0.0.1): use allow lists. Look-alike letters from other scripts (Cyrillic `а` in
+  `pаypal.com`) aren't flagged in the approval list.
 - **Denial of service.** Request size, per-agent request rates, per-agent pending
   approvals and the recording of rejected requests are capped, but without agent tokens
   new agent ids get new budgets (up to 10,000 tracked agents), and nothing protects

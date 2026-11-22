@@ -70,6 +70,20 @@ def test_list(server: tuple[str, TestClient], capsys: Any, monkeypatch: Any) -> 
     assert out.count("Agent agent-1, tool send_email") == 2
 
 
+def test_admin_key_never_goes_through_a_proxy(
+    server: tuple[str, TestClient], capsys: Any, monkeypatch: Any
+) -> None:
+    # A proxy would receive the admin key. Nothing listens on port 9: if the CLI used
+    # the proxy, it would fail with "can't reach Warden".
+    url, client = server
+    ids = queue(client, 1)
+    monkeypatch.setenv("http_proxy", "http://127.0.0.1:9")
+    monkeypatch.delenv("no_proxy", raising=False)
+    monkeypatch.delenv("NO_PROXY", raising=False)
+    code, out, _ = cli(capsys, monkeypatch, "list", "--warden-url", url)
+    assert code == 0 and ids[0] in out
+
+
 def test_list_grouped(server: tuple[str, TestClient], capsys: Any, monkeypatch: Any) -> None:
     url, client = server
     mine = queue(client, 2)

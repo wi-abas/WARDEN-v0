@@ -39,6 +39,20 @@ Severity is for Warden's own threat model (a local checkpoint trusted by its ope
 | 6 | Low | Found while building (fixed before the first proxy commit): the proxy could hang if the server's output broke while the process stayed alive, and dropped calls in flight when the client closed its input. | Unified shutdown; in-flight calls answered. | `bfe5d89` |
 | 7 | Test gaps | Mutation survivors: `host_in ".x.com"` covering the bare domain, `apply_approval` leaving deny/allow untouched, IPv6 host suffixes, wall clock for persisted approvals, limit bounds, SDK default not waiting, error messages. | New tests; wider mutation target mappings. | `54425be`, `4bbac3a` |
 
+## Follow-up: full code review (same day)
+
+A line-by-line review of all of `src/warden/`. Each finding was reproduced with a
+script before fixing, and each fix has a test that fails without it.
+
+| # | Severity | Finding | Fix | Commit |
+|---|---|---|---|---|
+| 8 | **Medium** | **Host-name rule values could be dodged.** A value like `evil.com` (no `@`, no `/`) skipped every shape check: `x@evil.com.`, `x@evil.com>`, `<x@evil.com>,` or `evil.com.` slipped past a deny rule. | Text compared with a host-shaped value: no trailing dot, edge spaces, list/display-name characters or look-alike dots. | `e3dfa97` |
+| 9 | **Medium** | **An argument could be hidden from the approver.** A literal `note\u200b` key displayed exactly like an escaped `note<ZWSP>`; with both present one overwrote the other in the approval list. | A backslash before `u` is escaped too, so the display is one-to-one (property test). | `44a8f41` |
+| 10 | **Medium** | **Client honoured `HTTP_PROXY` for 127.0.0.1.** The SDK and MCP proxy sent tool arguments to the proxy (and trusted its answer); `warden approvals` sent it the admin key. | Opener with proxies switched off. | `3f5a963` |
+| 11 | Low–Medium | **MCP server inherited Warden's secrets.** `WARDEN_ADMIN_KEY` (if exported) and `WARDEN_AGENT_TOKEN` reached the server's environment; with the admin key it could approve its own calls. | Removed unless the config's `server.env` sets them on purpose. | `8e208fb` |
+| 12 | Low–Medium | **Nulling hashes hid edits from `audit verify`.** Rows without hashes counted as pre-chain history: change decisions, set the hash columns to NULL (plain SQL), and verify said OK. | Hash-less rows are accepted only up to the ids recorded (in the chain) when the columns were added to an old table; none otherwise. | `17838af` |
+| 13 | Low | **Two `Host` headers**: only the last was checked. | Exactly one required. | `77b1cd4` |
+
 ## Verified as holding up
 
 - Proxy fuzzing: no unchecked, modified or method-less call reached the server; every
@@ -65,6 +79,8 @@ Severity is for Warden's own threat model (a local checkpoint trusted by its ope
 | Medium | **Audit chain is tamper-evident, not tamper-proof.** A full rewrite or cutting the newest rows is only caught with an outside copy of the head hashes. Approval state in the same file can be edited by whoever can write it. | No signing key (a key on the same disk adds little). |
 | Low | Proxy forwards `_meta` and server→client requests (sampling, roots, elicitation) unchecked; stdio transport only. | Documented. |
 | Low | Nested conditions don't search lists; argument lists only cover top-level names (W013 warns). | Feature work. |
+| Low | Text and `host_in` rules see the host as written: `http://2130706433/` and `http://0x7f.1/` both reach 127.0.0.1, so a deny list of IP addresses can be dodged. | Prefer allow lists (`host_in` with the hosts you trust). |
+| Low | Look-alike letters from other scripts (Cyrillic `а` in `pаypal.com`) aren't flagged in the approval list; only invisible and compatibility characters are. | Rules don't match them (exact text), but an approver can be fooled. |
 | Low | Persisted approval expiry uses the wall clock (jumps shorten/extend it); one Warden per database. | Documented. |
 | Low | When the 10,000-agent table is full, each new agent triggers an O(n) scan for idle buckets. | Only reachable without tokens. |
 | Info | Mutation score 83% before the gap tests; most remaining survivors are equivalent mutants (constants, `strict=True` already enforced by the parent model). | Weekly CI job, floor 80%. |

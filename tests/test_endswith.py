@@ -55,6 +55,38 @@ def test_ignore_case_stops_the_uppercase_trick_on_a_deny_rule() -> None:
     assert evaluate(send("x@EVIL.com"), rules).decision == Decision.DENY
 
 
+@pytest.mark.parametrize(
+    "to",
+    ["x@evil.com.", "x@evil.com>", "x@evil.com ", " x@evil.com", "<x@evil.com>,", "x@evil。com"],
+)
+@pytest.mark.parametrize("value", ["evil.com", ".evil.com"])
+def test_host_name_without_at_sign_cant_be_dodged(to: str, value: str) -> None:
+    # The value has no "@", so the email checks don't apply; the host-name checks do.
+    rules = [rule("allow", "allow"), rule("block", "deny", ends(value, ignore_case=True))]
+    assert evaluate(send(to), rules).decision == Decision.DENY
+
+
+@pytest.mark.parametrize("domain", ["evil.com.", " evil.com", "evil.com)"])
+def test_eq_host_name_trailing_dot_is_refused(domain: str) -> None:
+    rules = [
+        rule("allow", "allow"),
+        rule("block", "deny", {"arg": "to", "op": "eq", "value": "evil.com", "ignore_case": True}),
+    ]
+    assert evaluate(send(domain), rules).decision == Decision.DENY
+
+
+@pytest.mark.parametrize(("to", "expected"), [("x@good.com", "allow"), ("good.com", "allow")])
+def test_clean_text_still_passes_host_name_rules(to: str, expected: str) -> None:
+    rules = [rule("allow", "allow"), rule("block", "deny", ends("evil.com", ignore_case=True))]
+    assert evaluate(send(to), rules).decision == Decision(expected)
+
+
+def test_file_extension_is_not_a_host_name() -> None:
+    # ".txt" is not host-shaped: a file called "notes (1).txt" stays checkable.
+    rules = [rule("r", "allow", {"arg": "to", "op": "endswith", "value": ".txt"})]
+    assert evaluate(send("notes (1).txt"), rules).decision == Decision.ALLOW
+
+
 def test_endswith_wrong_type_denies_the_request() -> None:
     result = evaluate(send(42), COMPANY_ONLY)
     assert result.reason == "argument 'to' could not be checked"

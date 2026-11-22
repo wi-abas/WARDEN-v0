@@ -13,7 +13,7 @@ import threading
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
-from unittest.mock import ANY
+from unittest.mock import ANY, Mock
 
 import pytest
 from helpers import ADMIN_KEY, live_server
@@ -43,6 +43,7 @@ from warden.mcp_proxy import (
     encode,
     load_config,
     parse_message,
+    server_env,
 )
 from warden.models import Decision
 
@@ -751,3 +752,36 @@ def test_server_request_reusing_a_held_client_id_is_still_refused(tmp_path: Path
     line = b'{"jsonrpc":"2.0","id":1,"method":"elicitation/create"}'
     to_client, to_server = run_server_lines([line], [], held=("1",))
     assert to_client == [] and to_server[0]["id"] == 1 and "error" in to_server[0]
+
+
+def test_server_env_drops_warden_secrets() -> None:
+    inherited = {
+        "PATH": "/bin",
+        "WARDEN_ADMIN_KEY": "k" * 32,
+        "WARDEN_AGENT_TOKEN": "wdn_x",
+        "WARDEN_URL": "http://127.0.0.1:8000",
+    }
+    env = server_env({"API_KEY": "s"}, inherited)
+    assert env == {"PATH": "/bin", "WARDEN_URL": "http://127.0.0.1:8000", "API_KEY": "s"}
+    # Written into the config's "env" on purpose: kept.
+    assert server_env({"WARDEN_AGENT_TOKEN": "t"}, inherited)["WARDEN_AGENT_TOKEN"] == "t"  # noqa: S105
+
+
+def test_real_server_process_never_sees_the_admin_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("WARDEN_ADMIN_KEY", "k" * 32)
+    monkeypatch.setenv("WARDEN_AGENT_TOKEN", "wdn_" + "x" * 43)
+    seen = tmp_path / "env.json"
+    script = f"import json, os; open({str(seen)!r}, 'w').write(json.dumps(dict(os.environ)))"
+    config = ProxyConfig.model_validate(
+        {"server": {"command": sys.executable, "args": ["-c", script]}}, strict=False
+    )
+
+    async def no_input() -> bytes:
+        await asyncio.sleep(2)  # give the server time to write, then end the session
+        return b""
+
+    asyncio.run(McpProxy(config, Mock(), no_input, lambda data: None).run())
+    env = json.loads(seen.read_text())
+    assert "WARDEN_ADMIN_KEY" not in env and "WARDEN_AGENT_TOKEN" not in env

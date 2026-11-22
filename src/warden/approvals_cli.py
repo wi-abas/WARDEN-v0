@@ -32,7 +32,7 @@ import urllib.request
 from typing import Any, TextIO
 
 from warden.approvals import MAX_GROUP
-from warden.client import DEFAULT_URL, ClientConfigError, check_url
+from warden.client import DEFAULT_URL, ClientConfigError, check_url, open_local
 from warden.models import AGENT_ID_PATTERN, APPROVAL_ID_PATTERN, TOOL_NAME_PATTERN
 
 # 100 approvals (the most one decision fetches) of the largest request Warden accepts,
@@ -65,7 +65,7 @@ def _call(url: str, key: str, method: str, path: str, body: Any = None) -> tuple
         method=method,
     )
     try:
-        with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:  # noqa: S310
+        with open_local(request, timeout=TIMEOUT_SECONDS) as response:
             status, raw = response.status, response.read(_READ_LIMIT)
     except urllib.error.HTTPError as error:
         with error:
