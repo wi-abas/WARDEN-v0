@@ -46,6 +46,21 @@ def test_every_kind_of_mutation_is_planted() -> None:
         m.mutate(SOURCE, 99)
 
 
+def test_lines_marked_as_known_survivors_are_skipped() -> None:
+    m = load()
+    marked = SOURCE.replace("return a < 3", "return a < 3  # mutation-ok: example")
+    found = m.list_mutants(marked)
+    assert {x.description for x in found} == {
+        "Eq -> NotEq",
+        "and <-> or",
+        "drop `not`",
+        "True -> False",
+    }
+    # Indexes still point at the same spots as without the marker.
+    unmarked = {x.index: x.description for x in m.list_mutants(SOURCE)}
+    assert all(unmarked[x.index] == x.description for x in found)
+
+
 def test_target_file_is_always_restored(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     m = load()
     (tmp_path / "toy.py").write_text(SOURCE)

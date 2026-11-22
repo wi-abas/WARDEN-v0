@@ -10,7 +10,8 @@ fails on "survives" and points at an untested behaviour. Standard library only.
 
 The file is changed in place and ALWAYS restored (also on Ctrl-C). Run it on a clean
 checkout (CI) or a clean working tree. Some survivors are equivalent mutants (the
-change makes no observable difference); review them by hand.
+change makes no observable difference); review them by hand, and mark a reviewed line
+with `# mutation-ok: <why>` so it isn't planted again.
 """
 
 import argparse
@@ -47,12 +48,48 @@ TARGETS: dict[str, list[str]] = {
         "test_rate_limits.py",
         "test_agent_tokens.py",
         "test_mutation_gaps.py",
+        "test_group_approvals_store.py",
+        "test_group_approvals_api.py",
+        "test_group_approvals_attacks.py",
+        "test_approve_what_you_saw.py",
     ],
     "limits": ["test_rate_limits.py", "test_mutation_gaps.py"],
     "agents": ["test_agent_tokens.py"],
     "client": ["test_client.py", "test_sdk.py", "test_agent_tokens.py"],
     "sdk": ["test_sdk.py", "test_agent_tokens.py", "test_mutation_gaps.py"],
     "fingerprint": ["test_fingerprint.py"],
+    "api": [
+        "test_api.py",
+        "test_hardening.py",
+        "test_http_errors.py",
+        "test_host_check.py",
+        "test_duplicate_request_keys.py",
+        "test_approval_display.py",
+        "test_approvals.py",
+        "test_revoke.py",
+        "test_group_approvals_api.py",
+        "test_group_approvals_attacks.py",
+        "test_approve_what_you_saw.py",
+        "test_approvals_flood.py",
+        "test_audit_events.py",
+        "test_rejection_rate_limit.py",
+        "test_locked_database.py",
+        "test_agent_tokens.py",
+        "test_rate_limits.py",
+    ],
+    "audit": [
+        "test_audit.py",
+        "test_audit_chain.py",
+        "test_audit_events.py",
+        "test_audit_permissions.py",
+        "test_retention.py",
+        "test_locked_database.py",
+        "test_group_approvals_api.py",
+    ],
+    "audit_checkpoint": ["test_audit_checkpoint.py", "test_audit_checkpoint_edges.py"],
+    "mcp_proxy": ["test_mcp_proxy.py", "test_mcp_proxy_hardening.py"],
+    "approvals_cli": ["test_approvals_cli.py", "test_approvals_flood.py"],
+    "policy_tests": ["test_policy_tests.py"],
 }
 
 _SWAPS: dict[type[ast.cmpop], type[ast.cmpop]] = {
@@ -97,10 +134,20 @@ def _spots(tree: ast.AST) -> Iterator[tuple[ast.AST, str]]:
             yield node, f"{node.value} -> {node.value + 1}"
 
 
+# A source line ending in this comment is skipped: every mutant on it was reviewed and
+# can't (or needn't) be caught, e.g. a SQLite timeout or a case handled earlier. The
+# comment must say why, so the reason is visible next to the code in every review.
+KNOWN_SURVIVOR = "# mutation-ok:"
+
+
 def list_mutants(source: str) -> list[Mutant]:
     tree = ast.parse(source)
+    lines = source.splitlines()
+    known = {n for n, text in enumerate(lines, start=1) if KNOWN_SURVIVOR in text}
     return [
-        Mutant(i, getattr(node, "lineno", 0), what) for i, (node, what) in enumerate(_spots(tree))
+        Mutant(i, line, what)
+        for i, (node, what) in enumerate(_spots(tree))
+        if (line := getattr(node, "lineno", 0)) not in known
     ]
 
 
