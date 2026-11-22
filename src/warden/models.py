@@ -27,6 +27,7 @@ MESSAGE_PATTERN = r"^[^\x00-\x1f\x7f-\x9f\u200b-\u200f\u202a-\u202e\u2060-\u2069
 APPROVAL_ID_PATTERN = r"^[A-Za-z0-9_\-]{16,64}$"
 
 MAX_ARGUMENTS = 50
+MAX_ARG_DEPTH = 8  # "a.b.c..." at most this many levels deep
 MAX_CONDITIONS = 20
 MAX_IN_VALUES = 100
 # A host name as written in a policy: lowercase ASCII (use punycode "xn--..." for
@@ -140,12 +141,46 @@ def _check_policy_text(text: str, op: "Op") -> None:
             raise ValueError("value starts or ends with a space (typo?)")
 
 
+ArgName = Annotated[str, Field(pattern=ARG_NAME_PATTERN)]
+
+
 class Condition(BaseModel):
-    """One check on one argument, e.g. {"arg": "amount", "op": "gt", "value": 500}."""
+    """One check on one argument, e.g. {"arg": "amount", "op": "gt", "value": 500}.
+
+    `arg` may point inside an object: "headers.to", or ["headers", "to"] (the list form
+    also reaches a key that itself contains a dot, e.g. ["file.name"]).
+    """
 
     model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
 
-    arg: str = Field(pattern=ARG_NAME_PATTERN)
+    arg: ArgName | tuple[ArgName, ...]
+
+    @field_validator("arg", mode="before")
+    @classmethod
+    def list_is_a_path(cls, value: object) -> object:
+        return tuple(value) if isinstance(value, list) else value
+
+    @field_validator("arg")
+    @classmethod
+    def path_has_a_shape(cls, value: str | tuple[str, ...]) -> str | tuple[str, ...]:
+        parts = value.split(".") if isinstance(value, str) else value
+        if not 1 <= len(parts) <= MAX_ARG_DEPTH or any(part == "" for part in parts):
+            raise ValueError(
+                f"'arg' must be a name, a dotted path like \"headers.to\" or a list of 1 "
+                f"to {MAX_ARG_DEPTH} names (no empty parts)"
+            )
+        return value
+
+    @property
+    def path(self) -> tuple[str, ...]:
+        """The keys to follow from the top-level arguments, e.g. ("headers", "to")."""
+        return tuple(self.arg.split(".")) if isinstance(self.arg, str) else self.arg
+
+    @property
+    def label(self) -> str:
+        """How to name this argument in messages (policy text, never request data)."""
+        return ".".join(self.path)
+
     op: Op
     value: JsonValue = None  # required for every op except exists / missing
     # Compare text without caring about upper/lower case, e.g. email domains.

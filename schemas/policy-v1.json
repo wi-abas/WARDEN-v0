@@ -3,12 +3,23 @@
   "$defs": {
     "Condition": {
       "additionalProperties": false,
-      "description": "One check on one argument, e.g. {\"arg\": \"amount\", \"op\": \"gt\", \"value\": 500}.",
+      "description": "One check on one argument, e.g. {\"arg\": \"amount\", \"op\": \"gt\", \"value\": 500}.\n\n`arg` may point inside an object: \"headers.to\", or [\"headers\", \"to\"] (the list form\nalso reaches a key that itself contains a dot, e.g. [\"file.name\"]).",
       "properties": {
         "arg": {
-          "pattern": "^[A-Za-z0-9_.\\-]{1,64}$",
-          "title": "Arg",
-          "type": "string"
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9_.\\-]{1,64}$",
+              "type": "string"
+            },
+            {
+              "items": {
+                "pattern": "^[A-Za-z0-9_.\\-]{1,64}$",
+                "type": "string"
+              },
+              "type": "array"
+            }
+          ],
+          "title": "Arg"
         },
         "op": {
           "$ref": "#/$defs/Op"

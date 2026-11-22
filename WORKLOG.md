@@ -54,6 +54,11 @@ coverage, ruff/format/mypy clean.
   HMAC key: a key on the same disk adds little; documented that a full rewrite needs an
   outside copy of the head hash to detect.
 
+- **Nested args: dotted string = path** (as asked). Argument names could already contain
+  dots, so this changes the meaning of such old rules, but provably only toward deny
+  (tested). List form `["a.b"]` reaches a literal dotted key. A non-object on the path
+  denies the whole request; lists are never searched; max depth 8. New warning W013.
+
 ## Blocked / needs Wissam
 
 (none yet)
@@ -68,3 +73,4 @@ coverage, ruff/format/mypy clean.
 - [x] 4. Per-agent rate limits and pending-approval quotas (`limits` in the policy).
 - [x] 5. Persistent approvals (state in SQLite, arguments never on disk).
 - [x] 6. Tamper-evident audit log + `warden audit verify`.
+- [x] 7. Conditions on nested arguments (+ W013, schema, docs).

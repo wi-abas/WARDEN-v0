@@ -90,7 +90,29 @@ A rule can add `when` conditions. It then matches only if **all** of them hold:
 - Text a rule compares may not contain invisible characters or look-alike Unicode
   (full-width letters, look-alike dots), and paths may not contain `%`-escapes; such
   requests are denied.
-- Conditions only look at top-level arguments. No regex, no code.
+- No regex, no code.
+
+### Nested arguments
+
+`arg` can point inside an object, as a dotted path or a list of keys:
+
+```json
+{ "arg": "headers.to", "op": "endswith", "value": "@mycompany.com", "ignore_case": true }
+{ "arg": ["headers", "to"], "op": "endswith", "value": "@mycompany.com", "ignore_case": true }
+```
+
+- Same rules as top-level arguments: a missing key anywhere on the path counts as
+  missing (deny rules apply, allow rules don't), and every type and trick check applies.
+- If something on the path isn't an object (`"headers": "x"`, a list, a number), the whole
+  request is denied: it can't be checked.
+- Lists are never searched: `"to": ["a@x.com", "b@y.com"]` can't be checked with
+  `endswith` (wrong type, so denied). Up to 8 levels.
+- The list form also reaches a top-level key that contains a dot: `["file.name"]`.
+  (Before nested paths, `"file.name"` meant that key. Such old rules now look for
+  `file` → `name` instead; they can only deny *more*, never allow more.)
+- Argument lists (`tools`) only cover top-level names, so other keys inside an object
+  (`headers.bcc`) aren't checked by them. Prefer `allow` rules for nested values
+  (`warden check` warns, W013).
 
 ## Tool argument lists
 
@@ -156,5 +178,6 @@ do what you meant:
 | W010 | An `allow` rule uses `neq` or `missing` ("allow everything except X"), a deny-list in disguise |
 | W011 | A URL prefix has no `/` after the host (`"https://api.x.com"` also matches `"https://api.x.com.evil.net"`) |
 | W012 | A deny rule blocks a URL by comparing text; use `host_in` instead |
+| W013 | A deny rule checks a nested value (`headers.to`): other keys in that object aren't checked |
 
 Exit code `1` on errors; with `--strict`, also on warnings (useful in CI).
