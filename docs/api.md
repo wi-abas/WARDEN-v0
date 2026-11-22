@@ -21,7 +21,7 @@ curl -s -X POST http://127.0.0.1:8000/v1/evaluate \
 | Endpoint | Purpose |
 |---|---|
 | `GET /health` | `{"status": "ok", "rules_loaded": 4}`, or HTTP 503 `"degraded"` when no rules loaded (broken or empty policy file: everything is denied). |
-| `POST /v1/evaluate` | Send an action, get a decision. |
+| `POST /v1/evaluate` | Send an action, get a decision. With agent tokens, needs `Authorization: Bearer <token>` (401/403 otherwise). Over the agent's rate limit: 429 with `Retry-After`. |
 | `GET /v1/approvals` | Admin: list pending approvals, with their arguments. |
 | `POST /v1/approvals/{id}/approve` | Admin: approve one (once). |
 | `POST /v1/approvals/{id}/deny` | Admin: deny one (once). |

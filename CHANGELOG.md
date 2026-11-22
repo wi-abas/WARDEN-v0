@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+### New
+- **MCP proxy** (`warden proxy`): put Warden in front of any stdio MCP server; every
+  `tools/call` is checked (deny → tool error, approval → wait or "pending"). Config file
+  or flags; Claude Desktop / Cursor / Claude Code setup in `docs/mcp-proxy.md`.
+- **Python SDK** (`warden.sdk`): `@guard` and `run_guarded` freeze the arguments, check
+  them, and run the tool with exactly what was checked. Async tools supported.
+- **Agent tokens** (`warden agent add|list|remove`, `--agents`): the agent id comes from
+  `Authorization: Bearer <token>`; only SHA-256 hashes are stored. Approvals are bound to
+  the agent that asked. Optional; nothing changes without `--agents`.
+- **Rate limits and quotas**: optional `limits` section in the policy; per-agent
+  requests per minute (429 deny) and pending approvals. Built-in defaults 600/min and 50.
+- **Persistent approvals**: approval state survives restarts (stored without arguments).
+  After a restart an approval can only be approved once the agent has asked again.
+- **Tamper-evident audit log**: hash chain over decisions and events, kept intact by
+  retention; `warden audit verify` reports the first broken row.
+- **Nested argument conditions**: `"arg": "headers.to"` or `["headers", "to"]`.
+  `warden check` W013. Note: an old rule whose argument name contained a dot now means a
+  nested path; such rules can only become stricter.
+- CI: weekly and per-PR dependency scan (pip-audit), weekly mutation tests.
+
 - Package renamed to **agent-warden** (`pip install agent-warden`); import name and the
   `warden` command are unchanged. Repository renamed to `wi-abas/agent-warden`.
 - `warden init` creates a starter policy; `warden schema` prints a JSON Schema so editors

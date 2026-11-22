@@ -12,8 +12,8 @@ Before an agent runs a tool, it asks Warden. Warden checks a rulebook and answer
 
 Warden never runs tools itself and never uses an LLM to decide.
 
-> **Status: early MVP. Not production-secure.** It has no authentication and is meant
-> to run on your own machine only. See [Known limitations](#known-limitations).
+> **Status: early MVP. Not production-secure.** It is meant to run on your own machine
+> only. See [Known limitations](#known-limitations).
 
 ## See it in 30 seconds
 
@@ -30,6 +30,52 @@ approval and to replay it. Warden's answer to each is shown and checked. The pol
 is [`examples/demo-policy.json`](https://github.com/wi-abas/agent-warden/blob/main/examples/demo-policy.json).
 
 ## Use it from your agent
+
+Three ways, from least to most work on your side.
+
+### 1. MCP servers: `warden proxy`
+
+Put Warden between your MCP client (Claude Desktop, Cursor, Claude Code) and any stdio
+MCP server. Every `tools/call` is checked; denied calls never reach the server.
+
+```json
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "uv",
+      "args": ["run", "--directory", "/path/to/agent-warden", "warden", "proxy",
+               "--tool-prefix", "fs.", "--",
+               "npx", "-y", "@modelcontextprotocol/server-filesystem", "/Users/me/workspace"]
+    }
+  }
+}
+```
+
+Setup, config file and approvals: [docs/mcp-proxy.md](https://github.com/wi-abas/agent-warden/blob/main/docs/mcp-proxy.md).
+
+### 2. Python tools: `@guard`
+
+```python
+from warden.sdk import NotAllowed, WardenClient, guard
+
+warden = WardenClient(agent_id="billing-agent")  # or token=... with agent tokens
+
+
+@guard(client=warden, wait_for_approval=120)
+def send_invoice(to: str, amount: int) -> str: ...
+
+
+try:
+    send_invoice(to="acme", amount=200)  # runs only on allow
+except NotAllowed as blocked:
+    print("Not allowed:", blocked)
+```
+
+The arguments are frozen before the check and the function receives exactly what Warden
+checked, so changing them afterwards has no effect. Warden down means not allowed.
+`require_approval` raises `ApprovalPending` (or waits, with `wait_for_approval`).
+
+### 3. Anything else: plain HTTP
 
 Ask Warden before every tool call, and run the tool **only** on `allow`. Standard library
 only:
@@ -86,8 +132,10 @@ About **1 ms per tool call** over HTTP on an Apple M1, including the audit-log w
 
 ## Documentation
 
-- [Writing policies](https://github.com/wi-abas/agent-warden/blob/main/docs/policies.md): rules, argument conditions, tool argument lists, `warden check`
-- [API and operations](https://github.com/wi-abas/agent-warden/blob/main/docs/api.md): endpoints, approvals, audit log, settings
+- [Writing policies](https://github.com/wi-abas/agent-warden/blob/main/docs/policies.md): rules, argument conditions (incl. nested), tool argument lists, rate limits, `warden check`
+- [API and operations](https://github.com/wi-abas/agent-warden/blob/main/docs/api.md): endpoints, agent tokens, approvals, audit log, settings
+- [MCP proxy](https://github.com/wi-abas/agent-warden/blob/main/docs/mcp-proxy.md): `warden proxy` for Claude Desktop, Cursor, Claude Code
+- [Design notes](https://github.com/wi-abas/agent-warden/tree/main/docs/design): how each feature works and what it doesn't cover
 - [Security](https://github.com/wi-abas/agent-warden/blob/main/SECURITY.md): threat model, what Warden does and doesn't protect against
 
 ## Rule for clients: fail closed
@@ -106,19 +154,23 @@ Each of these is covered by tests in `tests/`.
 - Request bodies over 64 KB, or of undeclared size, are refused.
 - Tool arguments are never logged or stored, and error responses never echo the input.
 - Every decision is recorded in the audit log; if recording fails, the answer is deny.
-- Approvals are single-use, expire, are bound to the exact action, and can't be
-  replayed, modified, double-decided, or used by two requests at once.
+  The log is a hash chain: `warden audit verify` finds the first edited or deleted row.
+- Approvals are single-use, expire, are bound to the exact action and the agent that
+  asked, and can't be replayed (also across restarts), modified, double-decided, used by
+  two requests at once, or approved without seeing the arguments.
 - Every result carries an `action_hash`: a SHA-256 fingerprint of the exact action
-  (agent, tool, arguments). Future approvals will be bound to it, so a changed action
-  can't reuse an approval.
+  (agent, tool, arguments). Approvals are bound to it.
+- Optional agent tokens: the agent id comes from a secret, not from the request.
+- Per-agent rate limits and caps on pending approvals.
+- The SDK and the MCP proxy run a tool with exactly the arguments that were checked.
 
 ## Known limitations
 
-- **No authentication for agents.** Any process on this machine can call `/v1/evaluate`.
-- **`agent_id` is self-declared** and is not used for decisions.
-- **Warden is a checkpoint, not a sandbox.** An agent can skip asking. Enforcement depends
-  on the agent runtime calling Warden and obeying the answer.
-- **Conditions check top-level arguments only**, not nested values.
+- **Agent tokens are optional.** Without `--agents`, any process on this machine can call
+  `/v1/evaluate` with any `agent_id` (and dodge per-agent limits by inventing new ones).
+- **Warden is a checkpoint, not a sandbox.** An agent can skip asking. The MCP proxy and
+  the SDK enforce the answer only for calls that go through them.
+- **Nested conditions don't search lists**, and argument lists only cover top-level names.
 - **Text checks see text.** Paths and emails are checked for common tricks (`//`, `/./`,
   `/../`, backslashes; spaces, display names, recipient lists, trailing dots), but Warden
   doesn't resolve symlinks or URL-decode. Prefer "allow only..." rules for paths and emails.
@@ -126,10 +178,10 @@ Each of these is covered by tests in `tests/`.
   `tools` entry for every tool with "deny when..." rules.
 - **The admin key is one shared secret, not real user accounts.** Any program that can
   read your terminal output can approve. There's no record of *who* approved.
-- **Approvals are lost on restart** (in memory only).
-- **The audit log is a plain local file.** Anyone who can edit it can change history.
-  Old entries are deleted after 90 days, but a flood of requests within that window
-  can still grow it.
+- **After a restart, pending approvals can't be approved until the agent asks again**
+  (arguments are never written to disk, so the human couldn't see them).
+- **The audit log is tamper-evident, not tamper-proof.** Someone who can edit the file
+  can rewrite the whole chain; keep a copy of the hashes `warden audit verify` prints.
 - **Import name clash.** The package installs as `agent-warden` but is imported as `warden`,
   the same import name as the unrelated `warden` package on PyPI. Don't install both in one
   environment.
@@ -151,9 +203,14 @@ uv run mypy                    # type check (strict, incl. tests)
 | `src/warden/policy.py` | Loads and validates the policy file |
 | `src/warden/fingerprint.py` | Action fingerprints |
 | `src/warden/audit.py` | Audit log (SQLite) |
-| `src/warden/approvals.py` | Human approvals |
+| `src/warden/approvals.py` | Human approvals (persisted state, no arguments on disk) |
+| `src/warden/agents.py` | Agent tokens |
+| `src/warden/limits.py` | Per-agent rate limits and approval quotas |
 | `src/warden/api.py` | HTTP API |
-| `src/warden/cli.py` | The `warden` command (`serve`, `check`) |
+| `src/warden/client.py` | Small HTTP client used by the SDK and the proxy |
+| `src/warden/sdk.py` | Python SDK (`@guard`) |
+| `src/warden/mcp_proxy.py` | MCP proxy (`warden proxy`) |
+| `src/warden/cli.py` | The `warden` command (`serve`, `check`, `init`, `schema`, `agent`, `audit`, `proxy`) |
 | `src/warden/check.py` | Policy checks and warnings |
 | `src/warden/settings.py` | Server settings (flags and environment variables) |
 | `examples/demo.py` | The 30-second demo (also run as a test) |
@@ -164,12 +221,14 @@ uv run mypy                    # type check (strict, incl. tests)
 Done in v0.2.0: argument rules, tool argument lists, audit log with retention, human
 approvals, `warden check`, settings, demo, CI. See [CHANGELOG.md](https://github.com/wi-abas/agent-warden/blob/main/CHANGELOG.md).
 
+Unreleased: MCP proxy, Python SDK, agent tokens, rate limits, persistent approvals,
+tamper-evident audit log, nested argument conditions.
+
 Next, shaped by feedback from early users:
 
-1. Python SDK (`@warden.guard`) and an MCP proxy, so existing agents can use Warden in minutes
-2. Argument types in tool argument lists
-3. Agent authentication and persistent approvals
-4. Approvals from Slack, per-person accounts, tamper-evident audit log
+1. Argument types in tool argument lists
+2. Approvals from Slack, per-person accounts
+3. HTTP transport for the MCP proxy
 
 **Trying Warden? Please open an issue with what worked and what didn't.**
 
