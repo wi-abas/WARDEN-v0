@@ -48,7 +48,14 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from warden import __version__, audit
 from warden.agents import AgentRegistry, AgentsError, load_agents
-from warden.approvals import Approval, ApprovalStore, DecideError, Status, apply_approval
+from warden.approvals import (
+    Approval,
+    ApprovalDB,
+    ApprovalStore,
+    DecideError,
+    Status,
+    apply_approval,
+)
 from warden.audit import AuditEntry, AuditEvent, AuditLog, EventKind, SQLiteAuditLog
 from warden.engine import evaluate
 from warden.limits import RateLimiter
@@ -420,7 +427,14 @@ class _Warden:
         items: list[dict[str, JsonValue]] = []
         for a, seconds_left in self.approvals.pending():
             warnings: list[str] = []
-            shown = _display_safe(a.arguments, warnings)
+            if a.arguments is None:
+                shown: JsonValue = None
+                warnings.append(
+                    "arguments not available (Warden restarted); they appear when the agent "
+                    "asks again. Approving is blocked until then."
+                )
+            else:
+                shown = _display_safe(a.arguments, warnings)
             items.append(
                 {
                     "approval_id": a.approval_id,
@@ -443,7 +457,14 @@ class _Warden:
             )
         except DecideError as exc:
             code = 404 if exc.not_found else 409
-            reason = "approval not found" if exc.not_found else "approval already decided"
+            reason = (
+                "approval not found"
+                if exc.not_found
+                else "arguments not available yet (Warden restarted): approve after the "
+                "agent asks again"
+                if exc.no_arguments
+                else "approval already decided"
+            )
             self._record_event_safely(
                 AuditEvent.now(
                     EventKind.APPROVAL_DECIDE_FAILED,
@@ -586,6 +607,8 @@ def main(settings: Settings | None = None) -> None:
     logging.config.dictConfig(config)
     try:
         audit_log = SQLiteAuditLog(settings.audit_db, retention_days=settings.retention_days)
+        # Approval state lives in the same private database file (never arguments).
+        approvals = ApprovalStore(db=ApprovalDB(settings.audit_db))
     except (sqlite3.Error, OSError, ValueError) as exc:
         # e.g. a corrupted file, or a folder Warden can't write to. Without an audit
         # log nothing could ever be allowed, so stop with a clear message.
@@ -607,6 +630,7 @@ def main(settings: Settings | None = None) -> None:
     app = create_app(
         policy_path=settings.policy,
         audit_log=audit_log,
+        approvals=approvals,
         admin_key=settings.admin_key,
         agents=agents,
     )

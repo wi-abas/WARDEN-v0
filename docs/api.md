@@ -49,8 +49,14 @@ exception: an approved approval the agent hasn't used yet can still be **revoked
 In `GET /v1/approvals`, hidden or look-alike characters in arguments (zero-width spaces,
 right-to-left overrides, full-width letters) are shown as visible `\uXXXX` escapes and
 the item gets a `warnings` entry, so an agent can't make you approve something that
-*looks* different from what it is. The approval is still bound to the real action. Approvals are kept
-in memory only (arguments never touch disk), so restarting Warden clears them.
+*looks* different from what it is. The approval is still bound to the real action.
+
+**Restarts:** approval state (id, agent, tool, `action_hash`, status, expiry) is kept in
+the audit database, so pending and approved approvals survive a restart; `used` is saved
+before an allow is returned, so a restart can't replay one. Arguments never touch disk:
+after a restart a pending approval is listed with `"arguments": null` and a warning, and
+**can't be approved** (409) until the agent asks again with the same action, which brings
+the arguments back (its `action_hash` must match). Denying always works.
 
 ## Agent tokens
 

@@ -40,6 +40,14 @@ coverage, ruff/format/mypy clean.
   recorded through the capped rejection log. Pending quota checked under the store lock.
   Note: SDK/proxy polling counts against the limit (2 s polls = 30/min per waiting call).
 
+- **Persistent approvals keep arguments off disk**: state only, in an `approvals` table
+  of the audit database. Arguments come back when the agent re-sends the same action
+  (hash must match); approving is refused while they're unknown (no blind approvals).
+  Write-through: the DB write happens before the in-memory change. Wall clock for expiry
+  when persisted. Known gap: if the audit event for a human decision is written but the
+  approvals write then fails, the API answers 503 "nothing changed" yet the events table
+  has an approve entry (the state really didn't change). Acceptable; noted.
+
 ## Blocked / needs Wissam
 
 (none yet)
@@ -52,3 +60,4 @@ coverage, ruff/format/mypy clean.
 - [x] 2. Python SDK (`warden.sdk`): guard, run_guarded(_async), freeze, ApprovalPending.
 - [x] 3. Per-agent tokens (`warden agent add/list/remove`, `--agents`, Bearer auth).
 - [x] 4. Per-agent rate limits and pending-approval quotas (`limits` in the policy).
+- [x] 5. Persistent approvals (state in SQLite, arguments never on disk).
