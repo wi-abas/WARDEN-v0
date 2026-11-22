@@ -47,7 +47,8 @@ Assuming the agent runtime calls Warden and obeys the answer:
   and `agent_id` is self-declared. Anything that can reach `127.0.0.1` can ask.
 - **Whoever can edit the policy file.** It's trusted configuration and controls every
   decision.
-- **Whoever has the admin key** (or can read the terminal it's printed in). It's one shared
+- **Whoever has the admin key** (or can read the terminal it's printed in, or the
+  environment of the Warden process: any program running as the same OS user usually can). It's one shared
   secret, so there's no record of *which* person approved.
 - **Whoever can edit the audit database.** It's a plain SQLite file, not tamper-evident.
 - **Things the rules don't express.** Text checks see text, not meaning:

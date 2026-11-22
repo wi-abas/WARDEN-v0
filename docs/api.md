@@ -86,5 +86,9 @@ WARDEN_ADMIN_KEY="$(openssl rand -base64 32)" \
 | Admin key | *(no flag)* | `WARDEN_ADMIN_KEY` (32+ characters) | random, printed at startup |
 
 Flags beat environment variables. The admin key has no flag on purpose: command lines are
-visible to other programs (`ps`). An invalid setting stops Warden with a clear message
-instead of falling back to a default. The host is always `127.0.0.1`.
+visible to every user on the machine (`ps`). Environment variables are hidden from other
+users, but programs running as the **same** user, including an agent, can usually read
+them (for example `/proc/<pid>/environ` on Linux). **Run agents as a different OS user than
+Warden** if they shouldn't be able to approve their own actions.
+
+An invalid setting stops Warden with a clear message instead of falling back to a default. The host is always `127.0.0.1`.

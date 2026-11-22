@@ -8,8 +8,10 @@
 | Retention days | --retention-days   | WARDEN_RETENTION_DAYS   | 90 (0 = keep forever) |
 | Admin key      | (none, on purpose) | WARDEN_ADMIN_KEY        | random, printed       |
 
-The admin key has no flag: command lines are visible to every program on the
-machine (`ps`), environment variables are not.
+The admin key has no flag: command lines are visible to every user on the
+machine (`ps`). Environment variables are hidden from OTHER users, but programs
+running as the SAME user (including an agent) can usually read them, e.g. via
+/proc/<pid>/environ on Linux. Run agents as a different user than Warden.
 
 Any invalid setting stops Warden from starting with a clear message. It never
 silently falls back to a default. The host is always 127.0.0.1 (no network
