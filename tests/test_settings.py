@@ -141,3 +141,10 @@ def test_port_boundaries_accepted(raw: str, port: int) -> None:
 
 def test_retention_of_one_day_accepted() -> None:
     assert resolve(retention_days="1", env={}).retention_days == 1
+
+
+def test_symlinked_audit_db_is_a_settings_error(tmp_path: Path) -> None:
+    link = tmp_path / "audit.db"
+    link.symlink_to(tmp_path / "elsewhere.db")
+    with pytest.raises(SettingsError, match="symlink"):
+        resolve(audit_db=str(link), env={})

@@ -38,3 +38,15 @@ def test_private_database_left_alone(tmp_path: Path, caplog: pytest.LogCaptureFi
     SQLiteAuditLog(path)
     assert mode(path) == 0o600
     assert "restricted" not in caplog.text
+
+
+@pytest.mark.parametrize("dangling", [True, False])
+def test_symlinked_database_is_refused(tmp_path: Path, dangling: bool) -> None:
+    target = tmp_path / "elsewhere.db"
+    if not dangling:
+        target.write_bytes(b"")
+    link = tmp_path / "audit.db"
+    link.symlink_to(target)
+    with pytest.raises(ValueError, match="symlink"):
+        SQLiteAuditLog(link)
+    assert target.read_bytes() == b"" if not dangling else not target.exists()

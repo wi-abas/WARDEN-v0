@@ -188,6 +188,10 @@ def _make_private(path: Path) -> None:
     It holds agent ids, tools, decisions and pending approval ids: not for other
     users on the machine. (SQLite gives its journal files the same permissions.)
     """
+    if path.is_symlink():
+        # In a shared folder (e.g. /tmp) someone else could plant a link and make
+        # Warden write its log wherever they like. Never follow one.
+        raise ValueError(f"audit log path {path} is a symlink; refusing to use it")
     if not path.exists():
         os.close(os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
         return

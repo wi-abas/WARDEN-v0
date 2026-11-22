@@ -104,6 +104,10 @@ def resolve(
             raise SettingsError(f"{name}: folder does not exist: {path.parent}")
         values["audit_db"] = path
 
+    audit_path = values.get("audit_db", DEFAULT_AUDIT_PATH)
+    if audit_path.is_symlink():
+        raise SettingsError(f"audit database {audit_path} is a symlink; refusing to use it")
+
     if chosen := pick(retention_days, "WARDEN_RETENTION_DAYS"):
         raw, name = chosen
         days = _whole_number(name, raw)
