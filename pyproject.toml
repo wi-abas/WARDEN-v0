@@ -9,7 +9,7 @@ authors = [
     { name = "Wissam Abas" }
 ]
 requires-python = ">=3.12"
-keywords = ["ai-agents", "llm", "security", "policy", "guardrails", "tool-calling", "mcp", "approval"]
+keywords = ["ai-agents", "llm", "security", "policy", "guardrails", "tool-calling", "approval"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
