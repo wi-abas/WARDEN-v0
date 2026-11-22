@@ -24,6 +24,7 @@ Security properties (each one is tested in tests/test_engine.py):
 
 import logging
 import re
+import unicodedata
 from collections.abc import Iterable, Mapping
 
 from pydantic import JsonValue
@@ -70,8 +71,28 @@ def _comparable(a: JsonValue, b: JsonValue) -> bool:
 
 
 def _fold(text: str, condition: Condition) -> str:
-    """Lower-case text (casefold handles e.g. German ß) when ignore_case is set."""
+    """Same Unicode form on both sides (NFC: a macOS "é" made of two characters equals
+    the usual one), then lower-case (casefold handles e.g. German ß) if ignore_case."""
+    text = unicodedata.normalize("NFC", text)
     return text.casefold() if condition.ignore_case else text
+
+
+# Dots that URL and mail software treat as "." (IDNA): "evil。net" is "evil.net".
+_LOOKALIKE_DOTS = {"\u3002", "\uff0e", "\uff61"}
+
+
+def _check_unicode(actual: str, condition: Condition) -> None:
+    """Refuse text that looks or decodes differently from what a rule sees.
+
+    - Invisible characters (zero-width space, soft hyphen, direction marks, control
+      characters): "evi\u00adl.net" is "evil.net" once software drops the soft hyphen.
+    - Compatibility look-alikes that software folds into plain letters: the
+      full-width "ｅ" in "ｅvil.net" becomes "e" (NFKC).
+    """
+    if any(unicodedata.category(ch) in {"Cf", "Cc"} for ch in actual):
+        raise _UncheckableArgument(condition.arg)
+    if unicodedata.normalize("NFKC", actual) != unicodedata.normalize("NFC", actual):
+        raise _UncheckableArgument(condition.arg)
 
 
 def _looks_like_url(value: str) -> bool:
@@ -142,6 +163,10 @@ def _is_plain_email(text: str) -> bool:
 
 def _check_text_shape(actual: str, expected: list[str], condition: Condition) -> None:
     """Raise if the agent's text is shaped to slip past a URL, path or email comparison."""
+    if any(_looks_like_url(e) or _looks_like_email(e) for e in expected) and any(
+        dot in actual for dot in _LOOKALIKE_DOTS
+    ):
+        raise _UncheckableArgument(condition.arg)
     if any(_looks_like_url(e) for e in expected):
         if not _is_clean_url(actual):
             raise _UncheckableArgument(condition.arg)
@@ -188,6 +213,7 @@ def _holds(condition: Condition, arguments: dict[str, JsonValue]) -> bool:
             raise _UncheckableArgument(condition.arg)
         if not isinstance(expected, str):  # can't happen: the policy loader checked it
             raise ValueError("policy value is not text")
+        _check_unicode(actual, condition)
         _check_text_shape(actual, [expected], condition)
         text, affix = _fold(actual, condition), _fold(expected, condition)
         return text.startswith(affix) if op is Op.STARTSWITH else text.endswith(affix)
@@ -197,6 +223,7 @@ def _holds(condition: Condition, arguments: dict[str, JsonValue]) -> bool:
     if not any(_comparable(actual, choice) for choice in choices):
         raise _UncheckableArgument(condition.arg)
     if isinstance(actual, str):
+        _check_unicode(actual, condition)
         _check_text_shape(actual, [c for c in choices if isinstance(c, str)], condition)
     found = any(_same(actual, choice, condition) for choice in choices)
     if op is Op.NEQ:
