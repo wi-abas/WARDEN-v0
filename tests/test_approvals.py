@@ -273,3 +273,17 @@ def test_approved_window_still_expires(client: TestClient, clock: FakeClock) -> 
     approve(client, approval_id)
     clock.now += 901
     assert ask(client, email(approval_id=approval_id))["decision"] == "deny"
+
+
+def test_asking_again_after_approval_returns_the_same_id(client: TestClient) -> None:
+    approval_id = get_approved(client)
+    again = ask(client, email())  # agent lost the id and asks from scratch
+    assert (again["decision"], again["approval_id"]) == ("require_approval", approval_id)
+    assert ask(client, email(approval_id=approval_id))["decision"] == "allow"
+    assert client.get("/v1/approvals", headers=ADMIN).json() == []  # nothing new pending
+
+
+def test_after_use_a_new_request_starts_a_new_approval(client: TestClient) -> None:
+    approval_id = get_approved(client)
+    ask(client, email(approval_id=approval_id))  # used
+    assert ask(client, email())["approval_id"] != approval_id

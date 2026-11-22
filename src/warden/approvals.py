@@ -82,8 +82,10 @@ class ApprovalStore:
             now = self._clock()
             self._purge_expired(now)
             for a in self._items.values():
-                if a.status is Status.PENDING and a.action_hash == action_hash:
-                    return a.approval_id  # same action asked again: don't pile up
+                if a.status in {Status.PENDING, Status.APPROVED} and a.action_hash == action_hash:
+                    # Same action asked again (maybe the agent lost the id): hand back
+                    # the existing approval instead of piling up a new one.
+                    return a.approval_id
             pending = sum(a.status is Status.PENDING for a in self._items.values())
             if pending >= self._max_pending:
                 return None
