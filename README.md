@@ -27,6 +27,37 @@ A pretend agent reads files, tries a path trick, emails colleagues (and tries a 
 approval and to replay it. Warden's answer to each is shown and checked. The policy it uses
 is [`examples/demo-policy.json`](examples/demo-policy.json).
 
+## Use it from your agent
+
+Ask Warden before every tool call, and run the tool **only** on `allow`. Standard library
+only:
+
+```python
+import json, urllib.request
+
+
+def ask_warden(tool: str, arguments: dict) -> dict:
+    body = json.dumps({"agent_id": "my-agent", "tool": tool, "arguments": arguments})
+    request = urllib.request.Request(
+        "http://127.0.0.1:8000/v1/evaluate", body.encode(), {"content-type": "application/json"}
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            return json.load(response)
+    except Exception:
+        return {"decision": "deny", "reason": "Warden unreachable"}  # fail closed
+
+
+answer = ask_warden("send_email", {"to": "bob@mycompany.com", "subject": "Hi"})
+if answer["decision"] == "allow":
+    send_email(to="bob@mycompany.com", subject="Hi")
+else:
+    print("Not allowed:", answer["reason"])  # deny, require_approval, or an error
+```
+
+[`examples/agent.py`](examples/agent.py) is a complete version: a small agent loop that
+also waits for human approval (polling with the `approval_id`) and gives up after a timeout.
+
 ## Quick start
 
 Requires [uv](https://docs.astral.sh/uv/).
@@ -287,6 +318,7 @@ uv run mypy                    # type check (strict)
 | `src/warden/check.py` | Policy checks and warnings |
 | `src/warden/settings.py` | Server settings (flags and environment variables) |
 | `examples/demo.py` | The 30-second demo (also run as a test) |
+| `examples/agent.py` | An agent loop guarded by Warden (also run as a test) |
 
 ## Roadmap
 
