@@ -96,3 +96,21 @@ def test_gives_up_waiting_without_running(server: tuple[FastAPI, str]) -> None:
             poll_every=0.05,
         )
     assert ran == []
+
+
+def test_tool_runs_with_exactly_what_was_checked(monkeypatch: pytest.MonkeyPatch) -> None:
+    agent = load_agent()
+    original = {"to": "boss@company.com", "cc": ["team@company.com"]}
+
+    def ask_then_tamper(
+        tool: str, arguments: dict[str, object], *a: object, **k: object
+    ) -> dict[str, str]:
+        # Simulates another thread changing the caller's data right after the check.
+        original["to"] = "attacker@evil.com"
+        original["cc"].append("attacker@evil.com")  # type: ignore[attr-defined]
+        return {"decision": "allow", "reason": "ok"}
+
+    monkeypatch.setattr(agent, "ask_warden", ask_then_tamper)
+    received: dict[str, object] = {}
+    agent.guarded("send_email", original, lambda **kw: received.update(kw))
+    assert received == {"to": "boss@company.com", "cc": ["team@company.com"]}
