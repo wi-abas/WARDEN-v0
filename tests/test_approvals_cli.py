@@ -186,6 +186,9 @@ def test_server_refusal_after_showing(
         (["approve", *[f"{i:032d}" for i in range(101)]], "at most 100"),
         (["list", "a" * 32], "takes no ids"),
         (["list", "--warden-url", "http://example.com:80"], "this machine"),
+        (["approve", "a" * 32, "--agent", "agent-1"], "are for `list`"),
+        (["list", "--agent", "bad agent!"], "not an agent id or tool name"),
+        (["list", "--tool", "Bad-Tool"], "not an agent id or tool name"),
     ],
 )
 def test_usage_errors(capsys: Any, monkeypatch: Any, argv: list[str], message: str) -> None:

@@ -1,6 +1,7 @@
 """`warden approvals`: review and decide pending approvals from the terminal.
 
 warden approvals list [--group]              every pending action, in full
+warden approvals list --agent A --tool T     only those (when an agent floods the queue)
 warden approvals approve ID [ID ...] [--yes] approve exactly these (all or nothing)
 warden approvals reject ID [ID ...] [--yes]  reject exactly these (all or nothing)
 
@@ -26,14 +27,17 @@ import os
 import re
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Any, TextIO
 
 from warden.approvals import MAX_GROUP
 from warden.client import DEFAULT_URL, ClientConfigError, check_url
-from warden.models import APPROVAL_ID_PATTERN
+from warden.models import AGENT_ID_PATTERN, APPROVAL_ID_PATTERN, TOOL_NAME_PATTERN
 
-MAX_RESPONSE_BYTES = 16 * 1024 * 1024  # up to 1000 pending approvals, arguments shown
+# 100 approvals (the most one decision fetches) of the largest request Warden accepts,
+# every character escaped, stay under this.
+MAX_RESPONSE_BYTES = 32 * 1024 * 1024
 TIMEOUT_SECONDS = 10
 
 
@@ -67,7 +71,10 @@ def _call(url: str, key: str, method: str, path: str, body: Any = None) -> tuple
     except (urllib.error.URLError, OSError) as exc:
         raise _Unreachable(f"can't reach Warden at {url} ({type(exc).__name__})") from None
     if len(raw) > MAX_RESPONSE_BYTES:
-        raise _Unreachable("answer from Warden too large")
+        raise _Unreachable(
+            "answer from Warden too large: narrow the list with --agent and --tool "
+            "(approve and reject still work: they fetch only the ids you name)"
+        )
     try:
         return status, json.loads(raw)
     except (ValueError, RecursionError):  # not JSON, or nested too deeply to parse
@@ -105,8 +112,23 @@ def _print_groups(items: list[Any], out: TextIO) -> None:
             _print_item(item, number, out)
 
 
-def _pending(url: str, key: str, group: bool) -> list[Any]:
-    status, data = _call(url, key, "GET", "/v1/approvals" + ("?group=true" if group else ""))
+def _pending(
+    url: str,
+    key: str,
+    group: bool,
+    ids: list[str] | None = None,
+    agent: str | None = None,
+    tool: str | None = None,
+) -> list[Any]:
+    query = {"group": "true"} if group else {}
+    if ids:
+        query["ids"] = ",".join(ids)  # ids are pattern-checked: no commas inside
+    if agent:
+        query["agent_id"] = agent
+    if tool:
+        query["tool"] = tool
+    path = "/v1/approvals" + ("?" + urllib.parse.urlencode(query) if query else "")
+    status, data = _call(url, key, "GET", path)
     if status == 401:
         raise PermissionError("WARDEN_ADMIN_KEY is wrong (Warden refused it)")
     if status != 200:
@@ -145,6 +167,15 @@ def run(
     if args.action == "list" and ids:
         print("warden approvals: `list` takes no ids", file=err)
         return 2
+    agent, tool = getattr(args, "agent", None), getattr(args, "tool", None)
+    if args.action != "list" and (agent or tool):
+        print("warden approvals: --agent and --tool are for `list`", file=err)
+        return 2
+    if (agent and not re.fullmatch(AGENT_ID_PATTERN, agent)) or (
+        tool and not re.fullmatch(TOOL_NAME_PATTERN, tool)
+    ):
+        print("warden approvals: that is not an agent id or tool name", file=err)
+        return 2
     if args.action != "list":
         problem = (
             "needs at least one approval id"
@@ -170,7 +201,7 @@ def run(
         return 2
     try:
         if args.action == "list":
-            items = _pending(url, key, group=args.group)
+            items = _pending(url, key, group=args.group, agent=agent, tool=tool)
             if not items:
                 print("No pending approvals.", file=out)
             elif args.group:
@@ -203,10 +234,11 @@ def _decide(
     out: TextIO,
     err: TextIO,
 ) -> int:
-    # Show exactly what will be decided: fetched now, every action in full.
+    # Show exactly what will be decided: fetched now, every action in full. Only the
+    # named ids are fetched, so a flood of other approvals can't block this.
     pending = {
         item.get("approval_id"): item
-        for item in _pending(url, key, group=False)
+        for item in _pending(url, key, group=False, ids=ids)
         if isinstance(item, dict)
     }
     missing = [i for i in ids if i not in pending]
