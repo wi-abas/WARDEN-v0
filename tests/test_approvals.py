@@ -318,3 +318,11 @@ def test_restore_only_touches_used_approvals(store: ApprovalStore) -> None:
     store.restore(approval_id)  # pending: unchanged
     assert not store.consume(approval_id, "a" * 64)
     store.restore("unknown-id-0123456789")  # unknown: no error
+
+
+def test_approval_expires_at_exactly_the_ttl(client: TestClient, clock: FakeClock) -> None:
+    approval_id = ask(client, email())["approval_id"]
+    clock.now += 899.999
+    assert approve(client, approval_id) == 200  # still just inside
+    clock.now += 900  # exactly the fresh window: expired
+    assert ask(client, email(approval_id=approval_id))["decision"] == "deny"

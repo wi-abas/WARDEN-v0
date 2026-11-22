@@ -317,3 +317,18 @@ def test_uncheckable_reason_does_not_depend_on_rule_order() -> None:
     request_ = request(amount="lots", region=7)
     reasons = {evaluate(request_, order).reason for order in ([a, b], [b, a])}
     assert reasons == {"argument 'amount' could not be checked"}
+
+
+def test_in_list_of_exactly_the_maximum_is_accepted() -> None:
+    values = [f"v{i}" for i in range(100)]
+    rule("r", "allow", cond("x", "in", values))
+    assert evaluate(request(x="v99"), [rule("r", "allow", cond("x", "in", values))]).decision == (
+        Decision.ALLOW
+    )
+
+
+def test_host_in_list_of_exactly_the_maximum_is_accepted() -> None:
+    hosts = [f"h{i}.example.com" for i in range(100)]
+    rule("r", "deny", cond("url", "host_in", hosts))
+    with pytest.raises(ValidationError):
+        rule("r", "deny", cond("url", "host_in", [*hosts, "h100.example.com"]))
