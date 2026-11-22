@@ -104,6 +104,31 @@ def test_repeated_key_inside_meta_is_refused(tmp_path: Path) -> None:
     assert session.server_saw() == []
 
 
+@pytest.mark.parametrize(
+    "line",
+    [
+        b'{"jsonrpc":"2.0","id":1,"method":"ping","params":{"x":"\\ud800"}}',
+        b'{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"echo",'
+        b'"arguments":{"p":"\\udfff"}}}',
+        b'{"jsonrpc":"2.0","id":1,"method":"ping","params":{"\\ud800":1}}',
+    ],
+)
+def test_lone_surrogate_is_refused_and_the_session_survives(tmp_path: Path, line: bytes) -> None:
+    """Found in the re-audit: this used to crash the client relay and end the session."""
+    warden = FakeWarden()
+
+    async def script(s: Session) -> None:
+        s.send_raw(line + b"\n")
+        assert (await s.recv())["error"]["code"] == -32600
+        assert (await s.roundtrip({"jsonrpc": "2.0", "id": 2, "method": "ping"}))["id"] == 2
+        # A valid surrogate PAIR (an escaped emoji) is fine.
+        assert echoed(await s.roundtrip(call("echo", {"e": "\U0001f600"}, request_id=3)))
+
+    session, _ = run_session(make_config(tmp_path), warden, script)
+    assert [m.get("id") for m in session.server_saw()] == [2, 3]
+    assert warden.asked == [("echo", {"e": "\U0001f600"}, None)]
+
+
 def test_allowed_meta_keys_are_configurable(tmp_path: Path) -> None:
     config = make_config(tmp_path, allow_meta_keys=["progressToken", "io.example/trace"])
 

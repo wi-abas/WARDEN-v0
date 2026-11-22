@@ -158,13 +158,21 @@ def _no_constants(name: str) -> Any:
 
 
 def parse_message(line: bytes) -> Any:
-    """Strict JSON: no repeated keys (parsers disagree on which copy wins), no NaN."""
+    """Strict JSON: no repeated keys (parsers disagree on which copy wins), no NaN, and
+    nothing that can't be re-encoded (a lone "\\ud800" escape would crash `encode`)."""
     try:
-        return json.loads(line, object_pairs_hook=no_duplicate_keys, parse_constant=_no_constants)
+        message = json.loads(
+            line, object_pairs_hook=no_duplicate_keys, parse_constant=_no_constants
+        )
     except DuplicateKeyError:
         raise _Refused(INVALID_REQUEST, "repeated key in message (refused by Warden)") from None
     except ValueError:
         raise _Refused(PARSE_ERROR, "invalid JSON") from None
+    try:
+        encode(message)
+    except UnicodeEncodeError:
+        raise _Refused(INVALID_REQUEST, "invalid text in message (refused by Warden)") from None
+    return message
 
 
 def encode(message: Any) -> bytes:
