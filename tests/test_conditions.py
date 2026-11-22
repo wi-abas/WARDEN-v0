@@ -309,3 +309,11 @@ def test_conditions_load_from_file(tmp_path: Path) -> None:
     rules = load_rules(path)
     assert evaluate(request(amount=100), rules).decision == Decision.ALLOW
     assert evaluate(request(amount=900), rules).decision == Decision.DENY
+
+
+def test_uncheckable_reason_does_not_depend_on_rule_order() -> None:
+    a = rule("a-rule", "deny", cond("amount", "gt", 5))
+    b = rule("b-rule", "deny", cond("region", "eq", "eu"))
+    request_ = request(amount="lots", region=7)
+    reasons = {evaluate(request_, order).reason for order in ([a, b], [b, a])}
+    assert reasons == {"argument 'amount' could not be checked"}

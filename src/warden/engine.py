@@ -217,7 +217,10 @@ def _evaluate(
         if problem is not None:
             return EvaluationResult(decision=Decision.DENY, reason=problem, action_hash=action_hash)
     try:
-        matches = [rule for rule in rules if _rule_matches(rule, request)]
+        # Sorted by id so that even the reason (which argument couldn't be checked)
+        # is the same whatever order the rules are written in.
+        ordered = sorted(rules, key=lambda rule: rule.id)
+        matches = [rule for rule in ordered if _rule_matches(rule, request)]
     except _UncheckableArgument as exc:
         # exc.arg is the argument NAME from the policy file, never its value.
         return EvaluationResult(
