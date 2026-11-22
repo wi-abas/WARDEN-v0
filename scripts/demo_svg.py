@@ -22,7 +22,7 @@ def demo_output() -> str:
         raise RuntimeError("can't load examples/demo.py")
     demo = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(demo)
-    demo.USE_COLOR = True
+    setattr(demo, "USE_COLOR", True)  # noqa: B010 (module loaded at runtime)
     buffer = io.StringIO()
     with contextlib.redirect_stdout(buffer):
         demo.run()
