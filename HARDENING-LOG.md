@@ -13,7 +13,7 @@ Runs alongside `feature/group-approvals`; avoids `approvals.py` and `api.py`.
 - [x] Stricter email check (found by fuzzing)
 - [x] Coverage-guided fuzzing: 5 targets, Hypothesis in every run, Atheris weekly in CI
 - [x] Release workflow (prepared, not run): `.github/workflows/release.yml`, `docs/releasing.md`
-- [ ] Threat model
+- [x] Threat model: `docs/threat-model.md`, linked from SECURITY.md
 - [ ] Re-audit of this batch
 
 ## Decisions
@@ -47,7 +47,9 @@ Runs alongside `feature/group-approvals`; avoids `approvals.py` and `api.py`.
   (still deny, server stayed up); **one such line ended a whole MCP proxy session**
   (availability: a prompt-injected model could cut off all tools; nothing unchecked was
   forwarded); `warden check`, `audit verify`, the SDK and config readers crashed with a
-  traceback. Fixed at all 11 parse sites; 14 regression tests (10 fail without the fix).
+  traceback. An older test (`test_hardening.py`) tried deep nesting with *objects*,
+  which Python's C parser handles; *lists* are what hit the recursion limit, so it
+  slipped through. Fixed at all 11 parse sites; 14 regression tests (10 fail without the fix).
   Touches api.py (one except clause in DuplicateKeyCheck), kept minimal to avoid
   conflicts with the group-approvals branch.
 - Chain hashes don't include any database identity, so two logs with identical rows

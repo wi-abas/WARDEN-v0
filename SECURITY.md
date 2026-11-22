@@ -18,6 +18,8 @@ Only the latest release gets security fixes.
 
 ## Threat model
 
+The full version, with every defence linked to its tests: [docs/threat-model.md](docs/threat-model.md).
+
 ### What Warden is
 
 A **checkpoint** that an agent runtime asks before running a tool. It answers `allow`,

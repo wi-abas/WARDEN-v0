@@ -3,6 +3,8 @@
 ## Unreleased
 
 ### Hardening
+- **Threat model** (`docs/threat-model.md`): assets, attackers, every defence linked to
+  its tests, and the risks that remain.
 - **Release workflow** (prepared, not yet used): tag `vX.Y.Z` → checks, build, CycloneDX
   SBOM, GitHub build-provenance attestation, PyPI trusted publishing (no stored token)
   behind a protected `pypi` environment. Setup steps in `docs/releasing.md`.

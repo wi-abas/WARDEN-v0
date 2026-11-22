@@ -139,6 +139,8 @@ directly. Measure on your machine: `uv run python scripts/benchmark.py`.
 - [MCP proxy](https://github.com/wi-abas/agent-warden/blob/main/docs/mcp-proxy.md): `warden proxy` for Claude Desktop, Cursor, Claude Code
 - [Design notes](https://github.com/wi-abas/agent-warden/tree/main/docs/design): how each feature works and what it doesn't cover
 - [Security](https://github.com/wi-abas/agent-warden/blob/main/SECURITY.md): threat model, what Warden does and doesn't protect against
+- [Threat model](https://github.com/wi-abas/agent-warden/blob/main/docs/threat-model.md): attackers, defences with their tests, remaining risks
+- [Releasing](https://github.com/wi-abas/agent-warden/blob/main/docs/releasing.md): signed, attested releases through PyPI trusted publishing
 
 ## Rule for clients: fail closed
 
