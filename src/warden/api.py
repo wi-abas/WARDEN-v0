@@ -25,6 +25,7 @@ import re
 import secrets
 import sys
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -41,7 +42,7 @@ from warden.approvals import Approval, ApprovalStore, DecideError, Status, apply
 from warden.audit import AuditEntry, AuditEvent, AuditLog, EventKind, SQLiteAuditLog
 from warden.engine import evaluate
 from warden.models import APPROVAL_ID_PATTERN, ActionRequest, Decision, EvaluationResult
-from warden.policy import DEFAULT_POLICY_PATH, load_policy
+from warden.policy import DEFAULT_POLICY_PATH, Policy, load_policy
 from warden.settings import Settings
 
 logger = logging.getLogger(__name__)
@@ -97,74 +98,52 @@ class _AdminKeyError(Exception):
     pass
 
 
-def create_app(
-    policy_path: Path = DEFAULT_POLICY_PATH,
-    audit_log: AuditLog | None = None,
-    approvals: ApprovalStore | None = None,
-    admin_key: str | None = None,
-) -> FastAPI:
-    """Build the app. Rules, audit log, approvals and admin key are set up once, here."""
-    policy = load_policy(policy_path)
-    rules = policy.rules
-    if audit_log is None:
-        audit_log = SQLiteAuditLog(audit.DEFAULT_AUDIT_PATH)
-    if approvals is None:
-        approvals = ApprovalStore()
-    if admin_key is None:
-        # New random key every start. Printed to the terminal (for the human),
-        # never written to the log file and never sent to agents.
-        admin_key = secrets.token_urlsafe(32)
-        print(f"\nWarden admin key (needed to approve actions): {admin_key}\n", file=sys.stderr)
+@dataclass
+class _Warden:
+    """Everything the routes need, with one method per job. Routes stay one-liners."""
 
-    def require_admin(x_warden_admin_key: str | None = Header(default=None)) -> None:
+    policy: Policy
+    audit_log: AuditLog
+    approvals: ApprovalStore
+    admin_key: str
+
+    # --- Access control and rejected requests ------------------------------------------
+
+    def require_admin(self, x_warden_admin_key: str | None = Header(default=None)) -> None:
         if x_warden_admin_key is None or not secrets.compare_digest(
-            x_warden_admin_key.encode(), admin_key.encode()
+            x_warden_admin_key.encode(), self.admin_key.encode()
         ):
             raise _AdminKeyError
 
-    def record_rejection(scope: Scope, status: int, reason: str) -> None:
+    def record_rejection(self, scope: Scope, status: int, reason: str) -> None:
         """Audit a refused request: method and URL path only, never the body."""
-        try:
-            audit_log.record_event(
-                AuditEvent.now(
-                    EventKind.REQUEST_REJECTED,
-                    reason,
-                    http_status=status,
-                    method=str(scope.get("method", "")),
-                    path=str(scope.get("path", "")),
-                )
+        self._record_event_safely(
+            AuditEvent.now(
+                EventKind.REQUEST_REJECTED,
+                reason,
+                http_status=status,
+                method=str(scope.get("method", "")),
+                path=str(scope.get("path", "")),
             )
-        except Exception as exc:
-            # The answer is already deny, so a failed record doesn't change it.
-            logger.error("audit event write failed: %s", type(exc).__name__)
+        )
 
-    def reject(request: Request, status: int, reason: str) -> JSONResponse:
-        record_rejection(request.scope, status, reason)
+    def reject(self, request: Request, status: int, reason: str) -> JSONResponse:
+        self.record_rejection(request.scope, status, reason)
         return _deny_response(status, reason)
 
-    app = FastAPI(title="Warden", version=__version__)
-    app.add_middleware(BodySizeLimit, on_reject=record_rejection)
+    def _record_event_safely(self, event: AuditEvent) -> None:
+        """For events that don't change the answer (it's already deny / an error)."""
+        try:
+            self.audit_log.record_event(event)
+        except Exception as exc:
+            logger.error("audit event write failed: %s", type(exc).__name__)
 
-    @app.exception_handler(RequestValidationError)
-    async def invalid_request(request: Request, exc: RequestValidationError) -> JSONResponse:
-        # FastAPI's default 422 echoes the input back, which may contain secrets.
-        return reject(request, 422, "invalid request")
+    # --- Agents ------------------------------------------------------------------------
 
-    @app.exception_handler(_AdminKeyError)
-    async def bad_admin_key(request: Request, exc: _AdminKeyError) -> JSONResponse:
-        return reject(request, 401, "admin key missing or wrong")
-
-    @app.exception_handler(Exception)
-    async def unexpected_error(request: Request, exc: Exception) -> JSONResponse:
-        # Log only the error type; never the message or a stack trace with arguments.
-        logger.error("unexpected error handling request: %s", type(exc).__name__)
-        return reject(request, 500, "internal error")
-
-    @app.get("/health")
-    def health() -> JSONResponse:
+    def health(self) -> JSONResponse:
         # No rules means every request is denied: Warden runs, but isn't doing its job.
         # 503 lets monitoring tools notice without reading the body.
-        if not rules:
+        if not self.policy.rules:
             return JSONResponse(
                 status_code=503,
                 content={
@@ -173,13 +152,13 @@ def create_app(
                     "reason": "no rules loaded, every request is denied (check the policy file)",
                 },
             )
-        return JSONResponse(content={"status": "ok", "rules_loaded": len(rules)})
+        return JSONResponse(content={"status": "ok", "rules_loaded": len(self.policy.rules)})
 
-    @app.post("/v1/evaluate", response_model=EvaluationResult)
-    def evaluate_action(action: ActionRequest) -> EvaluationResult | JSONResponse:
-        result = apply_approval(action, evaluate(action, rules, policy.tools), approvals)
+    def evaluate(self, action: ActionRequest) -> EvaluationResult | JSONResponse:
+        decision = evaluate(action, self.policy.rules, self.policy.tools)
+        result = apply_approval(action, decision, self.approvals)
         try:
-            audit_log.record(AuditEntry.from_decision(action, result))
+            self.audit_log.record(AuditEntry.from_decision(action, result))
         except Exception as exc:
             logger.error("audit log write failed, denying: %s", type(exc).__name__)
             return _deny_response(503, "audit log unavailable")
@@ -189,8 +168,9 @@ def create_app(
         )
         return result
 
-    @app.get("/v1/approvals", dependencies=[Depends(require_admin)])
-    def list_approvals() -> list[dict[str, JsonValue]]:
+    # --- Humans (admin) ----------------------------------------------------------------
+
+    def list_approvals(self) -> list[dict[str, JsonValue]]:
         return [
             {
                 "approval_id": a.approval_id,
@@ -200,52 +180,31 @@ def create_app(
                 "action_hash": a.action_hash,
                 "expires_in_seconds": int(seconds_left),
             }
-            for a, seconds_left in approvals.pending()
+            for a, seconds_left in self.approvals.pending()
         ]
 
-    def _decide(approval_id: str, approve: bool, request: Request) -> JSONResponse:
-        def audit_first(approval: Approval, new_status: Status) -> None:
-            # Runs before the approval changes. If this write fails, decide() raises
-            # and the approval stays pending: no human decision goes unrecorded.
-            kind = (
-                EventKind.APPROVAL_APPROVED
-                if new_status is Status.APPROVED
-                else EventKind.APPROVAL_DENIED
-            )
-            audit_log.record_event(
-                AuditEvent.now(
-                    kind,
-                    f"approval {new_status.value} by admin",
-                    approval_id=approval.approval_id,
-                    agent_id=approval.agent_id,
-                    tool=approval.tool,
-                    action_hash=approval.action_hash,
-                )
-            )
-
+    def decide(self, approval_id: str, approve: bool, request: Request) -> JSONResponse:
         try:
-            status = approvals.decide(approval_id, approve, before_commit=audit_first)
-        except DecideError as exc:
-            reason = "approval not found" if exc.not_found else "approval already decided"
-            try:
-                audit_log.record_event(
-                    AuditEvent.now(
-                        EventKind.APPROVAL_DECIDE_FAILED,
-                        reason,
-                        http_status=404 if exc.not_found else 409,
-                        method=request.method,
-                        path=request.url.path,
-                        # Only keep the id if it looks like a real one.
-                        approval_id=approval_id
-                        if re.fullmatch(APPROVAL_ID_PATTERN, approval_id)
-                        else None,
-                    )
-                )
-            except Exception as audit_exc:
-                logger.error("audit event write failed: %s", type(audit_exc).__name__)
-            return JSONResponse(
-                status_code=404 if exc.not_found else 409, content={"error": reason}
+            status = self.approvals.decide(
+                approval_id, approve, before_commit=self._audit_human_decision
             )
+        except DecideError as exc:
+            code = 404 if exc.not_found else 409
+            reason = "approval not found" if exc.not_found else "approval already decided"
+            self._record_event_safely(
+                AuditEvent.now(
+                    EventKind.APPROVAL_DECIDE_FAILED,
+                    reason,
+                    http_status=code,
+                    method=request.method,
+                    path=request.url.path,
+                    # Only keep the id if it looks like a real one.
+                    approval_id=approval_id
+                    if re.fullmatch(APPROVAL_ID_PATTERN, approval_id)
+                    else None,
+                )
+            )
+            return JSONResponse(status_code=code, content={"error": reason})
         except Exception as exc:
             logger.error("approval not changed, audit failed: %s", type(exc).__name__)
             return JSONResponse(
@@ -254,13 +213,75 @@ def create_app(
         logger.info("approval %s", status)  # never log the id or arguments
         return JSONResponse(content={"approval_id": approval_id, "status": status.value})
 
-    @app.post("/v1/approvals/{approval_id}/approve", dependencies=[Depends(require_admin)])
-    def approve(approval_id: str, request: Request) -> JSONResponse:
-        return _decide(approval_id, approve=True, request=request)
+    def _audit_human_decision(self, approval: Approval, new_status: Status) -> None:
+        """Runs BEFORE the approval changes. If this write fails, decide() raises and
+        the approval stays pending: no human decision goes unrecorded."""
+        kind = (
+            EventKind.APPROVAL_APPROVED
+            if new_status is Status.APPROVED
+            else EventKind.APPROVAL_DENIED
+        )
+        self.audit_log.record_event(
+            AuditEvent.now(
+                kind,
+                f"approval {new_status.value} by admin",
+                approval_id=approval.approval_id,
+                agent_id=approval.agent_id,
+                tool=approval.tool,
+                action_hash=approval.action_hash,
+            )
+        )
 
-    @app.post("/v1/approvals/{approval_id}/deny", dependencies=[Depends(require_admin)])
+
+def create_app(
+    policy_path: Path = DEFAULT_POLICY_PATH,
+    audit_log: AuditLog | None = None,
+    approvals: ApprovalStore | None = None,
+    admin_key: str | None = None,
+) -> FastAPI:
+    """Build the app. Rules, audit log, approvals and admin key are set up once, here."""
+    if admin_key is None:
+        # New random key every start. Printed to the terminal (for the human),
+        # never written to the log file and never sent to agents.
+        admin_key = secrets.token_urlsafe(32)
+        print(f"\nWarden admin key (needed to approve actions): {admin_key}\n", file=sys.stderr)
+    w = _Warden(
+        policy=load_policy(policy_path),
+        audit_log=audit_log or SQLiteAuditLog(audit.DEFAULT_AUDIT_PATH),
+        approvals=approvals or ApprovalStore(),
+        admin_key=admin_key,
+    )
+
+    app = FastAPI(title="Warden", version=__version__)
+    app.add_middleware(BodySizeLimit, on_reject=w.record_rejection)
+
+    @app.exception_handler(RequestValidationError)
+    async def invalid_request(request: Request, exc: RequestValidationError) -> JSONResponse:
+        # FastAPI's default 422 echoes the input back, which may contain secrets.
+        return w.reject(request, 422, "invalid request")
+
+    @app.exception_handler(_AdminKeyError)
+    async def bad_admin_key(request: Request, exc: _AdminKeyError) -> JSONResponse:
+        return w.reject(request, 401, "admin key missing or wrong")
+
+    @app.exception_handler(Exception)
+    async def unexpected_error(request: Request, exc: Exception) -> JSONResponse:
+        # Log only the error type; never the message or a stack trace with arguments.
+        logger.error("unexpected error handling request: %s", type(exc).__name__)
+        return w.reject(request, 500, "internal error")
+
+    admin = [Depends(w.require_admin)]
+    app.get("/health")(w.health)
+    app.post("/v1/evaluate", response_model=EvaluationResult)(w.evaluate)
+    app.get("/v1/approvals", dependencies=admin)(w.list_approvals)
+
+    @app.post("/v1/approvals/{approval_id}/approve", dependencies=admin)
+    def approve(approval_id: str, request: Request) -> JSONResponse:
+        return w.decide(approval_id, approve=True, request=request)
+
+    @app.post("/v1/approvals/{approval_id}/deny", dependencies=admin)
     def deny(approval_id: str, request: Request) -> JSONResponse:
-        return _decide(approval_id, approve=False, request=request)
+        return w.decide(approval_id, approve=False, request=request)
 
     return app
 
