@@ -193,3 +193,38 @@ do what you meant:
 | W013 | A deny rule checks a nested value (`["headers", "to"]`): other keys in that object aren't checked |
 
 Exit code `1` on errors; with `--strict`, also on warnings (useful in CI).
+
+## Testing a policy
+
+`warden check` finds rules that look wrong; `warden test` proves the policy decides what
+you expect. Write example requests and the answer each should get:
+
+```json
+{
+  "policy": "../policies/default.json",
+  "cases": [
+    { "name": "read in the workspace",
+      "request": { "tool": "read_file", "arguments": { "path": "/workspace/a.txt" } },
+      "expect": "allow", "rule": "read-workspace" },
+    { "name": "escape with ..",
+      "request": { "tool": "read_file", "arguments": { "path": "/workspace/../etc/passwd" } },
+      "expect": "deny" }
+  ]
+}
+```
+
+```sh
+uv run warden test examples/policy-tests.json
+uv run warden test my-tests.json --policy other-policy.json
+```
+
+- `policy` is relative to the test file; `--policy` overrides it.
+- `request`: `tool`, `arguments`, optional `agent_id`. Validated exactly like
+  `/v1/evaluate`; invalid input counts as `deny` with no rule.
+- `expect`: `allow`, `deny` or `require_approval`. Optional `rule` (the rule id that
+  must decide, or `null` for "no rule matched") and `reason` (exact text).
+- Runs the engine only: no server, audit log, approvals or rate limits.
+- A broken policy is an error (exit 2), not "everything denied, tests pass".
+- Exit `0` all passed, `1` a case failed. Add it to CI next to `warden check --strict`.
+- Add a case for every trick you're worried about (`..`, look-alike domains, extra
+  arguments); `examples/policy-tests.json` has a starting set.

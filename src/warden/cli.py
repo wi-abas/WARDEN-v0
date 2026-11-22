@@ -8,6 +8,7 @@ warden init [FILE]     create a starter policy (default policies/default.json)
 warden check FILE      validate a policy file; exit 1 on errors
 warden check --strict  ...also exit 1 on warnings (useful in CI)
 warden schema          print the JSON Schema for policy files
+warden test FILE [--policy FILE]        run policy tests (example requests + expected decisions)
 warden limits [--policy FILE]           show rate limits and approval quotas
 warden limits set [--agent ID] [--requests-per-minute N] [--pending N]
 warden limits reset [--agent ID]        change them in the policy file
@@ -70,6 +71,9 @@ def main(argv: list[str] | None = None) -> int:
     init = commands.add_parser("init", help="create a starter policy file")
     init.add_argument("policy", nargs="?", type=Path, default=DEFAULT_POLICY_PATH)
     commands.add_parser("schema", help="print the JSON Schema for policy files")
+    test_parser = commands.add_parser("test", help="run policy tests")
+    test_parser.add_argument("tests", type=Path, help="test file (JSON)")
+    test_parser.add_argument("--policy", type=Path, help="policy file (overrides the test file)")
     check = commands.add_parser("check", help="validate a policy file")
     check.add_argument("policy", nargs="?", type=Path, default=DEFAULT_POLICY_PATH)
     check.add_argument("--strict", action="store_true", help="exit 1 on warnings too")
@@ -114,6 +118,11 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "agent":
         return manage_agents(args.action, args.agent_id, args.agents)
+
+    if args.command == "test":
+        from warden.policy_tests import run as run_tests
+
+        return run_tests(args.tests, args.policy)
 
     if args.command == "schema":
         print(policy_schema(), end="")

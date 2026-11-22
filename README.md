@@ -114,6 +114,7 @@ Requires [uv](https://docs.astral.sh/uv/).
 uv sync
 uv run warden init      # creates policies/default.json (skip in this repo: it exists)
 uv run warden check     # validates it
+uv run warden test examples/policy-tests.json   # checks it decides what you expect
 uv run warden           # starts the server
 ```
 

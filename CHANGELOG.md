@@ -3,6 +3,9 @@
 ## Unreleased
 
 ### Hardening
+- **`warden test`**: policy tests. Example requests with expected decisions (and
+  optionally rule and reason), run through the real engine; exit 1 on any failure.
+  `examples/policy-tests.json` covers the default policy, including bypass tricks; CI runs it.
 - **Audit checkpoints**: `warden audit head` prints the newest id + hash per table;
   `warden audit verify --expect FILE` proves the log still contains them, catching a full
   rewrite or a cut-off end that the hash chain alone can't see.
