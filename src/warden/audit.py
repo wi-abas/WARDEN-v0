@@ -246,7 +246,9 @@ class SQLiteAuditLog:
         try:
             self.purge_older_than(self.retention_days)
         except Exception as exc:
-            logger.error("audit retention purge failed: %s", type(exc).__name__)
+            logger.error("audit retention purge failed, will retry: %s", type(exc).__name__)
+            with self._purge_lock:
+                self._last_purge = None  # retry on the next write, not in 24 hours
 
     def purge_older_than(self, days: int) -> int:
         """Delete entries older than `days` from both tables. Returns how many.

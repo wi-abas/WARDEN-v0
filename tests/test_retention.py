@@ -110,3 +110,20 @@ def test_bad_retention_is_rejected(tmp_path: Path, bad: object) -> None:
 
 def test_default_retention_is_90_days(tmp_path: Path) -> None:
     assert SQLiteAuditLog(tmp_path / "a.db").retention_days == 90
+
+
+def test_failed_purge_is_retried_on_the_next_write(tmp_path: Path) -> None:
+    attempts: list[int] = []
+
+    class FailsOnce(SQLiteAuditLog):
+        def purge_older_than(self, days: int) -> int:
+            attempts.append(days)
+            if len(attempts) == 1:
+                raise RuntimeError("database busy")
+            return super().purge_older_than(days)
+
+    log = FailsOnce(tmp_path / "a.db", retention_days=90, clock=Clock())  # attempt 1 fails
+    log.record(entry(START))  # attempt 2 right away, not a day later
+    assert len(attempts) == 2
+    log.record(entry(START))  # succeeded: no more attempts today
+    assert len(attempts) == 2
