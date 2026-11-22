@@ -8,6 +8,7 @@ Every model here is strict:
 
 from enum import StrEnum
 from math import isfinite
+from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
@@ -115,6 +116,30 @@ class Rule(BaseModel):
     tool: str = Field(pattern=TOOL_NAME_PATTERN)
     effect: Decision
     when: tuple[Condition, ...] = Field(default=(), max_length=MAX_CONDITIONS)
+
+
+class ToolSpec(BaseModel):
+    """Which arguments a tool may receive. Anything else is denied.
+
+    Closes the "new argument nobody checks" gap: with a spec, an agent can't slip
+    in e.g. "bcc" that no rule looks at.
+    """
+
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+
+    arguments: tuple[Annotated[str, Field(pattern=ARG_NAME_PATTERN)], ...] = Field(
+        max_length=MAX_ARGUMENTS
+    )
+    required: tuple[Annotated[str, Field(pattern=ARG_NAME_PATTERN)], ...] = ()
+
+    @model_validator(mode="after")
+    def names_make_sense(self) -> "ToolSpec":
+        if len(set(self.arguments)) != len(self.arguments):
+            raise ValueError("'arguments' lists a name twice")
+        unknown = sorted(set(self.required) - set(self.arguments))
+        if unknown:
+            raise ValueError(f"'required' names not in 'arguments': {', '.join(unknown)}")
+        return self
 
 
 class EvaluationResult(BaseModel):

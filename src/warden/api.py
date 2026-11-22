@@ -39,7 +39,7 @@ from warden.approvals import Approval, ApprovalStore, DecideError, Status, apply
 from warden.audit import AuditEntry, AuditEvent, AuditLog, EventKind, SQLiteAuditLog
 from warden.engine import evaluate
 from warden.models import APPROVAL_ID_PATTERN, ActionRequest, Decision, EvaluationResult
-from warden.policy import DEFAULT_POLICY_PATH, load_rules
+from warden.policy import DEFAULT_POLICY_PATH, load_policy
 
 logger = logging.getLogger(__name__)
 
@@ -102,7 +102,8 @@ def create_app(
     admin_key: str | None = None,
 ) -> FastAPI:
     """Build the app. Rules, audit log, approvals and admin key are set up once, here."""
-    rules = load_rules(policy_path)
+    policy = load_policy(policy_path)
+    rules = policy.rules
     if audit_log is None:
         audit_log = SQLiteAuditLog(audit.DEFAULT_AUDIT_PATH)
     if approvals is None:
@@ -174,7 +175,7 @@ def create_app(
 
     @app.post("/v1/evaluate", response_model=EvaluationResult)
     def evaluate_action(action: ActionRequest) -> EvaluationResult | JSONResponse:
-        result = apply_approval(action, evaluate(action, rules), approvals)
+        result = apply_approval(action, evaluate(action, rules, policy.tools), approvals)
         try:
             audit_log.record(AuditEntry.from_decision(action, result))
         except Exception as exc:

@@ -2,6 +2,8 @@
 
 Security properties (each one is tested in tests/test_engine.py):
 - Default deny: if no rule matches the tool, the answer is DENY.
+- Tool specs: if the policy lists a tool's arguments, any other argument, or a
+  missing required one, is denied before any rule runs.
 - Argument conditions ("when"): a rule matches only if ALL its conditions hold.
 - Never a looser answer because something is missing or odd:
   - A MISSING argument counts as "condition holds" for deny / require_approval
@@ -18,7 +20,7 @@ Security properties (each one is tested in tests/test_engine.py):
 """
 
 import logging
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 
 from pydantic import JsonValue
 
@@ -31,6 +33,7 @@ from warden.models import (
     EvaluationResult,
     Op,
     Rule,
+    ToolSpec,
     is_number,
 )
 
@@ -118,18 +121,40 @@ def _condition_result(rule: Rule, condition: Condition, request: ActionRequest) 
         return rule.effect is not Decision.ALLOW
 
 
-def evaluate(request: ActionRequest, rules: Iterable[Rule]) -> EvaluationResult:
-    """Return Warden's decision for `request` under `rules`. Never raises."""
+def evaluate(
+    request: ActionRequest,
+    rules: Iterable[Rule],
+    tools: Mapping[str, ToolSpec] | None = None,
+) -> EvaluationResult:
+    """Return Warden's decision for `request` under `rules` and tool specs. Never raises."""
     try:
-        return _evaluate(request, rules)
+        return _evaluate(request, rules, tools or {})
     except Exception as exc:
         # Log only the error type: the message could contain tool arguments (secrets).
         logger.error("policy evaluation failed: %s", type(exc).__name__)
         return EvaluationResult(decision=Decision.DENY, reason="evaluation error")
 
 
-def _evaluate(request: ActionRequest, rules: Iterable[Rule]) -> EvaluationResult:
+def _spec_problem(request: ActionRequest, spec: ToolSpec) -> str | None:
+    if any(name not in spec.arguments for name in request.arguments):
+        # The name comes from the agent (untrusted, could hold a secret): don't echo it.
+        return "unexpected argument"
+    for name in spec.required:  # names from the policy file: safe to show
+        if name not in request.arguments:
+            return f"missing required argument '{name}'"
+    return None
+
+
+def _evaluate(
+    request: ActionRequest, rules: Iterable[Rule], tools: Mapping[str, ToolSpec]
+) -> EvaluationResult:
     action_hash = fingerprint(request)
+
+    spec = tools.get(request.tool)
+    if spec is not None:
+        problem = _spec_problem(request, spec)
+        if problem is not None:
+            return EvaluationResult(decision=Decision.DENY, reason=problem, action_hash=action_hash)
     try:
         matches = [rule for rule in rules if _rule_matches(rule, request)]
     except _UncheckableArgument as exc:

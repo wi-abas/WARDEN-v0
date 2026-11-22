@@ -118,6 +118,25 @@ A rule can add `when` conditions. It then matches only if **all** of them hold:
 - `true` is never treated as the number `1`.
 - Conditions only look at top-level arguments. No regex, no code.
 
+### Tool argument lists
+
+Optionally, list the arguments each tool may receive. Anything else is denied before any
+rule runs, so an agent can't slip in an argument no rule checks (like `bcc`):
+
+```json
+{
+  "tools": {
+    "send_email": { "arguments": ["to", "subject", "body"], "required": ["to"] }
+  },
+  "rules": [ ... ]
+}
+```
+
+- An argument not in `arguments` → deny (`"unexpected argument"`; the name isn't echoed,
+  since it comes from the agent).
+- A name in `required` that's missing → deny (`"missing required argument 'to'"`).
+- Tools without an entry work as before. Names only for now, not types.
+
 ## Audit log
 
 Every decision is saved to `warden-audit.db` (SQLite, in the folder you start Warden from):
@@ -170,8 +189,8 @@ Each of these is covered by tests in `tests/`.
 - **Warden is a checkpoint, not a sandbox.** An agent can skip asking. Enforcement depends
   on the agent runtime calling Warden and obeying the answer.
 - **Conditions check top-level arguments only**, not nested values.
-- **Deny-list rules are weaker than allow-lists.** A new or renamed argument the rules
-  don't mention isn't checked, so prefer "allow only when..." over "deny when...".
+- **Without a tool argument list, arguments no rule mentions aren't checked.** Add a
+  `tools` entry for every tool with "deny when..." rules.
 - **The admin key is one shared secret, not real user accounts.** Any program that can
   read your terminal output can approve. There's no record of *who* approved.
 - **Approvals are lost on restart** (in memory only).
