@@ -91,4 +91,5 @@ users, but programs running as the **same** user, including an agent, can usuall
 them (for example `/proc/<pid>/environ` on Linux). **Run agents as a different OS user than
 Warden** if they shouldn't be able to approve their own actions.
 
-An invalid setting stops Warden with a clear message instead of falling back to a default. The host is always `127.0.0.1`.
+An invalid setting, or a policy file that is invalid or has no rules, stops Warden with a
+clear message instead of starting a server that would deny everything. The host is always `127.0.0.1`.

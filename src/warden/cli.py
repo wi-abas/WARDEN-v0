@@ -67,6 +67,14 @@ def main(argv: list[str] | None = None) -> int:
         print(f"warden: {exc}", file=sys.stderr)
         return 2
 
+    # A broken or empty policy would make the server deny everything. That's safe, but
+    # almost certainly a mistake: refuse to start and say why instead.
+    report = check_policy(settings.policy)
+    if report.errors or report.rules == 0:
+        print(format_report(settings.policy, report), file=sys.stderr)
+        print("warden: not starting: fix the policy file first", file=sys.stderr)
+        return 2
+
     from warden.api import main as serve  # imported here: `check` never loads the server
 
     serve(settings)
