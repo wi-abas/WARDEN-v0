@@ -76,6 +76,8 @@ TARGETS: dict[str, list[str]] = {
         "test_locked_database.py",
         "test_agent_tokens.py",
         "test_rate_limits.py",
+        "test_api_edges.py",
+        "test_main_wiring.py",
     ],
     "audit": [
         "test_audit.py",
@@ -88,7 +90,11 @@ TARGETS: dict[str, list[str]] = {
         "test_audit_edges.py",
     ],
     "audit_checkpoint": ["test_audit_checkpoint.py", "test_audit_checkpoint_edges.py"],
-    "mcp_proxy": ["test_mcp_proxy.py", "test_mcp_proxy_hardening.py"],
+    "mcp_proxy": [
+        "test_mcp_proxy.py",
+        "test_mcp_proxy_hardening.py",
+        "test_mcp_proxy_edges.py",
+    ],
     "approvals_cli": [
         "test_approvals_cli.py",
         "test_approvals_cli_edges.py",
@@ -139,16 +145,24 @@ def _spots(tree: ast.AST) -> Iterator[tuple[ast.AST, str]]:
             yield node, f"{node.value} -> {node.value + 1}"
 
 
-# A source line ending in this comment is skipped: every mutant on it was reviewed and
-# can't (or needn't) be caught, e.g. a SQLite timeout or a case handled earlier. The
-# comment must say why, so the reason is visible next to the code in every review.
+# A source line with this comment is skipped: every mutant on it was reviewed and can't
+# (or needn't) be caught, e.g. a SQLite timeout or a case handled earlier. The comment
+# must say why, so the reason is visible next to the code in every review. On a line of
+# its own, it covers the line below (for lines too long for a comment at the end).
 KNOWN_SURVIVOR = "# mutation-ok:"
+
+
+def _known_lines(source: str) -> set[int]:
+    known = set()
+    for number, text in enumerate(source.splitlines(), start=1):
+        if KNOWN_SURVIVOR in text:
+            known.add(number + 1 if text.strip().startswith(KNOWN_SURVIVOR) else number)
+    return known
 
 
 def list_mutants(source: str) -> list[Mutant]:
     tree = ast.parse(source)
-    lines = source.splitlines()
-    known = {n for n, text in enumerate(lines, start=1) if KNOWN_SURVIVOR in text}
+    known = _known_lines(source)
     return [
         Mutant(i, line, what)
         for i, (node, what) in enumerate(_spots(tree))

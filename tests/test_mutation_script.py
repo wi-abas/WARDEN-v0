@@ -56,6 +56,8 @@ def test_lines_marked_as_known_survivors_are_skipped() -> None:
         "drop `not`",
         "True -> False",
     }
+    above = SOURCE.replace("    return a < 3", "    # mutation-ok: example\n    return a < 3")
+    assert {x.description for x in m.list_mutants(above)} == {x.description for x in found}
     # Indexes still point at the same spots as without the marker.
     unmarked = {x.index: x.description for x in m.list_mutants(SOURCE)}
     assert all(unmarked[x.index] == x.description for x in found)
