@@ -145,12 +145,18 @@ def _is_clean_url(text: str) -> bool:
     host, slash, path = rest.partition("/")
     if not host or "@" in host or "%" in host:
         return False
-    # "evil.net." and "evil.net:" are the same site as "evil.net" but different text.
-    name, colon, port = host.rpartition(":") if not host.endswith("]") else (host, "", "")
-    if not colon:
-        name = host
-    if name.endswith(".") or (colon and not port.isdigit()):
-        return False
+    # "evil.net.", "evil.net:" and "evil.net::443" reach the same site as "evil.net"
+    # but don't match it as text. Allowed: name, name:port, [ipv6], [ipv6]:port.
+    if host.startswith("["):
+        name, bracket, after = host[1:].partition("]")
+        if not bracket or not name or (after and not (after[0] == ":" and after[1:].isdigit())):
+            return False
+    else:
+        name, colon, port = host.partition(":")
+        if colon and not port.isdigit():
+            return False
+        if name.endswith("."):
+            return False
     if _ENCODED_SEPARATORS.search(path):
         return False  # "/public/%2e%2e/admin" escapes "/public/" once decoded
     # Ordinary escapes like %20 are normal in URL paths; check the rest for //, /./, /../

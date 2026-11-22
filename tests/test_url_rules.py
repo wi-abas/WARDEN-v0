@@ -94,6 +94,7 @@ def test_other_hosts_still_allowed_by_the_deny_list() -> None:
         "https://evil.net:/x",
         "https://evil.net::/x",
         "https://evil.net:./x",
+        "https://evil.net::443/x",
         "https://EVIL.NET./x",
     ],
 )
