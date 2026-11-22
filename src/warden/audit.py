@@ -15,7 +15,9 @@ touching the engine or the API.
 """
 
 import logging
+import os
 import sqlite3
+import stat
 import threading
 from collections.abc import Callable
 from contextlib import closing
@@ -180,6 +182,21 @@ _EVENT_COLUMNS = ", ".join(_EVENT_FIELDS)
 _COLUMNS = "timestamp, agent_id, tool, decision, reason, matched_rule, action_hash, approval_id"
 
 
+def _make_private(path: Path) -> None:
+    """Create the database file readable by this user only (0600), or tighten it.
+
+    It holds agent ids, tools, decisions and pending approval ids: not for other
+    users on the machine. (SQLite gives its journal files the same permissions.)
+    """
+    if not path.exists():
+        os.close(os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
+        return
+    mode = stat.S_IMODE(path.stat().st_mode)
+    if mode & 0o077:
+        path.chmod(0o600)
+        logger.warning("audit log %s was readable by others; restricted it to you (600)", path)
+
+
 class SQLiteAuditLog:
     """Audit log stored in a local SQLite file (standard library, no extra dependency).
 
@@ -204,6 +221,7 @@ class SQLiteAuditLog:
         self._clock = clock
         self._purge_lock = threading.Lock()
         self._last_purge: datetime | None = None
+        _make_private(path)
         with closing(self._connect()) as conn, conn:
             conn.executescript(_SCHEMA)
             existing = {row[1] for row in conn.execute("PRAGMA table_info(decisions)")}
