@@ -162,3 +162,13 @@ def test_w010_not_raised_for_deny_rules(tmp_path: Path) -> None:
     cond = {"arg": "to", "op": "missing"}
     policy = {"tools": {"t": {"arguments": ["to"]}}, "rules": [r("a", "t", "deny", cond)]}
     assert codes(tmp_path, policy) == []
+
+
+def test_w011_url_prefix_without_slash_after_host(tmp_path: Path) -> None:
+    def policy(value: str) -> dict[str, Any]:
+        cond = {"arg": "url", "op": "startswith", "value": value}
+        return {"tools": {"t": {"arguments": ["url"]}}, "rules": [r("a", "t", "allow", cond)]}
+
+    assert codes(tmp_path, policy("https://api.example.com")) == ["W011"]
+    assert codes(tmp_path, policy("https://api.example.com/")) == []
+    assert codes(tmp_path, policy("https://api.example.com/v1")) == []

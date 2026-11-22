@@ -17,6 +17,8 @@ Warnings: the policy loads, but probably doesn't do what you meant:
         a rule for "/etc/". Add "ignore_case": true.
 - W010  an "allow" rule uses neq or missing, i.e. "allow everything except X":
         a deny-list in disguise. Every value nobody thought of is allowed.
+- W011  a URL prefix without "/" after the host: "https://api.example.com"
+        also matches "https://api.example.com.evil.net/...".
 - W008  an email-domain check ("...@example.com") is case-sensitive, so
         "x@EXAMPLE.com" slips past it. Add "ignore_case": true.
 
@@ -101,6 +103,17 @@ def _warnings(policy: Policy) -> list[str]:
                 out.append(
                     f'W005: rule "{rule.id}" checks startswith "{c.value}" without a '
                     f'trailing "/", so it also matches e.g. "{c.value}base/...".'
+                )
+            if (
+                c.op is Op.STARTSWITH
+                and isinstance(c.value, str)
+                and "://" in c.value
+                and "/" not in c.value.split("://", 1)[1]
+            ):
+                out.append(
+                    f'W011: rule "{rule.id}" checks startswith "{c.value}" without "/" after '
+                    f'the host, so it also matches e.g. "{c.value}.evil.net/...". '
+                    f'Use "{c.value}/".'
                 )
             texts = c.value if isinstance(c.value, list) else [c.value]
             if (
