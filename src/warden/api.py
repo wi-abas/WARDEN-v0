@@ -237,14 +237,26 @@ def _is_deceptive_char(ch: str) -> bool:
     return unicodedata.category(ch) in {"Cf", "Cc"} or unicodedata.normalize("NFKC", ch) != ch
 
 
+def _needs_escape(text: str, index: int) -> bool:
+    """Deceptive characters, and a real backslash followed by "u": shown raw, the text
+    "\\u200b" would look exactly like an escaped zero-width space, so two different
+    keys could display the same and one would hide the other."""
+    ch = text[index]
+    return _is_deceptive_char(ch) or (ch == "\\" and text[index + 1 : index + 2] == "u")
+
+
 def _display_safe(value: JsonValue, warnings: list[str]) -> JsonValue:
     """A copy of `value` with deceptive characters written as visible escapes (\\u202e),
-    so an approver can't be shown something other than the real action."""
+    so an approver can't be shown something other than the real action. One-to-one:
+    two different texts never display the same."""
     if isinstance(value, str):
-        if not any(_is_deceptive_char(ch) for ch in value):
+        escape = [_needs_escape(value, i) for i in range(len(value))]
+        if not any(escape):
             return value
         warnings.append("contains hidden or look-alike characters (shown as \\uXXXX)")
-        return "".join(f"\\u{ord(ch):04x}" if _is_deceptive_char(ch) else ch for ch in value)
+        return "".join(
+            f"\\u{ord(ch):04x}" if hit else ch for ch, hit in zip(value, escape, strict=True)
+        )
     if isinstance(value, list):
         return [_display_safe(item, warnings) for item in value]
     if isinstance(value, dict):
