@@ -7,6 +7,7 @@ Every model here is strict:
 """
 
 import re
+import unicodedata
 from enum import StrEnum
 from math import isfinite
 from typing import Annotated, TypeGuard
@@ -107,6 +108,23 @@ def is_scalar(value: object) -> bool:
     return isinstance(value, str | bool) or is_number(value)
 
 
+def _check_policy_text(text: str, op: "Op") -> None:
+    """Catch policy typos that would make a rule silently never match.
+
+    Requests containing invisible or look-alike characters, or paths/URLs/emails with
+    spaces at the edges, are refused, so a rule VALUE containing them could never match
+    anything: a deny rule with such a typo would protect nothing, without any warning.
+    """
+    if any(unicodedata.category(ch) in {"Cf", "Cc"} for ch in text):
+        raise ValueError("value contains an invisible or control character (typo?)")
+    if unicodedata.normalize("NFKC", text) != unicodedata.normalize("NFC", text):
+        raise ValueError("value contains a look-alike character such as a full-width letter")
+    if text != text.strip():
+        shaped = "/" in text or "@" in text
+        if op in {Op.EQ, Op.NEQ, Op.IN} or shaped:
+            raise ValueError("value starts or ends with a space (typo?)")
+
+
 class Condition(BaseModel):
     """One check on one argument, e.g. {"arg": "amount", "op": "gt", "value": 500}."""
 
@@ -154,6 +172,10 @@ class Condition(BaseModel):
                 )
         if self.op in {Op.EQ, Op.NEQ} and not is_scalar(self.value):
             raise ValueError(f"'{self.op}' needs a text, number or true/false value")
+        texts = self.value if isinstance(self.value, list) else [self.value]
+        for text in texts:
+            if isinstance(text, str):
+                _check_policy_text(text, self.op)
         return self
 
 
