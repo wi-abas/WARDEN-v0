@@ -109,10 +109,15 @@ def _decide(
     deadline = time.monotonic() + wait_for_approval
     # The first re-ask is immediate: a human may already have approved this exact action.
     answer = client.evaluate(tool, arguments, approval_id)
-    while answer.decision is Decision.REQUIRE_APPROVAL and time.monotonic() < deadline:
-        sleep(poll_seconds)
+    while _still_waiting(answer) and time.monotonic() < deadline:
+        # Rate limited while polling: back off, keep waiting (it's still not an allow).
+        sleep(max(poll_seconds, answer.retry_after or 0.0))
         answer = client.evaluate(tool, arguments, approval_id)
     return answer
+
+
+def _still_waiting(answer: Answer) -> bool:
+    return answer.decision is Decision.REQUIRE_APPROVAL or answer.retry_after is not None
 
 
 def run_guarded[R](

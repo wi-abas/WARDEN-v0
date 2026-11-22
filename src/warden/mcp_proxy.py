@@ -381,10 +381,11 @@ class McpProxy:
                 "Retry the same call after approval.",
             )
         deadline = time.monotonic() + settings.timeout_seconds
-        while answer.decision is Decision.REQUIRE_APPROVAL:
+        # Rate limited (429) while polling: back off and keep waiting, never allow.
+        while answer.decision is Decision.REQUIRE_APPROVAL or answer.retry_after is not None:
             if time.monotonic() >= deadline:
                 return Answer(Decision.DENY, "timed out waiting for a human to approve")
-            await asyncio.sleep(settings.poll_seconds)
+            await asyncio.sleep(max(settings.poll_seconds, answer.retry_after or 0.0))
             answer = await self._ask(tool, arguments, approval_id)
         return answer
 

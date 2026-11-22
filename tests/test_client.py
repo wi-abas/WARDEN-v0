@@ -98,9 +98,12 @@ def test_parse_answer_drops_bad_ids() -> None:
 class _Fake(http.server.BaseHTTPRequestHandler):
     status = 200
     body = b""
+    extra: dict[str, str] = {}
 
     def do_POST(self) -> None:  # noqa: N802 (http.server's naming)
         self.send_response(self.status)
+        for name, value in self.extra.items():
+            self.send_header(name, value)
         self.send_header("content-length", str(len(self.body)))
         self.end_headers()
         self.wfile.write(self.body)
@@ -144,3 +147,24 @@ def test_garbage_answer_is_deny(fake: tuple[type[_Fake], str]) -> None:
     handler, url = fake
     handler.body = b"not json"
     assert WardenClient(url).evaluate("read_file", {}).decision is Decision.DENY
+
+
+@pytest.mark.parametrize(
+    ("header", "expected"),
+    [
+        ({"Retry-After": "7"}, 7.0),
+        ({"Retry-After": "9999"}, 60.0),
+        ({"Retry-After": "x"}, 1.0),
+        ({}, 1.0),
+        ({"Retry-After": "0"}, 1.0),
+    ],
+)
+def test_rate_limited_answer_carries_retry_after(
+    fake: tuple[type[_Fake], str], header: dict[str, str], expected: float
+) -> None:
+    handler, url = fake
+    handler.status, handler.extra = 429, header
+    handler.body = b'{"decision": "deny", "reason": "rate limit exceeded"}'
+    answer = WardenClient(url).evaluate("read_file", {})
+    assert answer.decision is Decision.DENY and not answer.allowed
+    assert answer.retry_after == expected

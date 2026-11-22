@@ -40,6 +40,9 @@ class Answer:
     reason: str
     approval_id: str | None = None
     action_hash: str | None = None
+    # Set when Warden said "too many requests" (HTTP 429): seconds to wait before
+    # asking again. Always a deny; only polling loops use it to keep waiting.
+    retry_after: float | None = None
 
     @property
     def allowed(self) -> bool:
@@ -150,10 +153,19 @@ class WardenClient:
                 answer = parse_answer(_json_or_none(error.read(MAX_RESPONSE_BYTES + 1)))
             if answer.allowed:  # an error status is never an allow
                 return _deny(f"Warden returned HTTP {error.code}")
+            if error.code == 429:
+                return Answer(Decision.DENY, "rate limit exceeded", retry_after=_retry_after(error))
             return answer if answer.reason != "no reason given" else _deny(f"HTTP {error.code}")
         if len(raw) > MAX_RESPONSE_BYTES:
             return _deny("answer from Warden too large")
         return parse_answer(_json_or_none(raw))
+
+
+def _retry_after(error: urllib.error.HTTPError) -> float:
+    """Retry-After in seconds, kept between 1 and 60 (garbage or missing: 1)."""
+    raw = (error.headers.get("Retry-After") or "").strip()
+    seconds = int(raw) if raw.isascii() and raw.isdigit() and len(raw) < 6 else 1
+    return float(min(max(seconds, 1), 60))
 
 
 def _json_or_none(raw: bytes) -> Any:

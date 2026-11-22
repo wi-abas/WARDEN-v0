@@ -780,3 +780,13 @@ def test_unchecked_fields_in_tool_call_params_are_refused(tmp_path: Path) -> Non
     session, _ = run_session(make_config(tmp_path), warden, script)
     assert len(calls_seen(session)) == 1
     assert warden.asked == [("echo", {"a": 1}, None)]
+
+
+def test_rate_limit_while_waiting_keeps_waiting(tmp_path: Path) -> None:
+    limited = Answer(Decision.DENY, "rate limit exceeded", retry_after=0.01)
+    warden = FakeWarden({"echo": [pending(), limited, limited, ALLOW]})
+
+    async def script(s: Session) -> None:
+        assert echoed(await s.roundtrip(call("echo", {})))["name"] == "echo"
+
+    run_session(make_config(tmp_path), warden, script)

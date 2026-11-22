@@ -401,3 +401,37 @@ def test_end_to_end_waiting_for_a_human(real: tuple[WardenClient, TestClient]) -
 
     with pytest.raises(NotAllowed):
         delete_file("/a")
+
+
+def rate_limited() -> Answer:
+    return Answer(Decision.DENY, "rate limit exceeded", retry_after=0.01)
+
+
+def test_rate_limit_while_waiting_keeps_waiting() -> None:
+    client = FakeClient(pending(), rate_limited(), rate_limited(), Answer(Decision.ALLOW, "ok"))
+    ran = []
+
+    @guard(client=client, wait_for_approval=5, poll_seconds=0.01)
+    def send_email(to: str) -> None:
+        ran.append(to)
+
+    send_email("x@y.z")
+    assert ran == ["x@y.z"]
+
+
+def test_rate_limited_until_the_deadline_is_not_allowed() -> None:
+    @guard(client=FakeClient(pending(), rate_limited()), wait_for_approval=0.1, poll_seconds=0.01)
+    def send_email(to: str) -> None:
+        raise AssertionError("must not run")
+
+    with pytest.raises(NotAllowed, match="rate limit"):
+        send_email("x@y.z")
+
+
+def test_rate_limited_first_question_is_not_allowed() -> None:
+    @guard(client=FakeClient(rate_limited()), wait_for_approval=5, poll_seconds=0.01)
+    def send_email(to: str) -> None:
+        raise AssertionError("must not run")
+
+    with pytest.raises(NotAllowed, match="rate limit"):
+        send_email("x@y.z")
