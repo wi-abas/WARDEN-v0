@@ -3,9 +3,14 @@
 Security properties (each one is tested in tests/test_engine.py):
 - Default deny: if no rule matches the tool, the answer is DENY.
 - Argument conditions ("when"): a rule matches only if ALL its conditions hold.
-  A missing argument makes a condition false. An argument that can't be checked
-  (wrong type, or a ".." path for startswith) denies the whole request, so a
-  "deny" rule can't be dodged by sending "50000" as text instead of a number.
+- Never a looser answer because something is missing or odd:
+  - A MISSING argument counts as "condition holds" for deny / require_approval
+    rules (they apply) and as "doesn't hold" for allow rules (they don't).
+    So "deny when recipient endswith evil.com" can't be dodged by leaving
+    recipient out. Use the `exists` / `missing` ops to say it explicitly.
+  - An argument that can't be checked (wrong type, or a ".." path for
+    startswith) denies the whole request, so a "deny" rule can't be dodged
+    by sending "50000" as text instead of a number.
 - Most restrictive wins: DENY beats REQUIRE_APPROVAL, which beats ALLOW.
 - Fail closed: any unexpected error gives DENY, never ALLOW.
 - Deterministic: no network, no files, no randomness, no LLM. Rule order does not matter.
@@ -40,6 +45,10 @@ _RESTRICTIVENESS = {
 }
 
 
+class _MissingArgument(Exception):
+    """The argument a condition looks at is absent from the request."""
+
+
 class _UncheckableArgument(Exception):
     """An argument exists but can't be compared safely (wrong type, "..", ...)."""
 
@@ -54,8 +63,13 @@ def _comparable(a: JsonValue, b: JsonValue) -> bool:
 
 
 def _holds(condition: Condition, arguments: dict[str, JsonValue]) -> bool:
-    if condition.arg not in arguments:
-        return False
+    present = condition.arg in arguments
+    if condition.op is Op.EXISTS:
+        return present
+    if condition.op is Op.MISSING:
+        return not present
+    if not present:
+        raise _MissingArgument
     actual = arguments[condition.arg]
     expected = condition.value
     op = condition.op
@@ -92,8 +106,16 @@ def _rule_matches(rule: Rule, request: ActionRequest) -> bool:
         return False
     # Check every condition (no short-circuit), so an uncheckable argument is always
     # caught, whatever order the conditions are written in.
-    results = [_holds(condition, request.arguments) for condition in rule.when]
+    results = [_condition_result(rule, condition, request) for condition in rule.when]
     return all(results)
+
+
+def _condition_result(rule: Rule, condition: Condition, request: ActionRequest) -> bool:
+    try:
+        return _holds(condition, request.arguments)
+    except _MissingArgument:
+        # Fail closed: restrictive rules still apply, allow rules don't.
+        return rule.effect is not Decision.ALLOW
 
 
 def evaluate(request: ActionRequest, rules: Iterable[Rule]) -> EvaluationResult:

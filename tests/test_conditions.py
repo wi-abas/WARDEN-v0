@@ -49,10 +49,11 @@ def test_invoice_amounts(amount: float, expected: Decision) -> None:
     assert evaluate(request(amount=amount), INVOICE_RULES).decision == expected
 
 
-def test_missing_argument_matches_nothing_so_deny() -> None:
+def test_missing_amount_falls_to_the_restrictive_rule() -> None:
+    # "big-invoice" (require_approval) applies; "small-invoice" (allow) doesn't.
     result = evaluate(request(recipient="x@y.z"), INVOICE_RULES)
-    assert result.decision == Decision.DENY
-    assert result.reason == "no matching rule"
+    assert result.decision == Decision.REQUIRE_APPROVAL
+    assert result.matched_rule == "big-invoice"
 
 
 # --- Each op -------------------------------------------------------------------------
@@ -171,6 +172,81 @@ def test_argument_value_never_appears_in_the_reason() -> None:
     canary = "sk-live-FAKE-123"  # fake secret used to detect leaks
     result = evaluate(request(amount=canary), INVOICE_RULES)
     assert canary not in result.model_dump_json()
+
+
+# --- Missing arguments never loosen the answer --------------------------------------
+
+BLOCK_EVIL = [
+    rule("allow-email", "allow", tool="send_email"),
+    rule("block-evil", "deny", cond("recipient", "startswith", "evil"), tool="send_email"),
+]
+
+
+def test_leaving_out_the_argument_cannot_dodge_a_deny_rule() -> None:
+    result = evaluate(request("send_email", subject="hi"), BLOCK_EVIL)
+    assert result.decision == Decision.DENY
+    assert result.matched_rule == "block-evil"
+
+
+def test_deny_rule_still_lets_good_values_through() -> None:
+    assert evaluate(request("send_email", recipient="bob"), BLOCK_EVIL).decision == (Decision.ALLOW)
+
+
+@pytest.mark.parametrize("op", ["eq", "neq", "gt", "gte", "lt", "lte", "in", "startswith"])
+def test_missing_argument_applies_restrictive_rules_for_every_op(op: str) -> None:
+    value = {"in": ["x"], "startswith": "x", "eq": "x", "neq": "x"}.get(op, 5)
+    for effect in ["deny", "require_approval"]:
+        rules = [rule("r", effect, cond("arg", op, value))]
+        assert evaluate(request(other=1), rules).decision == effect
+
+
+@pytest.mark.parametrize("op", ["eq", "neq", "gt", "in", "startswith"])
+def test_missing_argument_never_matches_an_allow_rule(op: str) -> None:
+    value = {"in": ["x"], "startswith": "x", "eq": "x", "neq": "x"}.get(op, 5)
+    rules = [rule("r", "allow", cond("arg", op, value))]
+    assert evaluate(request(other=1), rules).decision == Decision.DENY
+
+
+def test_other_false_condition_still_stops_the_rule() -> None:
+    # Missing counts as "holds" for a deny rule, but ALL conditions must hold.
+    rules = [
+        rule("allow-all", "allow"),
+        rule("block", "deny", cond("recipient", "startswith", "evil"), cond("amount", "gt", 100)),
+    ]
+    assert evaluate(request(amount=5), rules).decision == Decision.ALLOW
+    assert evaluate(request(amount=500), rules).decision == Decision.DENY
+
+
+# --- exists / missing ------------------------------------------------------------------
+
+
+def test_missing_op() -> None:
+    rules = [
+        rule("allow-email", "allow", tool="send_email"),
+        rule("need-recipient", "deny", cond("recipient", "missing", None), tool="send_email"),
+    ]
+    assert evaluate(request("send_email", subject="x"), rules).decision == Decision.DENY
+    assert evaluate(request("send_email", recipient="a"), rules).decision == Decision.ALLOW
+
+
+def test_exists_op() -> None:
+    rules = [rule("allow-if-ticket", "allow", cond("ticket", "exists", None))]
+    assert evaluate(request(ticket="T-1"), rules).decision == Decision.ALLOW
+    assert evaluate(request(ticket=None), rules).decision == Decision.ALLOW  # present, even if null
+    assert evaluate(request(other=1), rules).decision == Decision.DENY
+
+
+def test_presence_ops_load_without_a_value() -> None:
+    loaded = Rule.model_validate_json(
+        '{"id":"r","tool":"t","effect":"deny","when":[{"arg":"a","op":"missing"}]}'
+    )
+    assert loaded.when[0].value is None
+
+
+@pytest.mark.parametrize("op", ["exists", "missing"])
+def test_presence_ops_reject_a_value(op: str) -> None:
+    with pytest.raises(ValidationError):
+        rule("r", "deny", cond("a", op, "x"))
 
 
 # --- Bad conditions in the policy file are rejected at load time ---------------------

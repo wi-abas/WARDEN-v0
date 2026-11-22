@@ -107,8 +107,12 @@ A rule can add `when` conditions. It then matches only if **all** of them hold:
 | `gt`, `gte`, `lt`, `lte` | number comparison | number |
 | `in` | is one of | list of 1–100 text/number values |
 | `startswith` | text starts with | non-empty text |
+| `exists`, `missing` | argument is present / absent | *(no value)* |
 
-- A **missing** argument makes the condition false.
+- **Warden never gives a looser answer because an argument is missing.** On a `deny` or
+  `require_approval` rule a missing argument counts as matching (the rule applies); on an
+  `allow` rule it doesn't. So `deny send_email when recipient startswith "evil"` can't be
+  dodged by leaving `recipient` out. Use `exists` / `missing` to say exactly what you mean.
 - An argument of the **wrong type** (e.g. `"50000"` as text for `gt`), or a value containing
   `..` for `startswith`, **denies the whole request**. This stops a `deny` rule being dodged.
 - `true` is never treated as the number `1`.
@@ -166,8 +170,8 @@ Each of these is covered by tests in `tests/`.
 - **Warden is a checkpoint, not a sandbox.** An agent can skip asking. Enforcement depends
   on the agent runtime calling Warden and obeying the answer.
 - **Conditions check top-level arguments only**, not nested values.
-- **Deny-list rules are weaker than allow-lists.** A missing argument makes a condition
-  false, so prefer "allow only when..." over "deny when...".
+- **Deny-list rules are weaker than allow-lists.** A new or renamed argument the rules
+  don't mention isn't checked, so prefer "allow only when..." over "deny when...".
 - **The admin key is one shared secret, not real user accounts.** Any program that can
   read your terminal output can approve. There's no record of *who* approved.
 - **Approvals are lost on restart** (in memory only).

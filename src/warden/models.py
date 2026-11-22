@@ -58,9 +58,12 @@ class Op(StrEnum):
     LTE = "lte"
     IN = "in"
     STARTSWITH = "startswith"
+    EXISTS = "exists"  # the argument is present (takes no value)
+    MISSING = "missing"  # the argument is absent (takes no value)
 
 
 NUMBER_OPS = {Op.GT, Op.GTE, Op.LT, Op.LTE}
+PRESENCE_OPS = {Op.EXISTS, Op.MISSING}
 
 
 def is_number(value: object) -> bool:
@@ -82,11 +85,13 @@ class Condition(BaseModel):
 
     arg: str = Field(pattern=ARG_NAME_PATTERN)
     op: Op
-    value: JsonValue
+    value: JsonValue = None  # required for every op except exists / missing
 
     @model_validator(mode="after")
     def value_fits_op(self) -> "Condition":
         # Catch policy mistakes at load time, e.g. "gt" with a text value.
+        if self.op in PRESENCE_OPS and self.value is not None:
+            raise ValueError(f"'{self.op}' takes no value")
         if self.op in NUMBER_OPS and not is_number(self.value):
             raise ValueError(f"'{self.op}' needs a number value")
         if self.op is Op.STARTSWITH and not (isinstance(self.value, str) and self.value):
