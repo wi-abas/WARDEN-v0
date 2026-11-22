@@ -132,6 +132,7 @@ startup):
 export WARDEN_ADMIN_KEY=<key>
 uv run warden approvals list --group          # every pending action, in full
 uv run warden approvals approve ID1 ID2       # shows them again, then asks [y/N]
+uv run warden approvals list --agent A --tool T   # just one agent and tool (e.g. during a flood)
 ```
 
 Settings (`--policy`, `--port`, the admin key, ...): see [docs/api.md](https://github.com/wi-abas/agent-warden/blob/main/docs/api.md#settings).
@@ -205,6 +206,8 @@ Each of these is covered by tests in `tests/`.
   the same import name as the unrelated `warden` package on PyPI. Don't install both in one
   environment.
 - **The policy file is trusted.** Whoever can edit it controls every decision.
+- **The MCP proxy checks at most 64 tool calls at once.** Further calls are refused
+  ("too many calls in progress"), not queued; the agent has to retry them.
 
 ## Development
 
@@ -222,6 +225,7 @@ uv run mypy                    # type check (strict, incl. tests)
 | `src/warden/policy.py` | Loads and validates the policy file |
 | `src/warden/fingerprint.py` | Action fingerprints |
 | `src/warden/audit.py` | Audit log (SQLite) |
+| `src/warden/audit_checkpoint.py` | Audit checkpoints (`warden audit head`, `verify --expect`) |
 | `src/warden/approvals.py` | Human approvals (persisted state, no arguments on disk) |
 | `src/warden/agents.py` | Agent tokens |
 | `src/warden/limits.py` | Per-agent rate limits and approval quotas |
@@ -231,8 +235,10 @@ uv run mypy                    # type check (strict, incl. tests)
 | `src/warden/client.py` | Small HTTP client used by the SDK and the proxy |
 | `src/warden/sdk.py` | Python SDK (`@guard`) |
 | `src/warden/mcp_proxy.py` | MCP proxy (`warden proxy`) |
-| `src/warden/cli.py` | The `warden` command (`serve`, `check`, `init`, `schema`, `agent`, `audit`, `limits`, `approvals`, `proxy`) |
+| `src/warden/cli.py` | The `warden` command (`serve`, `check`, `test`, `init`, `schema`, `agent`, `audit`, `limits`, `approvals`, `proxy`) |
 | `src/warden/check.py` | Policy checks and warnings |
+| `src/warden/policy_tests.py` | Policy tests (`warden test`) |
+| `src/warden/starter_policy.json` | The policy `warden init` writes |
 | `src/warden/settings.py` | Server settings (flags and environment variables) |
 | `examples/demo.py` | The 30-second demo (also run as a test) |
 | `examples/agent.py` | An agent loop guarded by Warden (also run as a test) |
