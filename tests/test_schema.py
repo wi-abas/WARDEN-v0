@@ -13,8 +13,8 @@ ROOT = Path(__file__).parent.parent
 
 
 def test_committed_schema_matches_the_code() -> None:
-    # If this fails, run: uv run warden schema > policy.schema.json
-    assert (ROOT / "policy.schema.json").read_text() == policy_schema()
+    # If this fails, run: uv run warden schema > schemas/policy-v1.json
+    assert (ROOT / "schemas/policy-v1.json").read_text() == policy_schema()
 
 
 def test_schema_command_prints_it(capsys: pytest.CaptureFixture[str]) -> None:

@@ -1,5 +1,5 @@
 {
-  "$schema": "https://raw.githubusercontent.com/wi-abas/agent-warden/main/policy.schema.json",
+  "$schema": "https://raw.githubusercontent.com/wi-abas/agent-warden/main/schemas/policy-v1.json",
   "tools": {
     "read_file": { "arguments": ["path"], "required": ["path"] },
     "write_file": { "arguments": ["path", "content"], "required": ["path", "content"] },

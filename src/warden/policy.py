@@ -20,7 +20,7 @@ from warden.models import TOOL_NAME_PATTERN, Rule, ToolSpec
 logger = logging.getLogger(__name__)
 
 DEFAULT_POLICY_PATH = Path("policies/default.json")
-SCHEMA_URL = "https://raw.githubusercontent.com/wi-abas/agent-warden/main/policy.schema.json"
+SCHEMA_URL = "https://raw.githubusercontent.com/wi-abas/agent-warden/main/schemas/policy-v1.json"
 MAX_RULES = 1000
 
 

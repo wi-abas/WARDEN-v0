@@ -40,12 +40,16 @@ underline mistakes as you type (Warden itself ignores this line):
 
 ```json
 {
-  "$schema": "https://raw.githubusercontent.com/wi-abas/agent-warden/main/policy.schema.json",
+  "$schema": "https://raw.githubusercontent.com/wi-abas/agent-warden/main/schemas/policy-v1.json",
   "rules": [ ... ]
 }
 ```
 
 `warden init` adds it for you. `uv run warden schema` prints the schema.
+
+The `v1` in the link is the version of the policy **format**, not of Warden. It only gets
+backwards-compatible additions; a breaking change would get a new `policy-v2.json`, so
+existing links keep working.
 
 ## Argument rules
 
