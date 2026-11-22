@@ -1,0 +1,89 @@
+name: Release
+
+# Publishes to PyPI when a version tag (v1.2.3) is pushed. See docs/releasing.md.
+# - No stored PyPI token: PyPI "trusted publishing" (OIDC) proves the upload comes
+#   from this workflow in this repository.
+# - The build job has no publishing rights; only the publish job gets a short-lived
+#   OIDC token, and only inside the protected "pypi" environment.
+# - Provenance: GitHub attests where and how every file was built
+#   (`gh attestation verify <file> --repo wi-abas/agent-warden`).
+# - SBOM: a CycloneDX list of the exact locked dependencies, kept with the run.
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+
+permissions: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+        with:
+          python-version: "3.12"
+      - name: The tag must match the package version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version="$(uv version --short)"
+          if [ "v$version" != "$TAG" ]; then
+            echo "tag $TAG doesn't match version $version in pyproject.toml" >&2
+            exit 1
+          fi
+      - name: Install (exactly the locked versions)
+        run: uv sync --locked
+      - name: All checks
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+          uv run mypy
+          uv run pytest --cov
+          uv run warden check policies/default.json --strict
+          uv run warden test examples/policy-tests.json
+      - name: Build
+        run: uv build --no-sources
+      - name: SBOM (exact runtime dependencies)
+        run: |
+          mkdir -p sbom
+          uv export --format cyclonedx1.5 --preview-features sbom-export \
+            --no-dev --locked --output-file sbom/agent-warden.cdx.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-files
+          path: |
+            dist/
+            sbom/
+          if-no-files-found: error
+          retention-days: 90
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Configure this environment in GitHub (Settings > Environments) with a required
+    # reviewer, so a pushed tag alone can't publish.
+    environment:
+      name: pypi
+      url: https://pypi.org/project/agent-warden/
+    permissions:
+      id-token: write # PyPI trusted publishing + attestations (OIDC)
+      attestations: write
+      contents: read
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-files
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist/*
+            sbom/*
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+      - name: Publish to PyPI (trusted publishing, no token)
+        run: uv publish --trusted-publishing always dist/*

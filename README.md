@@ -114,6 +114,7 @@ Requires [uv](https://docs.astral.sh/uv/).
 uv sync
 uv run warden init      # creates policies/default.json (skip in this repo: it exists)
 uv run warden check     # validates it
+uv run warden test examples/policy-tests.json   # checks it decides what you expect
 uv run warden           # starts the server
 ```
 
@@ -138,6 +139,8 @@ directly. Measure on your machine: `uv run python scripts/benchmark.py`.
 - [MCP proxy](https://github.com/wi-abas/agent-warden/blob/main/docs/mcp-proxy.md): `warden proxy` for Claude Desktop, Cursor, Claude Code
 - [Design notes](https://github.com/wi-abas/agent-warden/tree/main/docs/design): how each feature works and what it doesn't cover
 - [Security](https://github.com/wi-abas/agent-warden/blob/main/SECURITY.md): threat model, what Warden does and doesn't protect against
+- [Threat model](https://github.com/wi-abas/agent-warden/blob/main/docs/threat-model.md): attackers, defences with their tests, remaining risks
+- [Releasing](https://github.com/wi-abas/agent-warden/blob/main/docs/releasing.md): signed, attested releases through PyPI trusted publishing
 
 ## Rule for clients: fail closed
 
@@ -183,7 +186,8 @@ Each of these is covered by tests in `tests/`.
 - **After a restart, pending approvals can't be approved until the agent asks again**
   (arguments are never written to disk, so the human couldn't see them).
 - **The audit log is tamper-evident, not tamper-proof.** Someone who can edit the file
-  can rewrite the whole chain; keep a copy of the hashes `warden audit verify` prints.
+  can rewrite the whole chain; save checkpoints elsewhere with `warden audit head` and
+  check them with `warden audit verify --expect FILE`.
 - **Import name clash.** The package installs as `agent-warden` but is imported as `warden`,
   the same import name as the unrelated `warden` package on PyPI. Don't install both in one
   environment.

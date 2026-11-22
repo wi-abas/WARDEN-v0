@@ -1,0 +1,35 @@
+name: Fuzzing
+
+# Coverage-guided fuzzing with Atheris (scripts/fuzz.py, targets in tests/fuzz_targets.py).
+# Slow, so weekly and on demand. A failure prints the crashing input in the log: add
+# it as a regression test before fixing.
+on:
+  schedule:
+    - cron: "17 4 * * 6" # Saturdays
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [policy, evaluate, bypass, proxy, http]
+    name: fuzz (${{ matrix.target }})
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+        with:
+          python-version: "3.12"
+      - name: Install (exactly the locked versions, plus Atheris)
+        run: uv sync --locked --group fuzz
+      - name: Fuzz for 10 minutes
+        env:
+          TARGET: ${{ matrix.target }}
+        run: uv run python scripts/fuzz.py "$TARGET" -max_total_time=600 -rss_limit_mb=2048

@@ -171,5 +171,5 @@ def _retry_after(error: urllib.error.HTTPError) -> float:
 def _json_or_none(raw: bytes) -> Any:
     try:
         return json.loads(raw)
-    except ValueError:
+    except (ValueError, RecursionError):
         return None

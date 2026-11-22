@@ -39,7 +39,7 @@ def _read(path: Path) -> dict[str, Any]:
     try:
         data = json.loads(raw, object_pairs_hook=no_duplicate_keys)
         parse_policy(raw)
-    except (json.JSONDecodeError, DuplicateKeyError, ValidationError) as exc:
+    except (json.JSONDecodeError, RecursionError, DuplicateKeyError, ValidationError) as exc:
         raise LimitsEditError(f"{path} is invalid; fix it first (warden check {path})") from exc
     if not isinstance(data, dict):  # pragma: no cover - parse_policy already refused it
         raise LimitsEditError(f"{path} is invalid")

@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### Hardening
+- **Threat model** (`docs/threat-model.md`): assets, attackers, every defence linked to
+  its tests, and the risks that remain.
+- **Release workflow** (prepared, not yet used): tag `vX.Y.Z` → checks, build, CycloneDX
+  SBOM, GitHub build-provenance attestation, PyPI trusted publishing (no stored token)
+  behind a protected `pypi` environment. Setup steps in `docs/releasing.md`.
+- **Fuzzing**: five fuzz targets with independent oracles (`tests/fuzz_targets.py`),
+  run through Hypothesis in every test run and weekly with Atheris in CI
+  (`scripts/fuzz.py`, `.github/workflows/fuzz.yml`; Linux-only `fuzz` dependency group).
+- **Stricter email check** (found by fuzzing): an address a rule compares must have a
+  plain name before the `@`. `user%evil.net@x.com` (percent hack), `host!user@x.com`
+  (bang path), `a:b@x.com`, `@x.com`, `.a@x.com`, `a..b@x.com` are now denied.
+- **Fix: deeply nested JSON** (`[[[[...]]]]` thousands deep) raised RecursionError, which
+  slipped past `except ValueError`: the API answered 500 instead of 422/400 (still deny),
+  and one such message ended a whole MCP proxy session. Now refused as invalid input
+  everywhere JSON is read (API, proxy, SDK, client, policy, config files, audit verify).
+- **`warden test`**: policy tests. Example requests with expected decisions (and
+  optionally rule and reason), run through the real engine; exit 1 on any failure.
+  `examples/policy-tests.json` covers the default policy, including bypass tricks; CI runs it.
+- **Audit checkpoints**: `warden audit head` prints the newest id + hash per table;
+  `warden audit verify --expect FILE` proves the log still contains them, catching a full
+  rewrite or a cut-off end that the hash chain alone can't see. Older checkpoints that
+  retention deleted are skipped; the newest per table must still match.
+
 ### New
 - **MCP proxy** (`warden proxy`): put Warden in front of any stdio MCP server; every
   `tools/call` is checked (deny → tool error, approval → wait or "pending"). Config file

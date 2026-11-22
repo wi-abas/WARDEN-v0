@@ -1,0 +1,112 @@
+{
+  "policy": "../policies/default.json",
+  "cases": [
+    {
+      "name": "read a file in the workspace",
+      "request": { "tool": "read_file", "arguments": { "path": "/workspace/notes.txt" } },
+      "expect": "allow",
+      "rule": "read-workspace"
+    },
+    {
+      "name": "read outside the workspace",
+      "request": { "tool": "read_file", "arguments": { "path": "/etc/passwd" } },
+      "expect": "deny",
+      "rule": null
+    },
+    {
+      "name": "escape the workspace with ..",
+      "request": { "tool": "read_file", "arguments": { "path": "/workspace/../etc/passwd" } },
+      "expect": "deny"
+    },
+    {
+      "name": "escape the workspace with %2e%2e",
+      "request": { "tool": "read_file", "arguments": { "path": "/workspace/%2e%2e/etc/passwd" } },
+      "expect": "deny"
+    },
+    {
+      "name": "look-alike prefix /workspace-evil/",
+      "request": { "tool": "read_file", "arguments": { "path": "/workspace-evil/secret" } },
+      "expect": "deny"
+    },
+    {
+      "name": "unexpected argument is refused",
+      "request": {
+        "tool": "read_file",
+        "arguments": { "path": "/workspace/a.txt", "follow_symlinks": true }
+      },
+      "expect": "deny"
+    },
+    {
+      "name": "missing path is refused",
+      "request": { "tool": "read_file", "arguments": {} },
+      "expect": "deny"
+    },
+    {
+      "name": "writing in the workspace needs a human",
+      "request": {
+        "tool": "write_file",
+        "arguments": { "path": "/workspace/out.txt", "content": "hello" }
+      },
+      "expect": "require_approval",
+      "rule": "write-workspace",
+      "reason": "Writing files needs a human to approve"
+    },
+    {
+      "name": "writing outside the workspace",
+      "request": { "tool": "write_file", "arguments": { "path": "/tmp/x", "content": "x" } },
+      "expect": "deny"
+    },
+    {
+      "name": "deleting is never allowed",
+      "request": { "tool": "delete_file", "arguments": { "path": "/workspace/a.txt" } },
+      "expect": "deny",
+      "rule": "no-deleting",
+      "reason": "Agents may never delete files"
+    },
+    {
+      "name": "email a colleague",
+      "request": { "tool": "send_email", "arguments": { "to": "bob@example.com" } },
+      "expect": "allow",
+      "rule": "email-colleagues"
+    },
+    {
+      "name": "email a colleague in capitals",
+      "request": { "tool": "send_email", "arguments": { "to": "BOB@EXAMPLE.COM" } },
+      "expect": "allow"
+    },
+    {
+      "name": "email someone outside",
+      "request": { "tool": "send_email", "arguments": { "to": "x@evil.net" } },
+      "expect": "deny"
+    },
+    {
+      "name": "look-alike domain example.com.evil.net",
+      "request": { "tool": "send_email", "arguments": { "to": "x@example.com.evil.net" } },
+      "expect": "deny"
+    },
+    {
+      "name": "two recipients in one string",
+      "request": { "tool": "send_email", "arguments": { "to": "x@evil.net, bob@example.com" } },
+      "expect": "deny"
+    },
+    {
+      "name": "hidden bcc argument",
+      "request": {
+        "tool": "send_email",
+        "arguments": { "to": "bob@example.com", "bcc": "x@evil.net" }
+      },
+      "expect": "deny"
+    },
+    {
+      "name": "unknown tool",
+      "request": { "tool": "run_shell", "arguments": { "command": "ls" } },
+      "expect": "deny",
+      "rule": null
+    },
+    {
+      "name": "invalid tool name",
+      "request": { "tool": "Read File!", "arguments": {} },
+      "expect": "deny"
+    }
+  ]
+}

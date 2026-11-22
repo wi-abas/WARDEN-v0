@@ -164,8 +164,10 @@ class DuplicateKeyCheck:
             self.on_reject(scope, 422, "duplicate key in request")
             await _deny_response(422, "duplicate key in request")(scope, receive, send)
             return
-        except ValueError:
-            pass  # not valid JSON at all: request validation reports it
+        except (ValueError, RecursionError):
+            # Not valid JSON, or nested too deeply for Python's parser: request
+            # validation reports it (as 422, not a 500 "internal error").
+            pass
 
         replayed = False
 

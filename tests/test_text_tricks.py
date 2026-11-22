@@ -169,3 +169,39 @@ def test_spaces_around_a_path_cannot_dodge_a_deny_rule(path: str) -> None:
 
 def test_spaces_inside_a_path_are_fine() -> None:
     assert ask(DENY_ETC, "read_file", path="/home/me/my file.txt") == Decision.ALLOW
+
+
+@pytest.mark.parametrize(
+    "to",
+    [
+        "user%evil.net@mycompany.com",  # percent hack: relayed to evil.net
+        "evil.net!user@mycompany.com",  # UUCP bang path
+        "evil.net:user@mycompany.com",  # group / source-route syntax
+        ":@mycompany.com",
+        "a\\@b@mycompany.com",  # quoting (also two "@")
+        "a\\b@mycompany.com",
+        "@mycompany.com",  # nothing before "@"
+        ".bob@mycompany.com",
+        "bob.@mycompany.com",
+        "bo..b@mycompany.com",
+    ],
+)
+def test_routing_tricks_before_the_at_cannot_pass_an_allow_list(to: str) -> None:
+    """Found by fuzzing: these end in "@mycompany.com" but some mail software sends
+    them elsewhere or reads them differently. Refused, so they're denied."""
+    assert ask(COMPANY_ONLY, "send_email", to=to) == Decision.DENY
+
+
+@pytest.mark.parametrize(
+    "to",
+    [
+        "bob@mycompany.com",
+        "bob.smith@mycompany.com",
+        "bob+tag@mycompany.com",
+        "o-brien@mycompany.com",
+        "jöran@mycompany.com",  # non-English names before "@" are fine (SMTPUTF8)
+        "a_b-c=d@mycompany.com",
+    ],
+)
+def test_ordinary_addresses_still_allowed(to: str) -> None:
+    assert ask(COMPANY_ONLY, "send_email", to=to) == Decision.ALLOW
