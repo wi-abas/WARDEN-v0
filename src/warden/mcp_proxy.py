@@ -447,8 +447,13 @@ def stdout_writer(stream: BinaryIO) -> Callable[[bytes], None]:
 
 def serve_stdio(config: ProxyConfig) -> int:
     """Run the proxy on this process's stdin/stdout. Returns the server's exit code."""
+    # The agent token comes from the environment (e.g. the MCP client config's "env"),
+    # never from the config file, so it isn't stored next to the server settings.
     checker = WardenClient(
-        config.warden_url, config.agent_id, timeout=config.warden_timeout_seconds
+        config.warden_url,
+        config.agent_id,
+        timeout=config.warden_timeout_seconds,
+        token=os.environ.get("WARDEN_AGENT_TOKEN") or None,
     )
 
     async def main() -> int:

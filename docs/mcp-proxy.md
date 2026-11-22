@@ -96,6 +96,11 @@ claude mcp add filesystem -- uv run --directory /Users/me/agent-warden \
 
 Remove the server's direct entry: the proxy only protects calls that go through it.
 
+If Warden uses agent tokens (`--agents`), give the proxy its token through the
+environment, never the config file: in Claude Desktop / Cursor add
+`"env": {"WARDEN_AGENT_TOKEN": "wdn_..."}` next to `"args"`. The agent id then comes from
+the token.
+
 ## Approving
 
 When a call needs approval, the proxy writes the approve command to its stderr (Claude

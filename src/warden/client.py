@@ -97,10 +97,18 @@ class WardenClient:
         agent_id: str = "agent",
         *,
         timeout: float = 5.0,
+        token: str | None = None,
     ) -> None:
         self.url = check_url(url)
         self.agent_id = agent_id
         self.timeout = timeout
+        # Agent token (warden agent add). With a token, Warden takes the agent id from
+        # it, so agent_id is not sent.
+        self._token = token
+
+    def __repr__(self) -> str:  # never show the token
+        token = "<set>" if self._token else None
+        return f"WardenClient(url={self.url!r}, agent_id={self.agent_id!r}, token={token})"
 
     def evaluate(
         self,
@@ -118,18 +126,19 @@ class WardenClient:
     def _evaluate(
         self, tool: str, arguments: dict[str, JsonValue], approval_id: str | None
     ) -> Answer:
-        body: dict[str, JsonValue] = {
-            "agent_id": self.agent_id,
-            "tool": tool,
-            "arguments": arguments,
-        }
+        body: dict[str, JsonValue] = {"tool": tool, "arguments": arguments}
+        headers = {"content-type": "application/json"}
+        if self._token is None:
+            body["agent_id"] = self.agent_id
+        else:
+            headers["authorization"] = f"Bearer {self._token}"
         if approval_id is not None:
             body["approval_id"] = approval_id
         data = json.dumps(body, allow_nan=False).encode("utf-8")
         request = urllib.request.Request(  # noqa: S310 (check_url: local http only)
             f"{self.url}/v1/evaluate",
             data=data,
-            headers={"content-type": "application/json"},
+            headers=headers,
             method="POST",
         )
         try:

@@ -8,6 +8,8 @@ warden init [FILE]     create a starter policy (default policies/default.json)
 warden check FILE      validate a policy file; exit 1 on errors
 warden check --strict  ...also exit 1 on warnings (useful in CI)
 warden schema          print the JSON Schema for policy files
+warden agent add ID     create an agent token (printed once; only its hash is stored)
+warden agent list | remove ID     manage the agents file (--agents FILE)
 warden proxy --config FILE
 warden proxy [--agent-id ID] [--warden-url URL] [--tool-prefix P] -- COMMAND [ARGS...]
                        run an MCP server behind Warden (see docs/mcp-proxy.md)
@@ -21,6 +23,13 @@ from importlib import resources
 from pathlib import Path
 
 from warden import __version__
+from warden.agents import (
+    DEFAULT_AGENTS_PATH,
+    AgentsError,
+    add_agent,
+    read_agents_file,
+    remove_agent,
+)
 from warden.check import check_policy, format_report
 from warden.policy import DEFAULT_POLICY_PATH, Policy
 from warden.settings import SettingsError, resolve
@@ -38,6 +47,11 @@ def main(argv: list[str] | None = None) -> int:
         "--retention-days",
         help="days to keep audit entries, 0 = forever (env WARDEN_RETENTION_DAYS)",
     )
+    serve_parser.add_argument("--agents", help="agent tokens file (env WARDEN_AGENTS)")
+    agent = commands.add_parser("agent", help="manage agent tokens")
+    agent.add_argument("action", choices=["add", "list", "remove"])
+    agent.add_argument("agent_id", nargs="?")
+    agent.add_argument("--agents", type=Path, default=DEFAULT_AGENTS_PATH, help="agents file")
     init = commands.add_parser("init", help="create a starter policy file")
     init.add_argument("policy", nargs="?", type=Path, default=DEFAULT_POLICY_PATH)
     commands.add_parser("schema", help="print the JSON Schema for policy files")
@@ -55,6 +69,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "proxy":
         return run_proxy(args)
+
+    if args.command == "agent":
+        return manage_agents(args.action, args.agent_id, args.agents)
 
     if args.command == "schema":
         print(policy_schema(), end="")
@@ -74,6 +91,7 @@ def main(argv: list[str] | None = None) -> int:
             port=getattr(args, "port", None),
             audit_db=getattr(args, "audit_db", None),
             retention_days=getattr(args, "retention_days", None),
+            agents=getattr(args, "agents", None),
             env=os.environ,
         )
     except SettingsError as exc:
@@ -96,6 +114,38 @@ def main(argv: list[str] | None = None) -> int:
     except StartupError as exc:
         print(f"warden: {exc}", file=sys.stderr)
         return 2
+    return 0
+
+
+def manage_agents(action: str, agent_id: str | None, path: Path) -> int:
+    """`warden agent add|list|remove`. Tokens are printed once and never stored."""
+    try:
+        if action == "list":
+            agents = read_agents_file(path).agents if path.exists() else ()
+            for entry in agents:
+                print(entry.id)
+            print(f"{len(agents)} agents in {path}", file=sys.stderr)
+            return 0
+        if not agent_id:
+            print(f"warden: `warden agent {action}` needs an agent id", file=sys.stderr)
+            return 2
+        if action == "remove":
+            if not remove_agent(path, agent_id):
+                print(f"warden: no agent {agent_id!r} in {path}", file=sys.stderr)
+                return 1
+            print(f"Removed {agent_id}. Restart Warden for it to take effect.", file=sys.stderr)
+            return 0
+        token = add_agent(path, agent_id)
+    except AgentsError as exc:
+        print(f"warden: {exc}", file=sys.stderr)
+        return 2
+    print(f"Added {agent_id} to {path}. Its token (shown ONCE, store it safely):", file=sys.stderr)
+    print(token)  # stdout alone, so it can be captured: TOKEN=$(warden agent add x)
+    print(
+        "Give it to the agent as WARDEN_AGENT_TOKEN, and start Warden with "
+        f"--agents {path} (restart if running).",
+        file=sys.stderr,
+    )
     return 0
 
 

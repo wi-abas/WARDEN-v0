@@ -26,6 +26,13 @@ coverage, ruff/format/mypy clean.
 - **SDK default on `require_approval`: raise `ApprovalPending` at once** (no hidden
   blocking); `wait_for_approval=seconds` opts into polling.
 
+- **Agent tokens in a JSON file** (not SQLite): it's configuration, reviewed and managed
+  like the policy, checked for unsafe permissions the same way. SHA-256 (fast hash) is
+  correct for 256-bit random tokens. Lookup compares every entry (no early exit).
+- **Open mode stays the default** (backwards compatible) with a startup warning; with
+  `--agents`, the token decides `agent_id` and a mismatching body `agent_id` is a 403.
+- **Proxy token from `WARDEN_AGENT_TOKEN` env only**, never the proxy config file.
+
 ## Blocked / needs Wissam
 
 (none yet)
@@ -36,3 +43,4 @@ coverage, ruff/format/mypy clean.
   testing: proxy hung if the server's output broke but the process stayed alive; calls in
   flight were dropped when the client closed its input (`echo ... | warden proxy`).
 - [x] 2. Python SDK (`warden.sdk`): guard, run_guarded(_async), freeze, ApprovalPending.
+- [x] 3. Per-agent tokens (`warden agent add/list/remove`, `--agents`, Bearer auth).

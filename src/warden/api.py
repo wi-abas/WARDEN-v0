@@ -2,7 +2,8 @@
 
 Endpoints:
 - GET  /health       -> "ok", or "degraded" (HTTP 503) when no rules loaded: everything is denied
-- POST /v1/evaluate  -> send an ActionRequest, get an EvaluationResult
+- POST /v1/evaluate  -> send an EvaluateRequest, get an EvaluationResult
+                        (with --agents: needs "Authorization: Bearer <agent token>")
 
 Admin only (header "X-Warden-Admin-Key", printed in the terminal at startup):
 - GET  /v1/approvals                  -> pending approvals, with their arguments
@@ -45,10 +46,17 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from warden import __version__, audit
+from warden.agents import AgentRegistry, AgentsError, load_agents
 from warden.approvals import Approval, ApprovalStore, DecideError, Status, apply_approval
 from warden.audit import AuditEntry, AuditEvent, AuditLog, EventKind, SQLiteAuditLog
 from warden.engine import evaluate
-from warden.models import APPROVAL_ID_PATTERN, ActionRequest, Decision, EvaluationResult
+from warden.models import (
+    APPROVAL_ID_PATTERN,
+    ActionRequest,
+    Decision,
+    EvaluateRequest,
+    EvaluationResult,
+)
 from warden.policy import (
     DEFAULT_POLICY_PATH,
     DuplicateKeyError,
@@ -233,6 +241,15 @@ class _AdminKeyError(Exception):
     pass
 
 
+class _AgentTokenError(Exception):
+    """No valid agent token (401), or a body agent_id that contradicts it (403)."""
+
+    def __init__(self, status: int, reason: str) -> None:
+        super().__init__(reason)
+        self.status = status
+        self.reason = reason
+
+
 @dataclass
 class _Warden:
     """Everything the routes need, with one method per job. Routes stay one-liners."""
@@ -241,6 +258,8 @@ class _Warden:
     audit_log: AuditLog
     approvals: ApprovalStore
     admin_key: str
+    # None = no agent tokens: agent_id is self-declared (the old behaviour).
+    agents: AgentRegistry | None = None
     # Rejected requests are recorded at most this many per minute, so a flood of bad
     # requests can't fill the disk. The rest are counted and summarised in one event.
     rejections_per_minute: int = REJECTIONS_PER_MINUTE
@@ -339,7 +358,30 @@ class _Warden:
             )
         return JSONResponse(content={"status": "ok", "rules_loaded": len(self.policy.rules)})
 
-    def evaluate(self, action: ActionRequest) -> EvaluationResult | JSONResponse:
+    def identify(self, body: EvaluateRequest, authorization: str | None) -> ActionRequest:
+        """Settle WHO is asking. With agent tokens, the token decides, never the body."""
+        if self.agents is None:
+            if body.agent_id is None:
+                raise _AgentTokenError(422, "agent_id required")
+            agent_id = body.agent_id
+        else:
+            token_agent = self.agents.identify_header(authorization)
+            if token_agent is None:
+                raise _AgentTokenError(401, "agent token missing or wrong")
+            if body.agent_id is not None and body.agent_id != token_agent:
+                raise _AgentTokenError(403, "agent_id does not match the agent token")
+            agent_id = token_agent
+        return ActionRequest(
+            agent_id=agent_id,
+            tool=body.tool,
+            arguments=body.arguments,
+            approval_id=body.approval_id,
+        )
+
+    def evaluate(
+        self, body: EvaluateRequest, authorization: str | None = Header(default=None)
+    ) -> EvaluationResult | JSONResponse:
+        action = self.identify(body, authorization)
         decision = evaluate(action, self.policy.rules, self.policy.tools)
         result = apply_approval(action, decision, self.approvals)
         try:
@@ -435,6 +477,7 @@ def create_app(
     audit_log: AuditLog | None = None,
     approvals: ApprovalStore | None = None,
     admin_key: str | None = None,
+    agents: AgentRegistry | None = None,
 ) -> FastAPI:
     """Build the app. Rules, audit log, approvals and admin key are set up once, here."""
     if admin_key is None:
@@ -447,6 +490,7 @@ def create_app(
         audit_log=audit_log or SQLiteAuditLog(audit.DEFAULT_AUDIT_PATH),
         approvals=approvals or ApprovalStore(),
         admin_key=admin_key,
+        agents=agents,
         record_in_background=RECORD_REJECTIONS_IN_BACKGROUND,
     )
 
@@ -474,6 +518,10 @@ def create_app(
     @app.exception_handler(_AdminKeyError)
     async def bad_admin_key(request: Request, exc: _AdminKeyError) -> JSONResponse:
         return w.reject(request, 401, "admin key missing or wrong")
+
+    @app.exception_handler(_AgentTokenError)
+    async def bad_agent_token(request: Request, exc: _AgentTokenError) -> JSONResponse:
+        return w.reject(request, exc.status, exc.reason)
 
     @app.exception_handler(Exception)
     async def unexpected_error(request: Request, exc: Exception) -> JSONResponse:
@@ -520,11 +568,24 @@ def main(settings: Settings | None = None) -> None:
         # e.g. a corrupted file, or a folder Warden can't write to. Without an audit
         # log nothing could ever be allowed, so stop with a clear message.
         raise StartupError(f"can't open the audit database {settings.audit_db}: {exc}") from exc
+    agents = None
+    if settings.agents is not None:
+        try:
+            agents = load_agents(settings.agents)
+        except AgentsError as exc:
+            raise StartupError(str(exc)) from exc
+        print(f"\nWarden: {len(agents.agent_ids)} agents with tokens\n", file=sys.stderr)
+    else:
+        print(
+            "\nWarden: no agent tokens (--agents): any local program can claim any agent_id\n",
+            file=sys.stderr,
+        )
     if settings.admin_key is not None:
         print("\nWarden admin key: using WARDEN_ADMIN_KEY\n", file=sys.stderr)
     app = create_app(
         policy_path=settings.policy,
         audit_log=audit_log,
         admin_key=settings.admin_key,
+        agents=agents,
     )
     uvicorn.run(app, host=HOST, port=settings.port, log_config=config)

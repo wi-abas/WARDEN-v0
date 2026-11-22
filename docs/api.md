@@ -52,6 +52,28 @@ the item gets a `warnings` entry, so an agent can't make you approve something t
 *looks* different from what it is. The approval is still bound to the real action. Approvals are kept
 in memory only (arguments never touch disk), so restarting Warden clears them.
 
+## Agent tokens
+
+Without tokens, `agent_id` is whatever the caller says. With tokens, it comes from a
+secret only that agent has:
+
+```sh
+uv run warden agent add billing-agent      # prints the token ONCE (only its hash is stored)
+uv run warden serve --agents warden-agents.json
+```
+
+The agent sends `Authorization: Bearer <token>` with every `/v1/evaluate` call
+(`agent_id` in the body becomes optional; if present it must match the token, else 403).
+No token or a wrong one: 401 with `"decision": "deny"`. The SDK and the MCP proxy read the
+token from `WARDEN_AGENT_TOKEN`. Approvals can only be used by the agent that asked.
+
+`warden agent list` and `warden agent remove <id>` manage the file (`--agents FILE`,
+default `warden-agents.json`, mode 600). To rotate a token: remove, add, restart Warden.
+Changes take effect on restart. Design: [design/agent-tokens.md](design/agent-tokens.md).
+
+**Migrating:** nothing changes until you pass `--agents`. Add every agent, hand out the
+tokens, then restart with `--agents`.
+
 ## Audit log
 
 Every decision is saved to `warden-audit.db` (SQLite, in the folder you start Warden from):
@@ -89,6 +111,7 @@ WARDEN_ADMIN_KEY="$(openssl rand -base64 32)" \
 | Audit database | `--audit-db` | `WARDEN_AUDIT_DB` | `warden-audit.db` |
 | Audit retention | `--retention-days` (`0` = forever) | `WARDEN_RETENTION_DAYS` | `90` |
 | Admin key | *(no flag)* | `WARDEN_ADMIN_KEY` (32+ characters) | random, printed at startup |
+| Agent tokens | `--agents` | `WARDEN_AGENTS` | none (agent_id self-declared) |
 
 Flags beat environment variables. The admin key has no flag on purpose: command lines are
 visible to every user on the machine (`ps`). Environment variables are hidden from other

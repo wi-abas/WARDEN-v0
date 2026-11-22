@@ -42,13 +42,11 @@ class Decision(StrEnum):
     REQUIRE_APPROVAL = "require_approval"
 
 
-class ActionRequest(BaseModel):
-    """What an agent wants to do. Treated as untrusted input."""
+class _ActionFields(BaseModel):
+    """Fields shared by the request on the wire and the action Warden evaluates."""
 
     model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
 
-    # Self-declared by the caller, so it is NOT used for security decisions yet.
-    agent_id: str = Field(pattern=AGENT_ID_PATTERN)
     tool: str = Field(pattern=TOOL_NAME_PATTERN)
     # Any JSON values. May contain secrets, so never log this field.
     arguments: dict[str, JsonValue] = Field(default_factory=dict, max_length=MAX_ARGUMENTS)
@@ -70,6 +68,23 @@ class ActionRequest(BaseModel):
             elif isinstance(value, list):
                 stack.extend(value)
         return arguments
+
+
+class ActionRequest(_ActionFields):
+    """What an agent wants to do, with WHO is asking settled. Treated as untrusted input.
+
+    With agent tokens (--agents), agent_id comes from the token; without them it is
+    self-declared by the caller.
+    """
+
+    agent_id: str = Field(pattern=AGENT_ID_PATTERN)
+
+
+class EvaluateRequest(_ActionFields):
+    """The body of POST /v1/evaluate. agent_id may be left out when the request
+    carries an agent token (it then comes from the token)."""
+
+    agent_id: str | None = Field(default=None, pattern=AGENT_ID_PATTERN)
 
 
 class Op(StrEnum):

@@ -139,13 +139,15 @@ class ApprovalStore:
                 approval.expires_at = now + self._ttl
             return new_status
 
-    def use(self, approval_id: str, action_hash: str) -> Status | None:
+    def use(self, approval_id: str, action_hash: str, agent_id: str | None = None) -> Status | None:
         """Try to use an approval for this exact action, in one locked step.
 
         Returns the status it had: APPROVED means it was granted now (and is
         marked USED, so it can't be granted again). PENDING, DENIED or USED mean
         no. None means unknown, expired, or approved for a DIFFERENT action
-        (a mismatch reveals nothing and does NOT burn the approval).
+        (a mismatch reveals nothing and does NOT burn the approval). With `agent_id`,
+        the approval must also belong to that agent (the hash covers it too; this is a
+        second, explicit lock).
         """
         with self._lock:
             self._purge_expired(self._clock())
@@ -153,6 +155,8 @@ class ApprovalStore:
             if approval is None:
                 return None
             if not secrets.compare_digest(approval.action_hash, action_hash):
+                return None
+            if agent_id is not None and approval.agent_id != agent_id:
                 return None
             status = approval.status
             if status is Status.APPROVED:
@@ -199,7 +203,7 @@ def apply_approval(
             approval_id=approval_id,
         )
 
-    status = store.use(action.approval_id, result.action_hash)
+    status = store.use(action.approval_id, result.action_hash, agent_id=action.agent_id)
     if status is Status.APPROVED:
         return EvaluationResult(
             decision=Decision.ALLOW,
