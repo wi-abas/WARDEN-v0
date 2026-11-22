@@ -30,6 +30,12 @@
 - Policy schema moved to a versioned path: `schemas/policy-v1.json`.
 - CI actions pinned to commit SHAs; Dependabot enabled.
 - Docs corrected: programs running as the same OS user can usually read `WARDEN_ADMIN_KEY`.
+- URL rules work (the `//` in `https://` was treated as a path trick), and URL tricks such
+  as `https://good.com@evil.net` are blocked.
+- Infinity and NaN in arguments are rejected as invalid input (422).
+- `warden check`: new W010 (allow rules using `neq`/`missing`), W011 (URL prefix without
+  `/` after the host), W009 now covers URLs, W004 no longer flags rules differing only in
+  `ignore_case`.
 
 ## v0.2.0 (2026-11-22)
 
