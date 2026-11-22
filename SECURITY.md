@@ -72,7 +72,7 @@ Assuming the agent runtime calls Warden and obeys the answer:
   secret, so there's no record of *which* person approved.
 - **Whoever can edit the audit database.** The hash chain shows edits, but someone who
   rewrites every later hash too (or cuts off the newest rows) is only caught by comparing
-  with a copy of the head hashes kept elsewhere. They can also change approval state
+  with checkpoints kept elsewhere (`warden audit head`, `warden audit verify --expect`). They can also change approval state
   stored in the same file.
 - **Things the rules don't express.** Text checks see text, not meaning:
   `endswith "@mycompany.com"` can't tell two recipients in one string apart; nested

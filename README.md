@@ -183,7 +183,8 @@ Each of these is covered by tests in `tests/`.
 - **After a restart, pending approvals can't be approved until the agent asks again**
   (arguments are never written to disk, so the human couldn't see them).
 - **The audit log is tamper-evident, not tamper-proof.** Someone who can edit the file
-  can rewrite the whole chain; keep a copy of the hashes `warden audit verify` prints.
+  can rewrite the whole chain; save checkpoints elsewhere with `warden audit head` and
+  check them with `warden audit verify --expect FILE`.
 - **Import name clash.** The package installs as `agent-warden` but is imported as `warden`,
   the same import name as the unrelated `warden` package on PyPI. Don't install both in one
   environment.

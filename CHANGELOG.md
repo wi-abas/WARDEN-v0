@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Hardening
+- **Audit checkpoints**: `warden audit head` prints the newest id + hash per table;
+  `warden audit verify --expect FILE` proves the log still contains them, catching a full
+  rewrite or a cut-off end that the hash chain alone can't see.
+
 ### New
 - **MCP proxy** (`warden proxy`): put Warden in front of any stdio MCP server; every
   `tools/call` is checked (deny → tool error, approval → wait or "pending"). Config file
