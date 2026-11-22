@@ -281,9 +281,14 @@ class McpProxy:
             return
         method = message.get("method")
 
-        if method is None:
-            if has_id:  # a response to a request the server sent: forward it
+        if "method" not in message:
+            # Only a well-formed response (to a request the server sent) is forwarded:
+            # {"jsonrpc", "id", and exactly one of "result" / "error"}. Anything else
+            # (e.g. "params" without a method) could be read as a call by a sloppy server.
+            if has_id and _is_response(message):
                 await self._forward(message)
+            elif has_id:
+                self._reply(rpc_error(None, INVALID_REQUEST, "not a valid response"))
             return
         if not isinstance(method, str):
             self._reply(rpc_error(None, INVALID_REQUEST, "method must be text"))
@@ -403,6 +408,11 @@ class McpProxy:
             await writer.drain()
         except (ConnectionError, RuntimeError):
             logger.error("MCP server is no longer reading its input")
+
+
+def _is_response(message: dict[str, Any]) -> bool:
+    keys = set(message)
+    return keys in ({"jsonrpc", "id", "result"}, {"jsonrpc", "id", "error"})
 
 
 def _valid_id(value: object) -> bool:

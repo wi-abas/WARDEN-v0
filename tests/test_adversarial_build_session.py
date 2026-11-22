@@ -144,6 +144,9 @@ def assert_only_safe_traffic(forwarded: list[dict[str, Any]], gate: Gatekeeper) 
             assert method in PASS_THROUGH  # no allow_methods configured
         elif method is not None:
             assert method.startswith("notifications/")
+        else:  # forwarded without a method: must be a plain response, nothing more
+            assert "method" not in message
+            assert set(message) in ({"jsonrpc", "id", "result"}, {"jsonrpc", "id", "error"})
     assert calls == len(gate.allowed)
 
 
@@ -374,3 +377,16 @@ def test_fuzz_harness_sees_allowed_calls() -> None:
     forwarded, gate = run_proxy_on([json.dumps(good).encode(), json.dumps(bad).encode()])
     assert len(forwarded) == 1 and len(gate.allowed) == 1
     assert_only_safe_traffic(forwarded, gate)
+
+
+def test_messages_shaped_like_calls_without_a_method_are_refused() -> None:
+    lines = [
+        b'{"jsonrpc":"2.0","id":1,"method":null,"params":{"name":"danger","arguments":{}}}',
+        b'{"jsonrpc":"2.0","id":2,"params":{"name":"danger","arguments":{}}}',
+        b'{"jsonrpc":"2.0","id":3,"result":{},"params":{"name":"danger"}}',
+        b'{"jsonrpc":"2.0","id":4,"result":{},"error":{}}',
+    ]
+    forwarded, _ = run_proxy_on(lines)
+    assert forwarded == []
+    ok, _ = run_proxy_on([b'{"jsonrpc":"2.0","id":"s1","result":{"roots":[]}}'])
+    assert ok == [{"jsonrpc": "2.0", "id": "s1", "result": {"roots": []}}]
