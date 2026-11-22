@@ -22,8 +22,10 @@ nothing would show it.
   broken row** of each table, anchors that don't match the last purge, and prints each
   table's newest hash.
 - Databases from before the chain: new columns are added at startup; old rows have no
-  hashes and are reported as "from before the hash chain". An unchained row *after*
-  chained ones is reported as broken.
+  hashes and are reported as "from before the hash chain". At that moment (and only
+  then) a chained `audit_chain_started` event records the last old id per table; any
+  other row without hashes is reported as broken. So nulling the hashes after editing
+  rows doesn't pass, and deleting or nulling that event only makes `verify` stricter.
 
 ## Threat model
 
