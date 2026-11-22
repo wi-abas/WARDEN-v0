@@ -100,9 +100,21 @@ Protects against (as before, only for clients that reach the server through the 
 - The CLI has no flags for the new keys: they are set in the config file. `cli.py` is off
   limits for this branch and nothing there needs changing (the config round-trips).
 
+- `tests/test_mcp_proxy.py::test_protocol_basics_pass_and_server_requests_round_trip`
+  relied on a server `roots/list` reaching the client by default. That default is now
+  the opposite, so the test runs with `allow_server_requests: ["roots/list"]`; it still
+  checks the full round trip. Refusal by default is tested in the new file.
+- Server notifications must be `notifications/...`, mirroring the client side: a
+  `sampling/createMessage` without an id is dropped, since a sloppy client might act on it.
+- Bounds for `_meta` values (256 characters, ±(2^53 − 1)) and the `allow_meta_keys`
+  pattern are chosen to cover progress tokens (usually short ids or counters) and
+  namespaced keys like `io.example/trace`, nothing more.
+
 ## Blocked
 
-Nothing so far.
+- `docs/design/mcp-proxy.md` still says server-to-client requests aren't checked and
+  `_meta` is forwarded unchecked. It's outside this branch's allowed files; it should
+  get a one-line pointer to this note when the branches are merged.
 
 ## Re-audit findings
 

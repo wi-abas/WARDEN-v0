@@ -50,7 +50,8 @@ Assuming the agent runtime calls Warden and obeys the answer:
 - **Silent history edits**: the audit log is a hash chain; `warden audit verify` reports
   the first edited, deleted or inserted row.
 - **Checked ≠ executed**: the SDK and the MCP proxy run a tool with exactly the object
-  that was checked; the proxy refuses duplicate JSON keys, batches and unknown methods.
+  that was checked; the proxy refuses duplicate JSON keys, batches and unknown methods,
+  and `_meta` keys other than `progressToken` (configurable).
 - **Approval loss or replay across restarts**: approval state is persisted (without
   arguments) and `used` is saved before an allow is returned. After a restart nothing
   can be approved until the human can see its arguments again.
@@ -81,8 +82,9 @@ Assuming the agent runtime calls Warden and obeys the answer:
   approvals and the recording of rejected requests are capped, but without agent tokens
   new agent ids get new budgets (up to 10,000 tracked agents), and nothing protects
   against a flood at the network level.
-- **What MCP servers do on their own**, and server-to-client MCP requests (sampling,
-  elicitation, roots), which the proxy forwards unchecked.
+- **What MCP servers do on their own**, including what they answer. Server-to-client
+  requests (sampling, elicitation, roots) are refused by the proxy unless listed in
+  `allow_server_requests`; listed ones pass unchecked.
 
 ### Trust boundaries
 

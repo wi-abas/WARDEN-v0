@@ -48,7 +48,8 @@ Everything else (including the server's other tools) is denied, as always.
     "args": ["-y", "@modelcontextprotocol/server-filesystem", "/Users/me/workspace"],
     "env": {}
   },
-  "approval": { "mode": "wait", "timeout_seconds": 120, "poll_seconds": 2 }
+  "approval": { "mode": "wait", "timeout_seconds": 120, "poll_seconds": 2 },
+  "allow_server_requests": ["roots/list"]
 }
 ```
 
@@ -62,6 +63,8 @@ Everything else (including the server's other tools) is denied, as always.
 | `approval.mode` | `wait` or `error` (see above) | `wait` |
 | `approval.timeout_seconds`, `approval.poll_seconds` | How long to wait, how often to ask | `300`, `2` |
 | `allow_methods` | Extra MCP methods to pass through unchecked, e.g. `["resources/read", "prompts/get"]` | `[]` |
+| `allow_server_requests` | Requests the **server** may send the client, e.g. `["roots/list"]` (see below) | `[]` |
+| `allow_meta_keys` | Keys a `tools/call` may carry in `_meta` | `["progressToken"]` |
 | `warden_timeout_seconds` | Timeout for each question to Warden | `5` |
 
 Unknown keys are an error, so a typo can't silently weaken the setup. Without a config
@@ -125,16 +128,43 @@ same call after you approve goes through (once).
 - Messages that repeat a JSON key, JSON-RPC batches, `NaN`/`Infinity`, invalid JSON.
   These could make the proxy and the server read different things.
 - A `tools/call` sent as a notification (no `id`): dropped.
+- A `tools/call` whose `_meta` holds anything but keys from `allow_meta_keys` (default
+  only `progressToken`), each with short printable text (1-256 characters) or a whole
+  number: the whole call is refused (`-32602`), nothing is stripped. A server that reads
+  flags from `_meta` would otherwise act on something Warden never checked.
 
 Allowed calls are re-encoded from the exact object Warden checked, never passed on as
 raw bytes.
+
+## Requests from the server
+
+An MCP server can send the client requests of its own: `sampling/createMessage` (run an
+LLM call), `roots/list` (which folders the user shared), `elicitation/create` (ask the
+user something). By default the proxy refuses all of them: it answers the server with
+an error and the client never sees the request. A server `ping` is answered by the
+proxy itself. To let specific ones through:
+
+```json
+{ "allow_server_requests": ["roots/list"] }
+```
+
+The proxy also removes the `sampling`, `elicitation` and `roots` capabilities from the
+client's `initialize` unless the matching request is allowed, so servers know not to ask.
+
+Responses and `notifications/*` from the server pass. Anything else from the server
+(invalid JSON, repeated keys, batches, a message that is both a request and a response,
+a "request" without an id, a response to a call Warden is still holding) is dropped and
+logged by type only.
 
 ## Limits
 
 - Stdio servers only (no HTTP/SSE transport yet).
 - Only protects clients configured to use it. The server itself runs with your
   permissions and is trusted.
-- Requests the server sends to the client (sampling, roots, elicitation) aren't checked.
+- Server requests you allow in `allow_server_requests` pass unchecked (Warden doesn't
+  look at a sampling prompt or a roots answer).
+- The server is trusted for what it answers: a tool result can still be misleading.
 - Tool names Warden doesn't accept (uppercase letters, spaces) are always denied.
 
-Design and threat model: [design/mcp-proxy.md](design/mcp-proxy.md).
+Design and threat model: [design/mcp-proxy.md](design/mcp-proxy.md),
+[design/proxy-hardening.md](design/proxy-hardening.md).

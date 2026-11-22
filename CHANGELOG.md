@@ -6,6 +6,9 @@
 - **MCP proxy** (`warden proxy`): put Warden in front of any stdio MCP server; every
   `tools/call` is checked (deny → tool error, approval → wait or "pending"). Config file
   or flags; Claude Desktop / Cursor / Claude Code setup in `docs/mcp-proxy.md`.
+  Requests from the server (sampling, roots, elicitation) are refused unless listed in
+  `allow_server_requests`; a `tools/call`'s `_meta` may only hold `allow_meta_keys`
+  (default `progressToken`).
 - **Python SDK** (`warden.sdk`): `@guard` and `run_guarded` freeze the arguments, check
   them, and run the tool with exactly what was checked. Async tools supported.
 - **Agent tokens** (`warden agent add|list|remove`, `--agents`): the agent id comes from
