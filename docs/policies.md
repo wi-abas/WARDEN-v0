@@ -83,7 +83,10 @@ A rule can add `when` conditions. It then matches only if **all** of them hold:
   `{ "arg": "to", "op": "endswith", "value": "@mycompany.com", "ignore_case": true }`.
 - **Blocking or allowing sites:** use `host_in`, not `startswith`. It compares the URL's
   real host, so `http://`, ports, upper case and trailing dots can't dodge it:
-  `{ "arg": "url", "op": "host_in", "value": ["evil.net", ".evil.net"] }`.
+  `{ "arg": "url", "op": "host_in", "value": ["evil.net", ".evil.net"] }`. International host
+  names must be written in punycode (`xn--strae-oqa.de`, not `straße.de`), both in the
+  policy and in requests; the Unicode form is refused because different software
+  converts it differently.
 - Text a rule compares may not contain invisible characters or look-alike Unicode
   (full-width letters, look-alike dots), and paths may not contain `%`-escapes; such
   requests are denied.

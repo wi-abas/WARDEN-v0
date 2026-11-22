@@ -94,7 +94,7 @@ def test_allow_list(url: str, expected: Decision) -> None:
     assert ask(ONLY, url) == expected
 
 
-def test_international_host_names_are_compared_as_punycode() -> None:
+def test_international_hosts_must_be_punycode() -> None:
     rules = [
         {
             "id": "r",
@@ -103,7 +103,23 @@ def test_international_host_names_are_compared_as_punycode() -> None:
             "when": [{"arg": "url", "op": "host_in", "value": ["xn--mnchen-3ya.de"]}],
         }
     ]
-    assert ask(rules, "https://münchen.de/") == Decision.ALLOW
+    assert ask(rules, "https://xn--mnchen-3ya.de/") == Decision.ALLOW
+    assert ask(rules, "https://münchen.de/") == Decision.DENY  # Unicode form: refused
+
+
+def test_idna_mismatch_cannot_dodge_a_deny_rule() -> None:
+    # Python's IDNA2003 turns straße.de into strasse.de; browsers (IDNA2008) go to
+    # xn--strae-oqa.de. Refusing the Unicode form closes that gap.
+    rules = [
+        {"id": "all", "tool": "fetch", "effect": "allow"},
+        {
+            "id": "b",
+            "tool": "fetch",
+            "effect": "deny",
+            "when": [{"arg": "url", "op": "host_in", "value": ["xn--strae-oqa.de"]}],
+        },
+    ]
+    assert ask(rules, "https://straße.de/") == Decision.DENY
 
 
 @pytest.mark.parametrize(

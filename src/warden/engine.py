@@ -166,18 +166,19 @@ def _is_clean_url(text: str) -> bool:
 
 def _url_host(url: str, condition: Condition) -> str:
     """The real host of a clean URL, normalized the way network software sees it:
-    lowercase, no port, no trailing dot, international names in punycode."""
+    lowercase, no port, no trailing dot.
+
+    International host names must be written in punycode ("xn--strae-oqa.de"). The
+    Unicode form ("straße.de") is refused: Python and browsers convert it with
+    different standards (IDNA2003 vs IDNA2008) and can reach DIFFERENT hosts."""
     _check_unicode(url, condition)
     if any(dot in url for dot in _LOOKALIKE_DOTS) or not _is_clean_url(url):
         raise _UncheckableArgument(condition.arg)
     try:
-        host = urlsplit(url).hostname or ""
-        host = host.rstrip(".")
-        if not host.isascii():
-            host = host.encode("idna").decode("ascii")
-    except (ValueError, UnicodeError):
+        host = (urlsplit(url).hostname or "").rstrip(".")
+    except ValueError:
         raise _UncheckableArgument(condition.arg) from None
-    if not host:
+    if not host or not host.isascii():
         raise _UncheckableArgument(condition.arg)
     return host.lower()
 
