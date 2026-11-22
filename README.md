@@ -93,8 +93,10 @@ curl -s -X POST http://127.0.0.1:8000/v1/evaluate \
    curl -s http://127.0.0.1:8000/v1/approvals -H 'X-Warden-Admin-Key: <key>'
    curl -s -X POST http://127.0.0.1:8000/v1/approvals/<approval_id>/approve -H 'X-Warden-Admin-Key: <key>'
    ```
-3. The agent sends the **exact same action** again, plus `"approval_id": "<approval_id>"`,
-   and gets `allow`.
+3. The agent sends the **exact same action** again, plus `"approval_id": "<approval_id>"`.
+   While the human hasn't decided, the answer stays `require_approval` ("waiting for a human
+   to approve"), so the agent can poll. Once approved it gets `allow`, once. A human "no"
+   gives `deny` ("denied by a human").
 
 An approval works **once**, only for the **exact action** that was approved (same agent,
 tool and arguments, checked via `action_hash`), and **expires after 15 minutes**. It can

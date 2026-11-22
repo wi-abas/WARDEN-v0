@@ -129,18 +129,29 @@ class ApprovalStore:
             approval.status = new_status
             return new_status
 
-    def consume(self, approval_id: str, action_hash: str) -> bool:
-        """Use an approval. True only once, only for the exact approved action."""
+    def use(self, approval_id: str, action_hash: str) -> Status | None:
+        """Try to use an approval for this exact action, in one locked step.
+
+        Returns the status it had: APPROVED means it was granted now (and is
+        marked USED, so it can't be granted again). PENDING, DENIED or USED mean
+        no. None means unknown, expired, or approved for a DIFFERENT action
+        (a mismatch reveals nothing and does NOT burn the approval).
+        """
         with self._lock:
             self._purge_expired(self._clock())
             approval = self._items.get(approval_id)
-            if approval is None or approval.status is not Status.APPROVED:
-                return False
-            # Constant-time compare; a mismatch does NOT burn the approval.
+            if approval is None:
+                return None
             if not secrets.compare_digest(approval.action_hash, action_hash):
-                return False
-            approval.status = Status.USED
-            return True
+                return None
+            status = approval.status
+            if status is Status.APPROVED:
+                approval.status = Status.USED
+            return status
+
+    def consume(self, approval_id: str, action_hash: str) -> bool:
+        """Use an approval. True only once, only for the exact approved action."""
+        return self.use(approval_id, action_hash) is Status.APPROVED
 
 
 def apply_approval(
@@ -170,7 +181,8 @@ def apply_approval(
             approval_id=approval_id,
         )
 
-    if store.consume(action.approval_id, result.action_hash):
+    status = store.use(action.approval_id, result.action_hash)
+    if status is Status.APPROVED:
         return EvaluationResult(
             decision=Decision.ALLOW,
             reason=f"approved by a human ({result.reason})",
@@ -178,9 +190,19 @@ def apply_approval(
             action_hash=result.action_hash,
             approval_id=action.approval_id,
         )
+    if status is Status.PENDING:
+        # Not a "no" yet: tell the agent to keep waiting (still NOT allowed).
+        return EvaluationResult(
+            decision=Decision.REQUIRE_APPROVAL,
+            reason="waiting for a human to approve",
+            matched_rule=result.matched_rule,
+            action_hash=result.action_hash,
+            approval_id=action.approval_id,
+        )
+    reasons = {Status.DENIED: "denied by a human", Status.USED: "approval already used"}
     return EvaluationResult(
         decision=Decision.DENY,
-        reason="approval not valid",
+        reason=reasons.get(status, "approval not valid") if status else "approval not valid",
         matched_rule=result.matched_rule,
         action_hash=result.action_hash,
     )

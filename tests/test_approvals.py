@@ -118,7 +118,7 @@ def test_replay_an_approval_is_denied(client: TestClient) -> None:
     assert ask(client, email(approval_id=approval_id))["decision"] == "allow"
     replay = ask(client, email(approval_id=approval_id))
     assert replay["decision"] == "deny"
-    assert replay["reason"] == "approval not valid"
+    assert replay["reason"] == "approval already used"
 
 
 @pytest.mark.parametrize(
@@ -158,9 +158,25 @@ def test_expired_pending_cannot_be_approved(client: TestClient, clock: FakeClock
     assert approve(client, approval_id) == 404
 
 
-def test_unapproved_approval_id_is_denied(client: TestClient) -> None:
+def test_pending_approval_means_keep_waiting_not_allow(client: TestClient) -> None:
     approval_id = ask(client, email())["approval_id"]  # pending, nobody approved
-    assert ask(client, email(approval_id=approval_id))["decision"] == "deny"
+    retry = ask(client, email(approval_id=approval_id))
+    assert retry["decision"] == "require_approval"
+    assert retry["reason"] == "waiting for a human to approve"
+    assert retry["approval_id"] == approval_id
+
+
+def test_pending_approval_for_a_different_action_is_denied(client: TestClient) -> None:
+    approval_id = ask(client, email())["approval_id"]
+    other = ask(client, email(to="attacker@example.com", approval_id=approval_id))
+    assert (other["decision"], other["reason"]) == ("deny", "approval not valid")
+
+
+def test_human_no_says_so(client: TestClient) -> None:
+    approval_id = ask(client, email())["approval_id"]
+    approve(client, approval_id, "deny")
+    retry = ask(client, email(approval_id=approval_id))
+    assert (retry["decision"], retry["reason"]) == ("deny", "denied by a human")
 
 
 def test_made_up_approval_id_is_denied(client: TestClient) -> None:
@@ -221,7 +237,7 @@ def test_admin_endpoints_need_the_key(client: TestClient, headers: dict) -> None
         assert response.status_code == 401
         assert response.json()["decision"] == "deny"
     # Still pending: nothing was approved without the key.
-    assert ask(client, email(approval_id=approval_id))["decision"] == "deny"
+    assert ask(client, email(approval_id=approval_id))["decision"] == "require_approval"
     assert len(client.get("/v1/approvals", headers=ADMIN).json()) == 1
 
 

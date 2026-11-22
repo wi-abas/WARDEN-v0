@@ -82,7 +82,7 @@ def test_unrecorded_approval_does_not_happen(tmp_path: Path) -> None:
     # Still pending, and the agent can't use it.
     assert [a.approval_id for a, _ in store.pending()] == [approval_id]
     retry = client.post("/v1/evaluate", json=email(approval_id))
-    assert retry.json()["decision"] == "deny"
+    assert retry.json()["decision"] == "require_approval"  # still waiting, never allow
 
 
 @pytest.mark.parametrize(
@@ -116,7 +116,7 @@ def test_garbage_approval_id_is_not_stored_as_an_id(
 
 def test_tried_approval_id_is_recorded_on_failure(client: TestClient, log: SQLiteAuditLog) -> None:
     approval_id = pending_id(client)  # never approved
-    client.post("/v1/evaluate", json=email(approval_id))
+    client.post("/v1/evaluate", json=email(approval_id, to="attacker@example.com"))
     entry = log.recent()[0]
     assert entry.decision == "deny"
     assert entry.approval_id == approval_id
