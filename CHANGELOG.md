@@ -2,6 +2,18 @@
 
 ## v0.3.0 (alpha, not yet tagged)
 
+### Security fixes (full code review)
+- **Host-name rules**: `endswith`/`eq` with a value like `evil.com` could be dodged with
+  `x@evil.com.`, `x@evil.com>` or `evil.com.`; such text is now denied as uncheckable.
+- **Approval display**: a key that looked like an escape (`note\u200b`) could hide another
+  argument from the approver. The display is now one-to-one.
+- **No HTTP proxies**: the client (SDK, MCP proxy) and `warden approvals` ignore
+  `HTTP_PROXY`, which sent arguments and the admin key to the proxy.
+- **MCP proxy**: the server no longer inherits `WARDEN_ADMIN_KEY` / `WARDEN_AGENT_TOKEN`.
+- **Audit verify**: rows without hashes only pass as history in a database that really
+  predates the chain (recorded when the columns are added); nulling hashes is reported.
+- **Host check**: requests with more than one `Host` header are refused.
+
 ### Hardening
 - **Threat model** (`docs/threat-model.md`): assets, attackers, every defence linked to
   its tests, and the risks that remain.

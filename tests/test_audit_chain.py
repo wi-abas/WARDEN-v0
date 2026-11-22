@@ -219,6 +219,68 @@ def test_old_database_is_upgraded_and_old_rows_reported(tmp_path: Path) -> None:
     assert not verify_chain(path).ok
 
 
+def test_nulling_every_hash_doesnt_hide_an_edit(tmp_path: Path) -> None:
+    # Before: rows without hashes counted as "older than the chain", so changing a
+    # decision and nulling the hashes (plain SQL, no hashing) verified as OK.
+    path = tmp_path / "a.db"
+    filled(path, 3)
+    sql(path, "UPDATE decisions SET decision = 'deny', prev_hash = NULL, row_hash = NULL")
+    report = verify_chain(path)
+    assert not report.ok and "decisions row id 1: hash missing" in report.problems[0]
+
+
+def test_restart_after_nulling_doesnt_bless_it(tmp_path: Path) -> None:
+    path = tmp_path / "a.db"
+    filled(path, 2)
+    sql(path, "UPDATE decisions SET prev_hash = NULL, row_hash = NULL")
+    SQLiteAuditLog(path, retention_days=None).record(entry())  # Warden starts again
+    assert not verify_chain(path).ok
+
+
+def test_chain_start_is_recorded_only_for_really_old_rows(tmp_path: Path) -> None:
+    fresh = tmp_path / "fresh.db"
+    filled(fresh, 1)
+    kinds = [e.kind for e in SQLiteAuditLog(fresh, retention_days=None).recent_events()]
+    assert EventKind.AUDIT_CHAIN_STARTED not in kinds  # nothing predates the chain
+
+
+def test_deleting_the_chain_start_record_only_makes_verify_stricter(tmp_path: Path) -> None:
+    path = tmp_path / "old.db"
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "CREATE TABLE decisions (id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp TEXT, "
+            "agent_id TEXT, tool TEXT, decision TEXT, reason TEXT, matched_rule TEXT, "
+            "action_hash TEXT)"
+        )
+        conn.execute(
+            "INSERT INTO decisions (timestamp, agent_id, tool, decision, reason) "
+            "VALUES ('2026-01-01T00:00:00+00:00', 'a', 't', 'allow', 'r')"
+        )
+    path.chmod(0o600)
+    SQLiteAuditLog(path, retention_days=None)
+    assert verify_chain(path).unchained["decisions"] == 1
+    sql(path, "UPDATE events SET row_hash = NULL, prev_hash = NULL")  # hide the record
+    assert not verify_chain(path).ok
+    sql(path, "DELETE FROM events")
+    assert not verify_chain(path).ok
+
+
+@pytest.mark.parametrize("anchor", ["not json", "[1]", '{"decisions": "9"}', None])
+def test_garbled_chain_start_record_allows_nothing(tmp_path: Path, anchor: str | None) -> None:
+    path = tmp_path / "a.db"
+    log = filled(path, 1)
+    log.record_event(
+        AuditEvent(
+            timestamp=START.isoformat(),
+            kind=EventKind.AUDIT_CHAIN_STARTED,
+            reason="x",
+            chain_anchor=anchor,
+        )
+    )
+    sql(path, "UPDATE decisions SET prev_hash = NULL, row_hash = NULL")
+    assert not verify_chain(path).ok
+
+
 def test_concurrent_writers_keep_one_chain(tmp_path: Path) -> None:
     path = tmp_path / "a.db"
     log = SQLiteAuditLog(path, retention_days=None)
@@ -264,8 +326,9 @@ def test_cli_verify_uses_the_environment(
         "INSERT INTO decisions (timestamp, agent_id, tool, decision, reason) "
         "VALUES ('x', 'a', 't', 'allow', 'r')",
     )
-    assert cli.main(["audit", "verify"]) == 0  # an unchained-only table: nothing to check
-    assert "1 older rows" in capsys.readouterr().out
+    # A row without hashes in a database that never had pre-chain rows: inserted.
+    assert cli.main(["audit", "verify"]) == 1
+    assert "hash missing" in capsys.readouterr().out
 
 
 def test_cli_verify_missing_or_unreadable(

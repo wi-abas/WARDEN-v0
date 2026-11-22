@@ -86,6 +86,18 @@ METHOD_NOT_FOUND = -32601
 INVALID_PARAMS = -32602
 
 
+# Warden's own secrets. The proxy's environment holds them (the agent token for asking
+# Warden; the admin key if the user exported it for `warden approvals`), but the MCP
+# server must never get them: with the admin key it could approve its own calls.
+WARDEN_SECRETS = frozenset({"WARDEN_ADMIN_KEY", "WARDEN_AGENT_TOKEN"})
+
+
+def server_env(spec_env: dict[str, str], inherited: dict[str, str]) -> dict[str, str]:
+    """The MCP server's environment: ours minus Warden's secrets, plus the config's
+    "env" (set there on purpose, so it is kept as written)."""
+    return {**{k: v for k, v in inherited.items() if k not in WARDEN_SECRETS}, **spec_env}
+
+
 class ConfigError(ValueError):
     """The proxy configuration is invalid. The message never contains secret values."""
 
@@ -261,7 +273,7 @@ class McpProxy:
             *spec.args,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
-            env={**os.environ, **spec.env},
+            env=server_env(spec.env, dict(os.environ)),
             limit=MAX_LINE_BYTES,
         )
         assert process.stdin is not None and process.stdout is not None  # noqa: S101 (PIPE)

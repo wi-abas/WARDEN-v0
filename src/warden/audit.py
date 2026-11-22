@@ -86,6 +86,9 @@ class EventKind(StrEnum):
     APPROVAL_GROUP_DECIDED = "approval_group_decided"
     REQUEST_REJECTED = "request_rejected"  # 401, 411, 413, 422, 500
     AUDIT_PURGED = "audit_purged"  # old entries deleted by retention
+    # Written once, when an old database gets the hash columns: rows up to these ids
+    # (chain_anchor, JSON) predate the chain. No other row may be without hashes.
+    AUDIT_CHAIN_STARTED = "audit_chain_started"
 
 
 MAX_PATH_CHARS = 200
@@ -297,15 +300,37 @@ class SQLiteAuditLog:
         self._purge_running = False
         self._purge_thread: threading.Thread | None = None
         _make_private(path)
+        unchained: dict[str, int] = {}  # tables that get the hash columns now: last old id
         with closing(self._connect()) as conn, conn:
             conn.executescript(_SCHEMA)
             for table, added in _ADDED_COLUMNS.items():
                 existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+                if "row_hash" not in existing:
+                    last = conn.execute(f"SELECT MAX(id) FROM {table}").fetchone()[0]  # noqa: S608
+                    unchained[table] = int(last or 0)
                 for name, sql_type in added.items():
                     if name not in existing:
                         # Names come from the constant above, never from user input.
                         conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {sql_type}")
+        if any(unchained.values()):
+            self._record_chain_start(unchained)
         self._maybe_purge(background=False)  # first purge at startup, before serving
+
+    def _record_chain_start(self, unchained: dict[str, int]) -> None:
+        """Only at the moment the hash columns are added: these rows really are older
+        than the chain. Recorded IN the chain, so it can't be quietly changed; without
+        it, `verify` accepts no row without hashes (nulling hashes can't hide an edit)."""
+        limits = {table: unchained.get(table, 0) for table in _TABLES}
+        with closing(self._write()) as conn, conn:
+            self._insert_event(
+                conn,
+                AuditEvent(
+                    timestamp=self._clock().isoformat(),
+                    kind=EventKind.AUDIT_CHAIN_STARTED,
+                    reason="hash chain started; older rows have no hashes",
+                    chain_anchor=json.dumps(limits, sort_keys=True),
+                ),
+            )
 
     def _connect(self) -> sqlite3.Connection:
         return sqlite3.connect(self.path, timeout=5)
@@ -536,8 +561,11 @@ def verify_chain(path: Path) -> ChainReport:
         anchors = dict(
             conn.execute("SELECT table_name, last_deleted_hash FROM audit_anchors").fetchall()
         )
+        old_rows = _unchained_limits(conn)
         for table in _TABLES:
-            count, legacy, head, problem = _verify_table(conn, table, anchors.get(table))
+            count, legacy, head, problem = _verify_table(
+                conn, table, anchors.get(table), old_rows.get(table, 0)
+            )
             checked[table], unchained[table], heads[table] = count, legacy, head
             if problem:
                 problems.append(problem)
@@ -545,8 +573,25 @@ def verify_chain(path: Path) -> ChainReport:
     return ChainReport(checked=checked, unchained=unchained, heads=heads, problems=problems)
 
 
+def _unchained_limits(conn: sqlite3.Connection) -> dict[str, int]:
+    """Per table, the last id that may lack hashes: from the first CHAINED
+    audit_chain_started event. None recorded: no row may lack hashes."""
+    row = conn.execute(
+        "SELECT chain_anchor FROM events WHERE kind = ? AND row_hash IS NOT NULL "
+        "ORDER BY id LIMIT 1",
+        (EventKind.AUDIT_CHAIN_STARTED.value,),
+    ).fetchone()
+    try:
+        data = json.loads(row[0]) if row is not None and row[0] else {}
+    except (ValueError, RecursionError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {t: v for t, v in data.items() if t in _TABLES and type(v) is int and v >= 0}
+
+
 def _verify_table(
-    conn: sqlite3.Connection, table: str, anchor: str | None
+    conn: sqlite3.Connection, table: str, anchor: str | None, old_rows: int = 0
 ) -> tuple[int, int, str, str | None]:
     columns = _TABLE_COLUMNS[table]
     rows = conn.execute(
@@ -557,8 +602,8 @@ def _verify_table(
     chained = False
     for row in rows:
         row_id, values, prev, stored = row[0], tuple(row[1:-2]), row[-2], row[-1]
-        if stored is None and prev is None and not chained:
-            legacy += 1  # written before the chain existed
+        if stored is None and prev is None and not chained and row_id <= old_rows:
+            legacy += 1  # written before the chain existed (recorded when it started)
             continue
         where = f"{table} row id {row_id}"
         if stored is None or prev is None:

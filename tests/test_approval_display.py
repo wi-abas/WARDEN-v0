@@ -4,8 +4,10 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 from helpers import BASIC_POLICY
+from hypothesis import given
+from hypothesis import strategies as st
 
-from warden.api import create_app
+from warden.api import _display_safe, create_app
 from warden.audit import SQLiteAuditLog
 
 KEY = "k" * 32
@@ -50,3 +52,24 @@ def test_normal_text_is_untouched(tmp_path: Path) -> None:
     item = pending(tmp_path, arguments)
     assert item["arguments"] == arguments
     assert item["warnings"] == []
+
+
+def test_escaped_looking_key_cant_hide_another_argument(tmp_path: Path) -> None:
+    # Before the fix both keys displayed as "note\u200b" and one value vanished.
+    item = pending(tmp_path, {"note\\u200b": "harmless", "note\u200b": "WIRE $9999"})
+    shown = item["arguments"]
+    assert isinstance(shown, dict)
+    assert shown == {"note\\u005cu200b": "harmless", "note\\u200b": "WIRE $9999"}
+
+
+def test_backslash_without_u_is_untouched(tmp_path: Path) -> None:
+    item = pending(tmp_path, {"to": "boss@company.com", "path": "C:\\Users\\bob"})
+    assert item["arguments"] == {"to": "boss@company.com", "path": "C:\\Users\\bob"}
+    assert item["warnings"] == []
+
+
+@given(st.dictionaries(st.text(max_size=8), st.just(0), max_size=6))
+def test_display_never_merges_two_keys(arguments: dict[str, int]) -> None:
+    shown = _display_safe(dict(arguments), [])
+    assert isinstance(shown, dict)
+    assert len(shown) == len(arguments)
