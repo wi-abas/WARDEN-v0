@@ -83,3 +83,5 @@ coverage, ruff/format/mypy clean.
 - [x] 8. CI hardening: dependency scan (`125f65f`), weekly mutation job (floor 80%,
   baseline 83.2% = 238/286 in ~8 min).
 - [x] 9. CLAUDE.md rewritten for the current project.
+- [x] 10. Docs pass (`03c94ee`).
+- [x] 11. Re-audit: 5 fixes + tests, fuzz/race suite, report docs/security-audit-2026-11-22-build-session.md.
