@@ -153,3 +153,30 @@ def test_write_does_not_wait_for_a_slow_purge(tmp_path: Path) -> None:
     assert len(log.recent()) == 1
     release.set()
     log.wait_for_purge()
+
+
+def test_only_one_purge_runs_at_a_time(tmp_path: Path) -> None:
+    import threading
+
+    started = threading.Event()
+    release = threading.Event()
+    calls: list[int] = []
+
+    class SlowPurge(SQLiteAuditLog):
+        def purge_older_than(self, days: int) -> int:
+            calls.append(days)
+            if len(calls) > 1:  # the first (startup) purge is quick
+                started.set()
+                release.wait(5)
+            return 0
+
+    clock = Clock()
+    log = SlowPurge(tmp_path / "a.db", retention_days=90, clock=clock)
+    clock.now = START + timedelta(days=2)
+    log.record(entry(clock.now))  # starts a background purge that blocks
+    assert started.wait(5)
+    clock.now = START + timedelta(days=4)  # a purge would be due again...
+    log.record(entry(clock.now))  # ...but one is still running: don't start another
+    release.set()
+    log.wait_for_purge()
+    assert len(calls) == 2
