@@ -70,7 +70,7 @@ def _call(url: str, key: str, method: str, path: str, body: Any = None) -> tuple
         raise _Unreachable("answer from Warden too large")
     try:
         return status, json.loads(raw)
-    except ValueError:
+    except (ValueError, RecursionError):  # not JSON, or nested too deeply to parse
         raise _Unreachable(f"Warden at {url} sent something that isn't JSON") from None
 
 

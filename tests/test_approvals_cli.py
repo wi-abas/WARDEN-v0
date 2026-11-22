@@ -350,3 +350,15 @@ def test_odd_failure_entries_are_skipped(
     monkeypatch.setattr(approvals_cli, "_call", odd)
     code, _, err = cli(capsys, monkeypatch, "approve", *ids, "--yes", "--warden-url", url)
     assert code == 1 and "\x1b" not in err and f"refused: {ids[0]}: x\\u001b" in err
+
+
+def test_deeply_nested_answer_is_refused_cleanly(capsys: Any, monkeypatch: Any) -> None:
+    """A misbehaving server can't crash the CLI with JSON nested too deep to parse."""
+    from fastapi import FastAPI
+    from fastapi.responses import PlainTextResponse
+
+    app = FastAPI()
+    app.get("/v1/approvals")(lambda: PlainTextResponse("[" * 100_000 + "]" * 100_000))
+    with live_server(app) as url:
+        code, _, err = cli(capsys, monkeypatch, "list", "--warden-url", url)
+    assert code == 2 and "isn't JSON" in err
