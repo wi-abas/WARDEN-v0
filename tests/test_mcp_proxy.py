@@ -790,3 +790,17 @@ def test_rate_limit_while_waiting_keeps_waiting(tmp_path: Path) -> None:
         assert echoed(await s.roundtrip(call("echo", {})))["name"] == "echo"
 
     run_session(make_config(tmp_path), warden, script)
+
+
+def test_approval_hint_says_to_review_first(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    warden = FakeWarden({"echo": [pending()]})
+    config = make_config(tmp_path, approval={"mode": "error"})
+
+    async def script(s: Session) -> None:
+        await s.roundtrip(call("echo", {}))
+
+    run_session(config, warden, script)
+    err = capsys.readouterr().err
+    assert err.index("/v1/approvals -H") < err.index("/approve")

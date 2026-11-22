@@ -373,10 +373,14 @@ class McpProxy:
         answer = await self._ask(tool, arguments, approval_id)
         settings = self.config.approval
         if answer.decision is Decision.REQUIRE_APPROVAL:
+            url = self.config.warden_url
+            key = '-H "X-Warden-Admin-Key: $WARDEN_ADMIN_KEY"'
+            # Review first: approving by id alone means approving arguments unseen.
             print(
-                f"Warden: {_safe_name(tool)} needs approval. Approve with:\n"
-                f"  curl -X POST {self.config.warden_url}/v1/approvals/{approval_id}/approve"
-                ' -H "X-Warden-Admin-Key: $WARDEN_ADMIN_KEY"',
+                f"Warden: {_safe_name(tool)} needs approval (id {approval_id}).\n"
+                f"  1. Check what it would do:  curl -s {url}/v1/approvals {key}\n"
+                f"  2. Then approve:            curl -X POST "
+                f"{url}/v1/approvals/{approval_id}/approve {key}",
                 file=sys.stderr,
             )
         if settings.mode == "error" and answer.decision is Decision.REQUIRE_APPROVAL:
