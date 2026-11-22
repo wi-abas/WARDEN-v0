@@ -186,7 +186,7 @@ def _evaluate(
 
     return EvaluationResult(
         decision=winner.effect,
-        reason=f"matched rule '{winner.id}'",
+        reason=winner.message or f"matched rule '{winner.id}'",
         matched_rule=winner.id,
         action_hash=action_hash,
     )

@@ -19,6 +19,7 @@ TOOL_NAME_PATTERN = r"^[a-z0-9_.\-]{1,64}$"
 AGENT_ID_PATTERN = r"^[A-Za-z0-9_.\-]{1,128}$"
 RULE_ID_PATTERN = r"^[a-z0-9_.\-]{1,64}$"
 ARG_NAME_PATTERN = r"^[A-Za-z0-9_.\-]{1,64}$"
+MESSAGE_PATTERN = r"^[^\x00-\x1f\x7f]{1,200}$"
 APPROVAL_ID_PATTERN = r"^[A-Za-z0-9_\-]{16,64}$"
 
 MAX_ARGUMENTS = 50
@@ -126,6 +127,9 @@ class Rule(BaseModel):
     tool: str = Field(pattern=TOOL_NAME_PATTERN)
     effect: Decision
     when: tuple[Condition, ...] = Field(default=(), max_length=MAX_CONDITIONS)
+    # Shown as the decision's reason, e.g. "Payments over €500 need finance approval".
+    # One line, no control characters (it ends up in logs and the audit log).
+    message: str | None = Field(default=None, pattern=MESSAGE_PATTERN)
 
 
 class ToolSpec(BaseModel):

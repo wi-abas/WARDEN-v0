@@ -108,6 +108,9 @@ Rules live in `policies/default.json`:
 - If the file is missing or **any** rule is invalid, Warden loads no rules and denies everything.
   The log says where the problem is.
 - Rules are loaded at startup. Restart the server after editing.
+- Add `"message": "..."` to a rule to explain the decision. It becomes the `reason` in the
+  response (one line, up to 200 characters), e.g.
+  `{ "id": "big-invoice", ..., "message": "Invoices over €500 need finance approval" }`.
 
 ### Argument rules
 
