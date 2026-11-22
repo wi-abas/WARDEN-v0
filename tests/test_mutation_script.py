@@ -66,21 +66,37 @@ def test_target_file_is_always_restored(monkeypatch: pytest.MonkeyPatch, tmp_pat
     (tmp_path / "toy.py").write_text(SOURCE)
     monkeypatch.setattr(m, "SRC", tmp_path)
     seen: list[str] = []
+    timeouts: list[float] = []
 
-    def runner(tests: list[str]) -> bool:
+    def runner(tests: list[str], timeout: float) -> bool:
         seen.append((tmp_path / "toy.py").read_text())
-        return len(seen) == 2  # the second mutant "survives"
+        timeouts.append(timeout)
+        return len(seen) in {1, 3}  # the clean run passes; the second mutant "survives"
 
     tried, survivors = m.run_target("toy", ["x"], None, runner=runner)
     assert tried == 6 and [s.index for s in survivors] == [1]
     assert (tmp_path / "toy.py").read_text() == SOURCE
-    assert all(code != SOURCE for code in seen)
+    assert seen[0] == SOURCE  # the clean run comes first
+    assert all(code != SOURCE for code in seen[1:])
+    assert timeouts[0] == 600 and all(t == 30.0 for t in timeouts[1:])  # fast toy: minimum
 
-    def crash(tests: list[str]) -> bool:
+    def crash(tests: list[str], timeout: float) -> bool:
+        if (tmp_path / "toy.py").read_text() == SOURCE:
+            return True
         raise KeyboardInterrupt
 
     with pytest.raises(KeyboardInterrupt):
         m.run_target("toy", ["x"], 1, runner=crash)
+    assert (tmp_path / "toy.py").read_text() == SOURCE
+
+
+def test_failing_tests_stop_the_run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """If the tests already fail, every mutant would count as caught: refuse instead."""
+    m = load()
+    (tmp_path / "toy.py").write_text(SOURCE)
+    monkeypatch.setattr(m, "SRC", tmp_path)
+    with pytest.raises(m.BaselineFailed):
+        m.run_target("toy", ["x"], None, runner=lambda tests, timeout: False)
     assert (tmp_path / "toy.py").read_text() == SOURCE
 
 

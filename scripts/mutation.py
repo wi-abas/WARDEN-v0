@@ -209,22 +209,35 @@ def run_tests(tests: list[str], timeout: float = 300) -> bool:
     return done.returncode == 0
 
 
+class BaselineFailed(Exception):
+    """The tests fail before any mutation: every mutant would look 'caught'."""
+
+
 def run_target(
     name: str,
     tests: list[str],
     limit: int | None,
-    runner: Callable[[list[str]], bool] = run_tests,
+    runner: Callable[..., bool] = run_tests,
 ) -> tuple[int, list[Mutant]]:
     """Plant each mutant in src/warden/<name>.py, run its tests, restore. Returns
-    (mutants tried, survivors)."""
+    (mutants tried, survivors).
+
+    The tests first run once unchanged: they must pass, and their time sets the
+    timeout for each mutant (10x, at least 30 s), so a mutant that makes a test hang
+    costs seconds instead of minutes.
+    """
     path = SRC / f"{name}.py"
     original = path.read_text(encoding="utf-8")
     mutants = list_mutants(original)[:limit]
+    started = time.monotonic()
+    if not runner(tests, timeout=600):
+        raise BaselineFailed(f"{name}: its tests fail without any mutation")
+    budget = max(30.0, 10 * (time.monotonic() - started))
     survivors: list[Mutant] = []
     try:
         for mutant in mutants:
             path.write_text(mutate(original, mutant.index), encoding="utf-8")
-            if runner(tests):
+            if runner(tests, timeout=budget):
                 survivors.append(mutant)
     finally:
         path.write_text(original, encoding="utf-8")
