@@ -242,8 +242,9 @@ uv run mypy                    # type check (strict, incl. tests)
 Done in v0.2.0: argument rules, tool argument lists, audit log with retention, human
 approvals, `warden check`, settings, demo, CI. See [CHANGELOG.md](https://github.com/wi-abas/agent-warden/blob/main/CHANGELOG.md).
 
-Unreleased: MCP proxy, Python SDK, agent tokens, rate limits, persistent approvals,
-tamper-evident audit log, nested argument conditions.
+Done in v0.3.0 (alpha): MCP proxy, Python SDK, agent tokens, rate limits, persistent
+approvals, group approvals (`warden approvals`), tamper-evident audit log with
+checkpoints, policy tests (`warden test`), nested argument conditions.
 
 Next, shaped by feedback from early users:
 

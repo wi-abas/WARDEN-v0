@@ -1,5 +1,6 @@
 """Settings: flags beat environment variables beat defaults; bad values stop startup."""
 
+import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -125,7 +126,9 @@ def test_version_flag(capsys: pytest.CaptureFixture[str]) -> None:
         main(["--version"])
     assert exc.value.code == 0
     assert capsys.readouterr().out.strip() == f"warden {warden.__version__}"
-    assert warden.__version__ == "0.2.0"
+    # The installed metadata matches pyproject.toml (a stale install would show an old one).
+    pyproject = tomllib.loads((Path(__file__).parent.parent / "pyproject.toml").read_text())
+    assert warden.__version__ == pyproject["project"]["version"]
 
 
 @pytest.mark.parametrize("raw", ["²", "٨٠٠٠", "9" * 5000, "1_000", "+80", " ", ""])

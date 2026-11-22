@@ -26,6 +26,7 @@ curl -s -X POST http://127.0.0.1:8000/v1/evaluate \
 | `POST /v1/approvals/{id}/approve` | Admin: approve one (once). |
 | `POST /v1/approvals/{id}/deny` | Admin: deny one (once). |
 | `GET /v1/approvals?group=true` | Admin: the same list, grouped by agent and tool. |
+| `GET /v1/approvals?ids=A,B&agent_id=X&tool=Y` | Admin: only those approvals (any filter can be left out; up to 100 ids). Narrows what is shown, never what is decided. |
 | `POST /v1/approvals/decide` | Admin: approve or reject several by id, all or nothing. |
 
 ## Approvals
@@ -74,6 +75,9 @@ The CLI fetches the named approvals again, prints every action in full (non-ASCI
 control characters escaped) and asks `Approve these 3 actions? [y/N]`; `--yes` skips
 the question for scripts. Exit codes: 0 done, 1 refused or answered no, 2 usage error,
 missing `WARDEN_ADMIN_KEY` (never accepted as a flag) or Warden unreachable.
+
+If an agent floods the queue, `list --agent A --tool T` shows only that agent and tool,
+and `approve`/`reject` keep working: they fetch only the ids you name.
 
 Over HTTP:
 

@@ -11,6 +11,7 @@ Admin only (header "X-Warden-Admin-Key", printed in the terminal at startup):
 - POST /v1/approvals/{id}/deny        -> deny one (once)
 - GET  /v1/approvals?group=true       -> the same, grouped by (agent_id, tool)
 - POST /v1/approvals/decide           -> approve or deny several by id, all or nothing
+- GET  /v1/approvals?ids=A,B&agent_id=X&tool=Y -> only those (narrows the view only)
 
 Every decision is written to the audit log before it is returned. If the
 audit log can't be written, the answer is deny (503): no unrecorded allows.
@@ -41,7 +42,7 @@ from typing import Annotated, Any
 
 import uvicorn
 import uvicorn.config
-from fastapi import Depends, FastAPI, Header, Request
+from fastapi import Depends, FastAPI, Header, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import (
@@ -72,7 +73,9 @@ from warden.audit import AuditEntry, AuditEvent, AuditLog, EventKind, SQLiteAudi
 from warden.engine import evaluate
 from warden.limits import RateLimiter
 from warden.models import (
+    AGENT_ID_PATTERN,
     APPROVAL_ID_PATTERN,
+    TOOL_NAME_PATTERN,
     ActionRequest,
     Decision,
     EvaluateRequest,
@@ -271,6 +274,9 @@ def _display_safe(value: JsonValue, warnings: list[str]) -> JsonValue:
 
 
 ActionHash = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
+# ?ids=A,B,C on GET /v1/approvals: 1 to MAX_GROUP approval ids, comma-separated.
+_ID = APPROVAL_ID_PATTERN.strip("^$")
+IDS_QUERY_PATTERN = rf"^{_ID}(,{_ID}){{0,{MAX_GROUP - 1}}}$"
 
 
 class SingleDecision(BaseModel):
@@ -492,22 +498,44 @@ class _Warden:
 
     # --- Humans (admin) ----------------------------------------------------------------
 
-    def list_approvals(self, group: bool = False) -> JsonValue:
+    def list_approvals(
+        self,
+        group: bool = False,
+        ids: Annotated[str | None, Query(pattern=IDS_QUERY_PATTERN)] = None,
+        agent_id: Annotated[str | None, Query(pattern=AGENT_ID_PATTERN)] = None,
+        tool: Annotated[str | None, Query(pattern=TOOL_NAME_PATTERN)] = None,
+    ) -> JsonValue:
         """Pending approvals, every one in full. With group=true: grouped by
-        (agent_id, tool), never just a count (see docs/design/group-approvals.md)."""
+        (agent_id, tool), never just a count (see docs/design/group-approvals.md).
+
+        `ids` (comma-separated, at most 100), `agent_id` and `tool` only narrow what is
+        SHOWN, so a reviewer can still see and decide a few approvals while an agent
+        floods the queue. Decisions still take exact ids; unknown ids are just absent.
+        """
+        wanted = set(ids.split(",")) if ids else None
+
+        def shown(a: Approval) -> bool:
+            return (
+                (wanted is None or a.approval_id in wanted)
+                and (agent_id is None or a.agent_id == agent_id)
+                and (tool is None or a.tool == tool)
+            )
+
         if not group:
-            return [_approval_item(a, left) for a, left in self.approvals.pending()]
-        return {
-            "groups": [
-                {
-                    "agent_id": agent_id,
-                    "tool": tool,
-                    "count": len(items),
-                    "approvals": [_approval_item(a, left) for a, left in items],
-                }
-                for (agent_id, tool), items in self.approvals.pending_groups()
-            ]
-        }
+            return [_approval_item(a, left) for a, left in self.approvals.pending() if shown(a)]
+        groups: list[JsonValue] = []
+        for (group_agent, group_tool), items in self.approvals.pending_groups():
+            kept: list[JsonValue] = [_approval_item(a, left) for a, left in items if shown(a)]
+            if kept:
+                groups.append(
+                    {
+                        "agent_id": group_agent,
+                        "tool": group_tool,
+                        "count": len(kept),
+                        "approvals": kept,
+                    }
+                )
+        return {"groups": groups}
 
     def decide(
         self,
