@@ -14,9 +14,18 @@ from there to today proves everything in between is unchanged. It fails when:
 
 - a checkpointed row's hash differs (history was rewritten);
 - the log ends before a checkpoint (rows were cut from the end, or it's another file);
-- a checkpointed row was deleted by retention and can't be checked any more (use a
-  newer checkpoint). This fails closed on purpose: someone rewriting the log could
-  also make it look purged.
+- the NEWEST checkpoint of a table was deleted by retention and can't be checked any
+  more (save checkpoints more often than the retention period). This fails closed on
+  purpose: someone rewriting the log could also make it look purged.
+
+Older checkpoints that retention deleted are skipped (and counted): if the newest one
+still matches, the chain proves nothing before it changed, and the deleted rows are
+gone anyway. Without this, a file appended to every hour would start failing for an
+honest log as soon as retention passed its first line.
+
+Not covered: rows written after the newest checkpoint, and deleting the OLDEST rows
+dressed up as a retention purge (history before a checkpoint can be removed, not
+changed). Keep checkpoints where whoever can edit the database can't.
 
 Read-only. See docs/threat-model.md for what this does and doesn't protect.
 """
@@ -25,6 +34,7 @@ import json
 import sqlite3
 import sys
 from contextlib import closing
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Literal
@@ -127,18 +137,30 @@ def read_checkpoints(path: Path) -> list[Checkpoint]:
     return checkpoints
 
 
-def check_checkpoints(path: Path, checkpoints: list[Checkpoint]) -> list[str]:
-    """Problems found, empty if the log still contains every checkpoint. Call only
-    after verify_chain(path) reported an intact chain."""
+@dataclass(frozen=True)
+class CheckResult:
+    problems: list[str]  # empty = the log contains every checkable checkpoint
+    skipped: int  # older checkpoints whose rows retention has deleted
+
+
+def check_checkpoints(path: Path, checkpoints: list[Checkpoint]) -> CheckResult:
+    """Compare the log with saved checkpoints. Call only after verify_chain(path)
+    reported an intact chain."""
+    newest = {t: max(c.heads[t].id for c in checkpoints) for t in TABLES}
     problems: list[str] = []
+    skipped = 0
     with closing(sqlite3.connect(_uri(path), uri=True, timeout=5)) as conn:
         anchors = _anchors(conn)
         for number, checkpoint in enumerate(checkpoints, start=1):
             for table, head in sorted(checkpoint.heads.items()):
-                problem = _check_head(conn, table, head, anchors.get(table))
+                anchor = anchors.get(table)
+                if anchor is not None and 0 < head.id < anchor[0] and head.id < newest[table]:
+                    skipped += 1  # deleted by retention; a newer checkpoint covers it
+                    continue
+                problem = _check_head(conn, table, head, anchor)
                 if problem:
                     problems.append(f"checkpoint {number} ({checkpoint.created}), {problem}")
-    return problems
+    return CheckResult(problems, skipped)
 
 
 def _check_head(
@@ -160,8 +182,8 @@ def _check_head(
         return f"{table} row id {head.id}: hash differs (history was rewritten)"
     if anchor is not None and head.id < anchor[0]:
         return (
-            f"{table} row id {head.id}: deleted by retention, can't be checked "
-            f"(use a newer checkpoint)"
+            f"{table} row id {head.id}: deleted by retention, and no newer checkpoint "
+            f"(save checkpoints more often than the retention period)"
         )
     newest = conn.execute(f"SELECT MAX(id) FROM {table}").fetchone()[0]  # noqa: S608
     newest = max(int(newest or 0), anchor[0] if anchor else 0)
@@ -196,16 +218,18 @@ def run_expect(path: Path, expect: Path) -> int:
     """`warden audit verify --expect FILE`, after the chain itself verified."""
     try:
         checkpoints = read_checkpoints(expect)
-        problems = check_checkpoints(path, checkpoints)
+        result = check_checkpoints(path, checkpoints)
     except CheckpointError as exc:
         print(f"warden: {exc}", file=sys.stderr)
         return 2
     except sqlite3.Error as exc:
         print(f"warden: can't read {path}: {type(exc).__name__}", file=sys.stderr)
         return 2
-    if problems:
-        for problem in problems:
+    if result.problems:
+        for problem in result.problems:
             print(f"BROKEN: {problem}")
         return 1
-    print(f"OK: the hash chain is intact and contains all {len(checkpoints)} checkpoints.")
+    print(f"OK: the hash chain is intact and matches the {len(checkpoints)} checkpoints.")
+    if result.skipped:
+        print(f"({result.skipped} older table heads were deleted by retention and skipped.)")
     return 0

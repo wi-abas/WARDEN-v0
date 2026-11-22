@@ -56,9 +56,15 @@ uv run warden audit verify --expect checkpoints.jsonl
 - `verify --expect` first checks the chain, then that each checkpointed row still has
   its saved hash. The intact chain from that row to today proves nothing in between
   changed. It fails on: a different hash (history rewritten), a log that ends before
-  the checkpoint (tail cut, or another file), and a checkpointed row that retention
-  has since deleted. The last one fails closed on purpose: a rewrite could also be
-  disguised as a purge. Use a checkpoint newer than the retention period.
+  the checkpoint (tail cut, or another file), and a table's NEWEST checkpoint having
+  been deleted by retention. That one fails closed on purpose: a rewrite could also be
+  disguised as a purge. Save checkpoints more often than the retention period.
+- Older checkpoints that retention deleted are skipped and counted, so a file appended
+  to every hour keeps working for years. Safe: if the newest checkpoint matches, the
+  chain proves nothing before it changed.
+- Not covered: rows written after the newest checkpoint, and removing the oldest rows
+  dressed up as a retention purge (history before a checkpoint can be deleted, not
+  changed).
 - A checkpoint exactly at a retention anchor stays checkable (the anchor keeps its hash).
 - The file is strict: one invalid line refuses the whole file, so a garbled file can't
   pass as "nothing to check". Max 10 MB / 100,000 checkpoints.

@@ -169,3 +169,11 @@ def test_broken_policy_is_an_error_not_deny_all(
     # A broken policy denies everything on the server; a test run must say so, not pass.
     assert main(["test", str(path)]) == 2
     assert message in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("name", ["", "a\nFAKE PASS", "\x1b[2Jcleared", "x\u202eevil", "x" * 201])
+def test_case_names_are_safe_to_print(tmp_path: Path, name: str) -> None:
+    """Names are printed to terminals and CI logs: no newlines, escapes or bidi tricks."""
+    path = write(tmp_path, [{**PAY_SMALL, "name": name, "expect": "allow"}])
+    with pytest.raises(PolicyTestError, match="name"):
+        load_tests(path)

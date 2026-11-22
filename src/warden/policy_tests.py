@@ -32,7 +32,7 @@ from typing import Annotated
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError
 
 from warden.engine import evaluate
-from warden.models import AGENT_ID_PATTERN, ActionRequest, Decision
+from warden.models import AGENT_ID_PATTERN, MESSAGE_PATTERN, ActionRequest, Decision
 from warden.policy import (
     DuplicateKeyError,
     Policy,
@@ -56,7 +56,8 @@ class CaseRequest(BaseModel):
 class PolicyCase(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    name: Annotated[str, Field(min_length=1, max_length=200)]
+    # Printed to terminals and CI logs: one line, no control or direction characters.
+    name: Annotated[str, Field(pattern=MESSAGE_PATTERN)]
     request: CaseRequest
     expect: Decision
     rule: str | None = None  # checked only if given; null = "no rule matched"

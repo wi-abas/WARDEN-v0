@@ -61,7 +61,7 @@ def head(db: Path) -> str:
 
 
 def expect(db: Path, checkpoints: Path) -> list[str]:
-    return check_checkpoints(db, read_checkpoints(checkpoints))
+    return check_checkpoints(db, read_checkpoints(checkpoints)).problems
 
 
 @pytest.fixture
@@ -175,7 +175,7 @@ def test_checkpoint_older_than_retention_fails_closed(tmp_path: Path) -> None:
     fill(log, 1, when=START + timedelta(days=100))
     log.purge_older_than(30)
     problems = expect(db, old)
-    assert problems and all("deleted by retention, can't be checked" in p for p in problems)
+    assert problems and all("deleted by retention, and no newer checkpoint" in p for p in problems)
 
 
 def test_head_refuses_a_broken_chain(db: Path) -> None:
@@ -271,7 +271,7 @@ def test_cli_head_and_verify(db: Path, tmp_path: Path, capsys: pytest.CaptureFix
     assert json.loads(line)["heads"]["decisions"]["id"] == 5
     saved = save(tmp_path, line)
     assert cli.main(["audit", "verify", "--audit-db", str(db), "--expect", str(saved)]) == 0
-    assert "contains all 1 checkpoints" in capsys.readouterr().out
+    assert "matches the 1 checkpoints" in capsys.readouterr().out
     rewrite_everything(db, "edited")
     assert cli.main(["audit", "verify", "--audit-db", str(db), "--expect", str(saved)]) == 1
     assert "BROKEN: checkpoint 1" in capsys.readouterr().out
@@ -319,3 +319,35 @@ def test_cli_broken_chain_wins_over_expect(
         conn.execute("UPDATE decisions SET reason = 'x' WHERE id = 3")
     assert cli.main(["audit", "verify", "--audit-db", str(db), "--expect", str(saved)]) == 1
     assert "BROKEN: decisions row id 3" in capsys.readouterr().out
+
+
+def test_hourly_checkpoints_keep_working_through_retention(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Found in the re-audit: every old checkpoint retention had deleted counted as a
+    failure, so an honest log with a growing checkpoint file failed after 90 days."""
+    db = tmp_path / "long.db"
+    now = [START]
+    log = SQLiteAuditLog(db, retention_days=None, clock=lambda: now[0])
+    lines = []
+    for day in range(120):
+        now[0] = START + timedelta(days=day)
+        log.record(entry(now[0]))
+        lines.append(head(db))
+        log.purge_older_than(90)
+    saved = save(tmp_path, *lines)
+    result = check_checkpoints(db, read_checkpoints(saved))
+    assert result.problems == [] and result.skipped > 0
+    assert cli.main(["audit", "verify", "--audit-db", str(db), "--expect", str(saved)]) == 0
+    assert "deleted by retention and skipped" in capsys.readouterr().out
+    # A rewrite is still found through the newest checkpoint.
+    rewrite_everything(db, "edited")
+    assert check_checkpoints(db, read_checkpoints(saved)).problems
+
+
+def test_skipping_never_hides_a_mismatch_in_a_kept_row(db: Path, tmp_path: Path) -> None:
+    old = head(db)
+    fill(SQLiteAuditLog(db, retention_days=None), 2)
+    new = json.loads(head(db))
+    new["heads"]["decisions"]["hash"] = "b" * 64  # newest disagrees
+    assert expect(db, save(tmp_path, old, json.dumps(new)))

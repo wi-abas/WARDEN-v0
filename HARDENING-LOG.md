@@ -14,7 +14,7 @@ Runs alongside `feature/group-approvals`; avoids `approvals.py` and `api.py`.
 - [x] Coverage-guided fuzzing: 5 targets, Hypothesis in every run, Atheris weekly in CI
 - [x] Release workflow (prepared, not run): `.github/workflows/release.yml`, `docs/releasing.md`
 - [x] Threat model: `docs/threat-model.md`, linked from SECURITY.md
-- [ ] Re-audit of this batch
+- [x] Re-audit of this batch (2 fixes, below)
 
 ## Decisions
 
@@ -67,6 +67,24 @@ Runs alongside `feature/group-approvals`; avoids `approvals.py` and `api.py`.
   `@` (SMTPUTF8), a non-ASCII URL fragment, unassigned code points in a path, and
   canonical combining characters. None move a path out of /workspace/, change a URL
   host or an email domain. The oracles were narrowed to the real invariant.
+
+- **Re-audit: checkpoints failed for an honest log (my own bug).** Every old checkpoint
+  that retention had deleted counted as a failure, so a file appended to every hour
+  failed `verify --expect` once retention passed its first line (simulated: 120 days,
+  90-day retention, 28 failures). Now only a table's NEWEST checkpoint must be
+  checkable; older deleted ones are skipped and counted. Same strength: if the newest
+  matches, the chain proves nothing before it changed. Still fails closed when even the
+  newest was deleted.
+- **Re-audit: policy-test case names went to terminals unfiltered.** A test file from
+  a pull request could put newlines ("FAKE PASS"), ANSI escapes or bidi characters in a
+  name, printed into CI logs. Names now use the rule-message pattern.
+- **Re-audit, checked and fine:** workflows take no untrusted input in `run:` (tag and
+  matrix values go through env); release build has no OIDC token; the HTTP fuzz target
+  reaches the engine (200s, not only rejections); deeply nested `warden test` files are
+  refused at load.
+- **Known, documented, not fixed:** checkpoints don't cover rows after the newest one,
+  and the oldest rows can be deleted dressed up as a retention purge (removed, not
+  changed). Inherent to retention; in the design note and threat model.
 
 ## Blocked / needs Wissam
 
