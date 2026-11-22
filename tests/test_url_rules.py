@@ -107,3 +107,20 @@ def test_trailing_dot_and_empty_port_cannot_dodge_text_rules(url: str) -> None:
 )
 def test_real_ports_and_ipv6_still_work(url: str) -> None:
     assert ask(DENY_EVIL, url) == Decision.ALLOW
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "ht!tp://api.mycompany.com/x",
+        "://api.mycompany.com/x",
+        "h tp://api.mycompany.com/x",
+        "https://[::1/x",
+        "https://[]/x",
+        "https://[::1]x/",
+        "https://[::1]:/x",
+        "https://[::1]:ab/x",
+    ],
+)
+def test_bad_schemes_and_malformed_ipv6_are_refused(url: str) -> None:
+    assert ask(DENY_EVIL, url) == Decision.DENY
