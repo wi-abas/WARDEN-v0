@@ -85,3 +85,24 @@ def test_url_tricks_cannot_dodge_a_deny_rule(url: str) -> None:
 
 def test_other_hosts_still_allowed_by_the_deny_list() -> None:
     assert ask(DENY_EVIL, "https://good.com/x") == Decision.ALLOW
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://evil.net./x",
+        "https://evil.net:/x",
+        "https://evil.net::/x",
+        "https://evil.net:./x",
+        "https://EVIL.NET./x",
+    ],
+)
+def test_trailing_dot_and_empty_port_cannot_dodge_text_rules(url: str) -> None:
+    assert ask(DENY_EVIL, url) == Decision.DENY
+
+
+@pytest.mark.parametrize(
+    "url", ["https://good.com:8443/x", "https://[::1]:8000/x", "https://[::1]/x"]
+)
+def test_real_ports_and_ipv6_still_work(url: str) -> None:
+    assert ask(DENY_EVIL, url) == Decision.ALLOW
