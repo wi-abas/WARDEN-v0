@@ -6,6 +6,7 @@ Every model here is strict:
 - objects can't be changed after creation (frozen=True).
 """
 
+import re
 from enum import StrEnum
 from math import isfinite
 from typing import Annotated, TypeGuard
@@ -27,6 +28,9 @@ APPROVAL_ID_PATTERN = r"^[A-Za-z0-9_\-]{16,64}$"
 MAX_ARGUMENTS = 50
 MAX_CONDITIONS = 20
 MAX_IN_VALUES = 100
+# A host name as written in a policy: lowercase ASCII (use punycode "xn--..." for
+# international names), optionally starting with "." to include subdomains.
+HOST_PATTERN = r"^\.?[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$"
 
 
 class Decision(StrEnum):
@@ -81,6 +85,9 @@ class Op(StrEnum):
     ENDSWITH = "endswith"
     EXISTS = "exists"  # the argument is present (takes no value)
     MISSING = "missing"  # the argument is absent (takes no value)
+    # The URL's real host is one of these (any scheme/port/case). ".x.com" = x.com
+    # and any subdomain of it.
+    HOST_IN = "host_in"
 
 
 NUMBER_OPS = {Op.GT, Op.GTE, Op.LT, Op.LTE}
@@ -134,6 +141,17 @@ class Condition(BaseModel):
             )
             if not ok:
                 raise ValueError(f"'in' needs a list of 1 to {MAX_IN_VALUES} text/number values")
+        if self.op is Op.HOST_IN:
+            ok = (
+                isinstance(self.value, list)
+                and 1 <= len(self.value) <= MAX_IN_VALUES
+                and all(isinstance(v, str) and re.fullmatch(HOST_PATTERN, v) for v in self.value)
+            )
+            if not ok:
+                raise ValueError(
+                    f"'host_in' needs a list of 1 to {MAX_IN_VALUES} lowercase host names, "
+                    'e.g. ["api.example.com", ".example.com"]'
+                )
         if self.op in {Op.EQ, Op.NEQ} and not is_scalar(self.value):
             raise ValueError(f"'{self.op}' needs a text, number or true/false value")
         return self

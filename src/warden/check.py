@@ -19,6 +19,8 @@ Warnings: the policy loads, but probably doesn't do what you meant:
         a deny-list in disguise. Every value nobody thought of is allowed.
 - W011  a URL prefix without "/" after the host: "https://api.example.com"
         also matches "https://api.example.com.evil.net/...".
+- W012  a deny / require_approval rule compares a URL as text. "http://...",
+        "https://evil.net:443/" or "https://evil.net./" slip past; use host_in.
 - W008  an email-domain check ("...@example.com") is case-sensitive, so
         "x@EXAMPLE.com" slips past it. Add "ignore_case": true.
 
@@ -141,6 +143,16 @@ def _warnings(policy: Policy) -> list[str]:
                     f'"/ETC/..." is the same file as "/etc/..." on macOS and Windows, and '
                     f'"HTTPS://EVIL.NET/" the same site as "https://evil.net/". '
                     f'Add "ignore_case": true.'
+                )
+            if (
+                rule.effect is not Decision.ALLOW
+                and c.op in {Op.EQ, Op.IN, Op.STARTSWITH, Op.ENDSWITH}
+                and any(isinstance(t, str) and "://" in t for t in texts)
+            ):
+                out.append(
+                    f'W012: rule "{rule.id}" blocks a URL by comparing text; "http://", a port '
+                    f'or a trailing dot in the host slips past. Use "op": "host_in" with the '
+                    f"host names instead."
                 )
             if rule.effect is Decision.ALLOW and c.op in {Op.NEQ, Op.MISSING}:
                 out.append(

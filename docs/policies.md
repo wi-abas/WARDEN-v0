@@ -69,6 +69,7 @@ A rule can add `when` conditions. It then matches only if **all** of them hold:
 | `in` | is one of | list of 1–100 text/number values |
 | `startswith`, `endswith` | text starts / ends with | non-empty text |
 | `exists`, `missing` | argument is present / absent | *(no value)* |
+| `host_in` | a URL's real host is one of these (any scheme, port or case; `".x.com"` = x.com and its subdomains) | list of lowercase host names |
 
 - **Warden never gives a looser answer because an argument is missing.** On a `deny` or
   `require_approval` rule a missing argument counts as matching (the rule applies); on an
@@ -80,6 +81,12 @@ A rule can add `when` conditions. It then matches only if **all** of them hold:
 - Add `"ignore_case": true` to compare text without caring about upper/lower case
   (works with `eq`, `neq`, `in`, `startswith`, `endswith`). Use it for email domains:
   `{ "arg": "to", "op": "endswith", "value": "@mycompany.com", "ignore_case": true }`.
+- **Blocking or allowing sites:** use `host_in`, not `startswith`. It compares the URL's
+  real host, so `http://`, ports, upper case and trailing dots can't dodge it:
+  `{ "arg": "url", "op": "host_in", "value": ["evil.net", ".evil.net"] }`.
+- Text a rule compares may not contain invisible characters or look-alike Unicode
+  (full-width letters, look-alike dots), and paths may not contain `%`-escapes; such
+  requests are denied.
 - Conditions only look at top-level arguments. No regex, no code.
 
 ## Tool argument lists
@@ -123,5 +130,6 @@ do what you meant:
 | W009 | A deny rule compares a path or URL case-sensitively (`/ETC/passwd`, `HTTPS://EVIL.NET/` slip past) |
 | W010 | An `allow` rule uses `neq` or `missing` ("allow everything except X"), a deny-list in disguise |
 | W011 | A URL prefix has no `/` after the host (`"https://api.x.com"` also matches `"https://api.x.com.evil.net"`) |
+| W012 | A deny rule blocks a URL by comparing text; use `host_in` instead |
 
 Exit code `1` on errors; with `--strict`, also on warnings (useful in CI).

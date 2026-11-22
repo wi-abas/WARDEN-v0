@@ -26,6 +26,7 @@ import logging
 import re
 import unicodedata
 from collections.abc import Iterable, Mapping
+from urllib.parse import urlsplit
 
 from pydantic import JsonValue
 
@@ -151,6 +152,24 @@ def _is_clean_url(text: str) -> bool:
     return not slash or _is_clean_path("/" + _ANY_PERCENT_ESCAPE.sub("x", path_only))
 
 
+def _url_host(url: str, condition: Condition) -> str:
+    """The real host of a clean URL, normalized the way network software sees it:
+    lowercase, no port, no trailing dot, international names in punycode."""
+    _check_unicode(url, condition)
+    if any(dot in url for dot in _LOOKALIKE_DOTS) or not _is_clean_url(url):
+        raise _UncheckableArgument(condition.arg)
+    try:
+        host = urlsplit(url).hostname or ""
+        host = host.rstrip(".")
+        if not host.isascii():
+            host = host.encode("idna").decode("ascii")
+    except (ValueError, UnicodeError):
+        raise _UncheckableArgument(condition.arg) from None
+    if not host:
+        raise _UncheckableArgument(condition.arg)
+    return host.lower()
+
+
 def _is_plain_email(text: str) -> bool:
     """Exactly one bare address: no spaces, no display names, no lists, no trailing dot."""
     return (
@@ -194,6 +213,16 @@ def _holds(condition: Condition, arguments: dict[str, JsonValue]) -> bool:
     actual = arguments[condition.arg]
     expected = condition.value
     op = condition.op
+
+    if op is Op.HOST_IN:
+        if not isinstance(actual, str) or not isinstance(expected, list):
+            raise _UncheckableArgument(condition.arg)
+        host = _url_host(actual, condition)
+        return any(
+            host == entry or (entry.startswith(".") and (host == entry[1:] or host.endswith(entry)))
+            for entry in expected
+            if isinstance(entry, str)
+        )
 
     if op in NUMBER_OPS:
         if not is_number(actual):
