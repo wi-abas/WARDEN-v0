@@ -23,6 +23,7 @@ Security properties (each one is tested in tests/test_engine.py):
 """
 
 import logging
+import re
 from collections.abc import Iterable, Mapping
 
 from pydantic import JsonValue
@@ -88,9 +89,16 @@ def _looks_like_email(value: str) -> bool:
 _EMAIL_TRICK_CHARS = set("<>,;\"'()[]")
 
 
+# Percent-escapes that a decoding tool would turn into ".", "/", "\\" or "%" (double
+# encoding): "/data/%2e%2e/etc" is "/data/../etc" once decoded.
+_ENCODED_SEPARATORS = re.compile(r"%(2e|2f|5c|25)", re.IGNORECASE)
+_ANY_PERCENT_ESCAPE = re.compile(r"%[0-9a-f]{2}", re.IGNORECASE)
+
+
 def _is_clean_path(text: str) -> bool:
-    """No tricks that make one path look like another: //, /./, /../, backslashes."""
-    if "\\" in text or "\x00" in text:
+    """No tricks that make one path look like another: //, /./, /../, backslashes, and
+    no %-escapes at all (a decoding tool would read "/%65tc" as "/etc")."""
+    if "\\" in text or "\x00" in text or _ANY_PERCENT_ESCAPE.search(text):
         return False
     segments = text.split("/")
     inner = segments[1:-1] if text.startswith("/") else segments[:-1]
@@ -111,9 +119,13 @@ def _is_clean_url(text: str) -> bool:
     if not scheme or not scheme.replace("+", "").replace("-", "").replace(".", "").isalnum():
         return False
     host, slash, path = rest.partition("/")
-    if not host or "@" in host:
+    if not host or "@" in host or "%" in host:
         return False
-    return not slash or _is_clean_path("/" + path)
+    if _ENCODED_SEPARATORS.search(path):
+        return False  # "/public/%2e%2e/admin" escapes "/public/" once decoded
+    # Ordinary escapes like %20 are normal in URL paths; check the rest for //, /./, /../
+    path_only = path.split("?", 1)[0].split("#", 1)[0]
+    return not slash or _is_clean_path("/" + _ANY_PERCENT_ESCAPE.sub("x", path_only))
 
 
 def _is_plain_email(text: str) -> bool:
