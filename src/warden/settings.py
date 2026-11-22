@@ -19,6 +19,7 @@ exposure until real authentication exists).
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from warden.audit import DEFAULT_AUDIT_PATH, DEFAULT_RETENTION_DAYS
 from warden.policy import DEFAULT_POLICY_PATH
@@ -70,7 +71,7 @@ def resolve(
             return env[var], var
         return None
 
-    values: dict = {}
+    values: dict[str, Any] = {}
 
     if chosen := pick(policy, "WARDEN_POLICY"):
         raw, name = chosen

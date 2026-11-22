@@ -1,5 +1,7 @@
 # WARDEN-v0
 
+[![CI](https://github.com/wi-abas/WARDEN-v0/actions/workflows/ci.yml/badge.svg)](https://github.com/wi-abas/WARDEN-v0/actions/workflows/ci.yml)
+
 A deterministic, local-first policy layer for AI agent tool calls.
 
 Before an agent runs a tool, it asks Warden. Warden checks a rulebook and answers:
@@ -267,6 +269,7 @@ Each of these is covered by tests in `tests/`.
 uv run pytest                  # tests
 uv run ruff check .            # lint (includes security checks)
 uv run ruff format .           # format
+uv run mypy                    # type check (strict)
 ```
 
 | File | Purpose |

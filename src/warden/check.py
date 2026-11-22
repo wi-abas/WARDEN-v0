@@ -74,7 +74,7 @@ def _warnings(policy: Policy) -> list[str]:
                     )
                     break
 
-        seen: dict[tuple, str] = {}
+        seen: dict[tuple[Decision, frozenset[tuple[str, str, str]]], str] = {}
         for rule in tool_rules:
             key = (rule.effect, _conditions_key(rule))
             if key in seen:

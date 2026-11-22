@@ -65,11 +65,15 @@ def _comparable(a: JsonValue, b: JsonValue) -> bool:
     return (is_number(a) and is_number(b)) or type(a) is type(b)
 
 
-def _fold(value: JsonValue, condition: Condition) -> JsonValue:
+def _fold(text: str, condition: Condition) -> str:
     """Lower-case text (casefold handles e.g. German ß) when ignore_case is set."""
-    if condition.ignore_case and isinstance(value, str):
-        return value.casefold()
-    return value
+    return text.casefold() if condition.ignore_case else text
+
+
+def _same(actual: JsonValue, expected: JsonValue, condition: Condition) -> bool:
+    if isinstance(actual, str) and isinstance(expected, str):
+        return _fold(actual, condition) == _fold(expected, condition)
+    return _comparable(actual, expected) and actual == expected
 
 
 def _holds(condition: Condition, arguments: dict[str, JsonValue]) -> bool:
@@ -87,6 +91,8 @@ def _holds(condition: Condition, arguments: dict[str, JsonValue]) -> bool:
     if op in NUMBER_OPS:
         if not is_number(actual):
             raise _UncheckableArgument(condition.arg)
+        if not is_number(expected):  # can't happen: the policy loader checked it
+            raise ValueError("policy value is not a number")
         if op is Op.GT:
             return actual > expected
         if op is Op.GTE:
@@ -99,16 +105,16 @@ def _holds(condition: Condition, arguments: dict[str, JsonValue]) -> bool:
         # ".." could escape a path prefix: "/data/../etc/passwd" starts with "/data/".
         if not isinstance(actual, str) or (op is Op.STARTSWITH and ".." in actual):
             raise _UncheckableArgument(condition.arg)
+        if not isinstance(expected, str):  # can't happen: the policy loader checked it
+            raise ValueError("policy value is not text")
         text, affix = _fold(actual, condition), _fold(expected, condition)
         return text.startswith(affix) if op is Op.STARTSWITH else text.endswith(affix)
 
     # eq / neq / in: the argument must have the same type as the policy value(s).
-    choices = expected if op is Op.IN else [expected]
+    choices = expected if isinstance(expected, list) else [expected]
     if not any(_comparable(actual, choice) for choice in choices):
         raise _UncheckableArgument(condition.arg)
-    found = any(
-        _comparable(actual, c) and _fold(actual, condition) == _fold(c, condition) for c in choices
-    )
+    found = any(_same(actual, choice, condition) for choice in choices)
     if op is Op.NEQ:
         return not found
     return found  # Op.EQ, Op.IN

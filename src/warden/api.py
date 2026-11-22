@@ -26,6 +26,7 @@ import secrets
 import sys
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import uvicorn
 import uvicorn.config
@@ -264,7 +265,7 @@ def create_app(
     return app
 
 
-def log_config() -> dict:
+def log_config() -> dict[str, Any]:
     """Uvicorn's logging setup, plus Warden's own loggers at INFO.
 
     Without this, Warden's log lines (decisions, policy errors) are not shown.

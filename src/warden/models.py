@@ -8,7 +8,7 @@ Every model here is strict:
 
 from enum import StrEnum
 from math import isfinite
-from typing import Annotated
+from typing import Annotated, TypeGuard
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
@@ -70,7 +70,7 @@ PRESENCE_OPS = {Op.EXISTS, Op.MISSING}
 TEXT_OPS = {Op.EQ, Op.NEQ, Op.IN, Op.STARTSWITH, Op.ENDSWITH}  # may use ignore_case
 
 
-def is_number(value: object) -> bool:
+def is_number(value: object) -> TypeGuard[int | float]:
     """True for real numbers. bool is excluded: in Python, True == 1."""
     if isinstance(value, bool):
         return False
@@ -109,8 +109,12 @@ class Condition(BaseModel):
             if self.op not in TEXT_OPS or not all(isinstance(v, str) for v in values):
                 raise ValueError("'ignore_case' only works with text values")
         if self.op is Op.IN:
-            ok = isinstance(self.value, list) and 1 <= len(self.value) <= MAX_IN_VALUES
-            if not ok or not all(is_scalar(v) for v in self.value):
+            ok = (
+                isinstance(self.value, list)
+                and 1 <= len(self.value) <= MAX_IN_VALUES
+                and all(is_scalar(v) for v in self.value)
+            )
+            if not ok:
                 raise ValueError(f"'in' needs a list of 1 to {MAX_IN_VALUES} text/number values")
         if self.op in {Op.EQ, Op.NEQ} and not is_scalar(self.value):
             raise ValueError(f"'{self.op}' needs a text, number or true/false value")

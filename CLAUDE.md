@@ -83,8 +83,9 @@ Use **uv** for everything. Never call `pip` directly and never edit `uv.lock` by
 | Run a single test | `uv run pytest tests/test_x.py::test_name` |
 | Lint | `uv run ruff check .` |
 | Format | `uv run ruff format .` |
+| Type check | `uv run mypy` |
 
-Before you call a change done, run `uv run ruff check . && uv run ruff format --check . && uv run pytest` and make sure it passes.
+Before you call a change done, run `uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run pytest` and make sure it passes.
 
 ## Layout
 

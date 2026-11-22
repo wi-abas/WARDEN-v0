@@ -10,6 +10,7 @@ import secrets
 import sys
 import tempfile
 from pathlib import Path
+from typing import Any
 
 from fastapi.testclient import TestClient
 
@@ -39,11 +40,11 @@ class Demo:
         expected: str,
         approval_id: str | None = None,
         **arguments: object,
-    ) -> dict:
-        body: dict = {"agent_id": "demo-agent", "tool": tool, "arguments": arguments}
+    ) -> dict[str, Any]:
+        body: dict[str, Any] = {"agent_id": "demo-agent", "tool": tool, "arguments": arguments}
         if approval_id:
             body["approval_id"] = approval_id
-        result = self.client.post("/v1/evaluate", json=body).json()
+        result: dict[str, Any] = self.client.post("/v1/evaluate", json=body).json()
         mark = "✓" if result["decision"] == expected else "✗ UNEXPECTED"
         self.ok &= result["decision"] == expected
         print(f"  {story}")

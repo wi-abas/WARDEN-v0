@@ -93,10 +93,31 @@ class AuditEvent(BaseModel):
     action_hash: str | None = None
 
     @classmethod
-    def now(cls, kind: EventKind, reason: str, **fields: object) -> "AuditEvent":
-        if isinstance(fields.get("path"), str):
-            fields["path"] = fields["path"][:MAX_PATH_CHARS]
-        return cls(timestamp=datetime.now(UTC).isoformat(), kind=kind, reason=reason, **fields)
+    def now(
+        cls,
+        kind: EventKind,
+        reason: str,
+        *,
+        http_status: int | None = None,
+        method: str | None = None,
+        path: str | None = None,
+        approval_id: str | None = None,
+        agent_id: str | None = None,
+        tool: str | None = None,
+        action_hash: str | None = None,
+    ) -> "AuditEvent":
+        return cls(
+            timestamp=datetime.now(UTC).isoformat(),
+            kind=kind,
+            reason=reason,
+            http_status=http_status,
+            method=method,
+            path=path[:MAX_PATH_CHARS] if path is not None else None,
+            approval_id=approval_id,
+            agent_id=agent_id,
+            tool=tool,
+            action_hash=action_hash,
+        )
 
 
 class AuditLog(Protocol):
