@@ -37,6 +37,15 @@
   `/` after the host), W009 now covers URLs, W004 no longer flags rules differing only in
   `ignore_case`.
 
+### Bypass fixes (from fuzzing tens of thousands of disguised inputs)
+- `%`-encoding can't escape path or URL rules (`/data/%2e%2e/etc/passwd`).
+- Spaces at the start or end of a path are refused.
+- Invisible characters (zero-width, soft hyphen, direction marks) and look-alike Unicode
+  (full-width letters, look-alike dots) in compared text are refused.
+- New `host_in` op compares a URL's real host (any scheme, port or case, punycode); W012
+  suggests it for URL deny rules written as text.
+- URL hosts with a trailing dot, an empty port or `::` are refused.
+
 ## v0.2.0 (2026-11-22)
 
 First release meant for other people to try. Still an early MVP, **not production-secure**:
