@@ -26,6 +26,7 @@ import secrets
 import sys
 import threading
 import time
+import unicodedata
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -138,6 +139,32 @@ class HostCheck:
                 await _deny_response(400, "host not allowed")(scope, receive, send)
                 return
         await self.app(scope, receive, send)
+
+
+def _is_deceptive_char(ch: str) -> bool:
+    """Characters that make text DISPLAY differently from what it is: invisible or
+    control characters, direction overrides (U+202E reverses what follows), and
+    compatibility look-alikes such as the full-width "ｅ"."""
+    return unicodedata.category(ch) in {"Cf", "Cc"} or unicodedata.normalize("NFKC", ch) != ch
+
+
+def _display_safe(value: JsonValue, warnings: list[str]) -> JsonValue:
+    """A copy of `value` with deceptive characters written as visible escapes (\\u202e),
+    so an approver can't be shown something other than the real action."""
+    if isinstance(value, str):
+        if not any(_is_deceptive_char(ch) for ch in value):
+            return value
+        warnings.append("contains hidden or look-alike characters (shown as \\uXXXX)")
+        return "".join(f"\\u{ord(ch):04x}" if _is_deceptive_char(ch) else ch for ch in value)
+    if isinstance(value, list):
+        return [_display_safe(item, warnings) for item in value]
+    if isinstance(value, dict):
+        out: dict[str, JsonValue] = {}
+        for key, item in value.items():
+            safe_key = _display_safe(key, warnings)
+            out[safe_key if isinstance(safe_key, str) else key] = _display_safe(item, warnings)
+        return out
+    return value
 
 
 class _AdminKeyError(Exception):
@@ -270,17 +297,24 @@ class _Warden:
     # --- Humans (admin) ----------------------------------------------------------------
 
     def list_approvals(self) -> list[dict[str, JsonValue]]:
-        return [
-            {
-                "approval_id": a.approval_id,
-                "agent_id": a.agent_id,
-                "tool": a.tool,
-                "arguments": a.arguments,  # the human must see what they approve
-                "action_hash": a.action_hash,
-                "expires_in_seconds": int(seconds_left),
-            }
-            for a, seconds_left in self.approvals.pending()
-        ]
+        items: list[dict[str, JsonValue]] = []
+        for a, seconds_left in self.approvals.pending():
+            warnings: list[str] = []
+            shown = _display_safe(a.arguments, warnings)
+            items.append(
+                {
+                    "approval_id": a.approval_id,
+                    "agent_id": a.agent_id,
+                    "tool": a.tool,
+                    # The human must see what they approve, and see it HONESTLY: hidden
+                    # characters are shown escaped (see _display_safe).
+                    "arguments": shown,
+                    "warnings": [w for w in sorted(set(warnings))],
+                    "action_hash": a.action_hash,
+                    "expires_in_seconds": int(seconds_left),
+                }
+            )
+        return items
 
     def decide(self, approval_id: str, approve: bool, request: Request) -> JSONResponse:
         try:
