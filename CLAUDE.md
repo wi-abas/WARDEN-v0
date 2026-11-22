@@ -85,6 +85,7 @@ Use **uv** for everything. Never call `pip` directly and never edit `uv.lock` by
 | Verify the audit chain | `uv run warden audit verify [--expect FILE]` |
 | Save an audit checkpoint | `uv run warden audit head` |
 | Run policy tests | `uv run warden test examples/policy-tests.json` |
+| Fuzz (deep, local) | `HYPOTHESIS_PROFILE=deep uv run pytest tests/test_fuzz_targets.py` |
 | Show / change rate limits | `uv run warden limits [set\|reset]` |
 | Mutation tests (slow) | `uv run python scripts/mutation.py --target engine` |
 | Benchmark | `uv run python scripts/benchmark.py` |

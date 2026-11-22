@@ -11,7 +11,7 @@ Runs alongside `feature/group-approvals`; avoids `approvals.py` and `api.py`.
   CI step.
 - [x] Fix: deeply nested JSON (found while preparing fuzzing)
 - [x] Stricter email check (found by fuzzing)
-- [ ] Coverage-guided fuzzing
+- [x] Coverage-guided fuzzing: 5 targets, Hypothesis in every run, Atheris weekly in CI
 - [ ] Release workflow (prepared, not run)
 - [ ] Threat model
 - [ ] Re-audit of this batch
@@ -25,6 +25,12 @@ Runs alongside `feature/group-approvals`; avoids `approvals.py` and `api.py`.
 
 - **Invalid input in a policy test counts as deny with no rule**, matching what the
   server answers. A broken *policy* is an error (exit 2), never a silent deny-all pass.
+
+- **Atheris as a Linux-only dependency group** (`fuzz`, `atheris==3.1.0; sys_platform ==
+  'linux'`), so it's hash-locked in uv.lock but never installed on macOS or for users.
+  It can't build on macOS (needs a libFuzzer clang), so the Atheris runner itself was
+  NOT run locally; the targets were (100,000 inputs through Hypothesis, clean). The
+  weekly workflow is the first real Atheris run: check it once.
 
 ## Findings
 

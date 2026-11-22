@@ -3,6 +3,9 @@
 ## Unreleased
 
 ### Hardening
+- **Fuzzing**: five fuzz targets with independent oracles (`tests/fuzz_targets.py`),
+  run through Hypothesis in every test run and weekly with Atheris in CI
+  (`scripts/fuzz.py`, `.github/workflows/fuzz.yml`; Linux-only `fuzz` dependency group).
 - **Stricter email check** (found by fuzzing): an address a rule compares must have a
   plain name before the `@`. `user%evil.net@x.com` (percent hack), `host!user@x.com`
   (bang path), `a:b@x.com`, `@x.com`, `.a@x.com`, `a..b@x.com` are now denied.

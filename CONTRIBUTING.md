@@ -25,6 +25,27 @@ Before a security-relevant change, run it much harder:
 HYPOTHESIS_PROFILE=deep uv run pytest tests/test_properties.py   # 5,000 inputs per rule
 ```
 
+### Fuzzing
+
+`tests/fuzz_targets.py` holds five fuzz targets (policy parsing, evaluation, path / URL /
+email bypasses, the MCP proxy, the HTTP API). Each fails only on a real bug, checked
+against an independent oracle. They run in the normal test suite through Hypothesis:
+
+```sh
+HYPOTHESIS_PROFILE=deep uv run pytest tests/test_fuzz_targets.py   # 5,000 inputs each
+```
+
+CI also runs them weekly with coverage guidance through
+[Atheris](https://github.com/google/atheris) (`.github/workflows/fuzz.yml`). On Linux:
+
+```sh
+uv sync --group fuzz
+uv run python scripts/fuzz.py bypass -max_total_time=300
+```
+
+Atheris doesn't build on macOS. When a target fails, add the input as a regression test
+first, then fix.
+
 ## Rules
 
 - **Decisions stay deterministic.** No network, no randomness, no LLMs in the policy engine.
