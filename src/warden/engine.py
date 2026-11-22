@@ -100,6 +100,8 @@ def _is_clean_path(text: str) -> bool:
     no %-escapes at all (a decoding tool would read "/%65tc" as "/etc")."""
     if "\\" in text or "\x00" in text or _ANY_PERCENT_ESCAPE.search(text):
         return False
+    if text != text.strip():
+        return False  # " /etc/passwd" is "/etc/passwd" to a tool that trims spaces
     segments = text.split("/")
     inner = segments[1:-1] if text.startswith("/") else segments[:-1]
     if any(segment == "" for segment in inner):  # "//"

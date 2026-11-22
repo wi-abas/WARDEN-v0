@@ -160,3 +160,12 @@ def test_w009_also_covers_urls(tmp_path: Path) -> None:
     ]
     codes = [w[:4] for w in check_policy(write(tmp_path, rules)).warnings]
     assert "W009" in codes
+
+
+@pytest.mark.parametrize("path", [" /etc/passwd", "/etc/passwd ", "\t/etc/passwd", "/etc/passwd\n"])
+def test_spaces_around_a_path_cannot_dodge_a_deny_rule(path: str) -> None:
+    assert ask(DENY_ETC, "read_file", path=path) == Decision.DENY
+
+
+def test_spaces_inside_a_path_are_fine() -> None:
+    assert ask(DENY_ETC, "read_file", path="/home/me/my file.txt") == Decision.ALLOW
