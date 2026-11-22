@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+### New
+- **MCP proxy** (`warden proxy`): put Warden in front of any stdio MCP server; every
+  `tools/call` is checked (deny → tool error, approval → wait or "pending"). Config file
+  or flags; Claude Desktop / Cursor / Claude Code setup in `docs/mcp-proxy.md`.
+- **Python SDK** (`warden.sdk`): `@guard` and `run_guarded` freeze the arguments, check
+  them, and run the tool with exactly what was checked. Async tools supported.
+- **Agent tokens** (`warden agent add|list|remove`, `--agents`): the agent id comes from
+  `Authorization: Bearer <token>`; only SHA-256 hashes are stored. Approvals are bound to
+  the agent that asked. Optional; nothing changes without `--agents`.
+- **Rate limits and quotas**: optional `limits` section in the policy; per-agent
+  requests per minute (429 deny) and pending approvals. Built-in defaults 1,200/min and 100.
+  `warden limits [set|reset]` shows and changes them without editing JSON.
+- **Persistent approvals**: approval state survives restarts (stored without arguments).
+  After a restart an approval can only be approved once the agent has asked again.
+- **Tamper-evident audit log**: hash chain over decisions and events, kept intact by
+  retention; `warden audit verify` reports the first broken row.
+- **Nested argument conditions**: `"arg": ["headers", "to"]`. A plain name with a dot
+  (`"file.name"`) still means the top-level argument of that name. `warden check` W013.
+- CI: weekly and per-PR dependency scan (pip-audit), weekly mutation tests.
+
+### Behaviour changes
+- **Default per-agent limits now apply**: 1,200 requests per minute and 100 pending
+  approvals per agent, even without a `limits` section (429 / deny above them). Raise
+  them with `warden limits set` for high-volume agents.
+- `agent_id` in `/v1/evaluate` is optional when an agent token is sent.
+
 - Package renamed to **agent-warden** (`pip install agent-warden`); import name and the
   `warden` command are unchanged. Repository renamed to `wi-abas/agent-warden`.
 - `warden init` creates a starter policy; `warden schema` prints a JSON Schema so editors

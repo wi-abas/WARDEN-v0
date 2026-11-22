@@ -90,7 +90,28 @@ A rule can add `when` conditions. It then matches only if **all** of them hold:
 - Text a rule compares may not contain invisible characters or look-alike Unicode
   (full-width letters, look-alike dots), and paths may not contain `%`-escapes; such
   requests are denied.
-- Conditions only look at top-level arguments. No regex, no code.
+- No regex, no code.
+
+### Nested arguments
+
+`arg` can point inside an object with a list of keys:
+
+```json
+{ "arg": ["headers", "to"], "op": "endswith", "value": "@mycompany.com", "ignore_case": true }
+```
+
+- Same rules as top-level arguments: a missing key anywhere on the path counts as
+  missing (deny rules apply, allow rules don't), and every type and trick check applies.
+- If something on the path isn't an object (`"headers": "x"`, a list, a number), the whole
+  request is denied: it can't be checked.
+- Lists are never searched: `"to": ["a@x.com", "b@y.com"]` can't be checked with
+  `endswith` (wrong type, so denied). Up to 8 levels.
+- A plain name is always a top-level argument, even with a dot in it: `"file.name"` is
+  the argument called `file.name`, never `file` → `name`. Only the list form looks inside
+  objects, so every rule has exactly one meaning.
+- Argument lists (`tools`) only cover top-level names, so other keys inside an object
+  (`["headers", "bcc"]`) aren't checked by them. Prefer `allow` rules for nested values
+  (`warden check` warns, W013).
 
 ## Tool argument lists
 
@@ -110,6 +131,41 @@ rule runs, so an agent can't slip in an argument no rule checks (like `bcc`):
   since it comes from the agent).
 - A name in `required` that's missing → deny (`"missing required argument 'to'"`).
 - Tools without an entry work as before. Names only for now, not types.
+
+## Rate limits and approval quotas
+
+Optional. Each agent gets a request budget and a cap on how many approvals it may have
+waiting, so one agent can't flood Warden or crowd out the others:
+
+```json
+"limits": {
+  "default": { "requests_per_minute": 1200, "max_pending_approvals": 100 },
+  "agents": { "billing-agent": { "requests_per_minute": 30, "max_pending_approvals": 5 } }
+}
+```
+
+- An agent's own value wins, then `default`, then the built-in defaults (the values above).
+- Over the request budget: HTTP 429, `"decision": "deny"`, with a `Retry-After` header.
+  The budget refills continuously (a burst of up to the per-minute value is allowed).
+  Approval polls count too.
+- Over the approval quota: `deny`, "too many pending approvals for this agent". Asking
+  again for the same action reuses its approval and doesn't count twice.
+  `"max_pending_approvals": 0` turns every `require_approval` for that agent into `deny`.
+- Without agent tokens (`--agents`), an agent can dodge its limit by using a new
+  `agent_id`. Limits reset when Warden restarts.
+
+Change them without editing JSON by hand (restart Warden afterwards):
+
+```sh
+uv run warden limits                                          # show what applies
+uv run warden limits set --requests-per-minute 2000 --pending 200
+uv run warden limits set --agent billing-agent --requests-per-minute 30
+uv run warden limits reset --agent billing-agent              # back to the defaults
+```
+
+`--policy FILE` (or `WARDEN_POLICY`) picks the file. The new file must pass
+`warden check` before it replaces the old one, and keeps its permissions; it's
+rewritten with 2-space indentation.
 
 ## Checking a policy
 
@@ -134,5 +190,6 @@ do what you meant:
 | W010 | An `allow` rule uses `neq` or `missing` ("allow everything except X"), a deny-list in disguise |
 | W011 | A URL prefix has no `/` after the host (`"https://api.x.com"` also matches `"https://api.x.com.evil.net"`) |
 | W012 | A deny rule blocks a URL by comparing text; use `host_in` instead |
+| W013 | A deny rule checks a nested value (`["headers", "to"]`): other keys in that object aren't checked |
 
 Exit code `1` on errors; with `--strict`, also on warnings (useful in CI).

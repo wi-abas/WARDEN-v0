@@ -21,6 +21,9 @@ Warnings: the policy loads, but probably doesn't do what you meant:
         also matches "https://api.example.com.evil.net/...".
 - W012  a deny / require_approval rule compares a URL as text. "http://...",
         "https://evil.net:443/" or "https://evil.net./" slip past; use host_in.
+- W013  a rule looks inside an object (["headers", "to"]) and its effect is deny /
+        require_approval, but argument lists only cover top-level names, so an
+        unexpected key inside the object ("headers.bcc") isn't checked.
 - W008  an email-domain check ("...@example.com") is case-sensitive, so
         "x@EXAMPLE.com" slips past it. Add "ignore_case": true.
 
@@ -47,9 +50,9 @@ class Report:
     tools: int = 0
 
 
-def _conditions_key(rule: Rule) -> frozenset[tuple[str, str, str, bool]]:
+def _conditions_key(rule: Rule) -> frozenset[tuple[tuple[str, ...], str, str, bool]]:
     return frozenset(
-        (c.arg, c.op.value, json.dumps(c.value, sort_keys=True), c.ignore_case) for c in rule.when
+        (c.path, c.op.value, json.dumps(c.value, sort_keys=True), c.ignore_case) for c in rule.when
     )
 
 
@@ -85,7 +88,7 @@ def _warnings(policy: Policy) -> list[str]:
                     )
                     break
 
-        seen: dict[tuple[Decision, frozenset[tuple[str, str, str, bool]]], str] = {}
+        seen: dict[tuple[Decision, frozenset[tuple[tuple[str, ...], str, str, bool]]], str] = {}
         for rule in tool_rules:
             key = (rule.effect, _conditions_key(rule))
             if key in seen:
@@ -157,12 +160,18 @@ def _warnings(policy: Policy) -> list[str]:
             if rule.effect is Decision.ALLOW and c.op in {Op.NEQ, Op.MISSING}:
                 out.append(
                     f'W010: rule "{rule.id}" allows everything except one value ({c.op.value} '
-                    f'on "{c.arg}"); anything nobody thought of is allowed. Prefer listing '
+                    f'on "{c.label}"); anything nobody thought of is allowed. Prefer listing '
                     f"what is allowed (eq, in, startswith, endswith)."
                 )
-            if spec is not None and c.arg not in spec.arguments:
+            if len(c.path) > 1 and rule.effect is not Decision.ALLOW:
                 out.append(
-                    f'W007: rule "{rule.id}" checks argument "{c.arg}", which isn\'t in '
+                    f'W013: rule "{rule.id}" checks "{c.label}" inside "{c.path[0]}"; other '
+                    f'keys in "{c.path[0]}" (e.g. a "bcc") aren\'t checked by anything. '
+                    f"Prefer an allow rule for the nested value."
+                )
+            if spec is not None and c.path[0] not in spec.arguments:
+                out.append(
+                    f'W007: rule "{rule.id}" checks argument "{c.path[0]}", which isn\'t in '
                     f'the argument list for "{rule.tool}" (typo?).'
                 )
 

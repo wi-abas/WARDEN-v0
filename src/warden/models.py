@@ -27,6 +27,7 @@ MESSAGE_PATTERN = r"^[^\x00-\x1f\x7f-\x9f\u200b-\u200f\u202a-\u202e\u2060-\u2069
 APPROVAL_ID_PATTERN = r"^[A-Za-z0-9_\-]{16,64}$"
 
 MAX_ARGUMENTS = 50
+MAX_ARG_DEPTH = 8  # "a.b.c..." at most this many levels deep
 MAX_CONDITIONS = 20
 MAX_IN_VALUES = 100
 # A host name as written in a policy: lowercase ASCII (use punycode "xn--..." for
@@ -42,13 +43,11 @@ class Decision(StrEnum):
     REQUIRE_APPROVAL = "require_approval"
 
 
-class ActionRequest(BaseModel):
-    """What an agent wants to do. Treated as untrusted input."""
+class _ActionFields(BaseModel):
+    """Fields shared by the request on the wire and the action Warden evaluates."""
 
     model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
 
-    # Self-declared by the caller, so it is NOT used for security decisions yet.
-    agent_id: str = Field(pattern=AGENT_ID_PATTERN)
     tool: str = Field(pattern=TOOL_NAME_PATTERN)
     # Any JSON values. May contain secrets, so never log this field.
     arguments: dict[str, JsonValue] = Field(default_factory=dict, max_length=MAX_ARGUMENTS)
@@ -70,6 +69,23 @@ class ActionRequest(BaseModel):
             elif isinstance(value, list):
                 stack.extend(value)
         return arguments
+
+
+class ActionRequest(_ActionFields):
+    """What an agent wants to do, with WHO is asking settled. Treated as untrusted input.
+
+    With agent tokens (--agents), agent_id comes from the token; without them it is
+    self-declared by the caller.
+    """
+
+    agent_id: str = Field(pattern=AGENT_ID_PATTERN)
+
+
+class EvaluateRequest(_ActionFields):
+    """The body of POST /v1/evaluate. agent_id may be left out when the request
+    carries an agent token (it then comes from the token)."""
+
+    agent_id: str | None = Field(default=None, pattern=AGENT_ID_PATTERN)
 
 
 class Op(StrEnum):
@@ -125,12 +141,46 @@ def _check_policy_text(text: str, op: "Op") -> None:
             raise ValueError("value starts or ends with a space (typo?)")
 
 
+ArgName = Annotated[str, Field(pattern=ARG_NAME_PATTERN)]
+
+
 class Condition(BaseModel):
-    """One check on one argument, e.g. {"arg": "amount", "op": "gt", "value": 500}."""
+    """One check on one argument, e.g. {"arg": "amount", "op": "gt", "value": 500}.
+
+    `arg` is a top-level argument name ("to"; a dot is just part of the name, so
+    "file.name" means the argument called "file.name"), or a list of keys that points
+    inside an object: ["headers", "to"].
+    """
 
     model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
 
-    arg: str = Field(pattern=ARG_NAME_PATTERN)
+    arg: ArgName | tuple[ArgName, ...]
+
+    @field_validator("arg", mode="before")
+    @classmethod
+    def list_is_a_path(cls, value: object) -> object:
+        return tuple(value) if isinstance(value, list) else value
+
+    @field_validator("arg")
+    @classmethod
+    def path_has_a_shape(cls, value: str | tuple[str, ...]) -> str | tuple[str, ...]:
+        if isinstance(value, tuple) and not 1 <= len(value) <= MAX_ARG_DEPTH:
+            raise ValueError(
+                f"'arg' must be a name, or a list of 1 to {MAX_ARG_DEPTH} names like "
+                f'["headers", "to"]'
+            )
+        return value
+
+    @property
+    def path(self) -> tuple[str, ...]:
+        """The keys to follow from the top-level arguments, e.g. ("headers", "to")."""
+        return (self.arg,) if isinstance(self.arg, str) else self.arg
+
+    @property
+    def label(self) -> str:
+        """How to name this argument in messages (policy text, never request data)."""
+        return ".".join(self.path)
+
     op: Op
     value: JsonValue = None  # required for every op except exists / missing
     # Compare text without caring about upper/lower case, e.g. email domains.

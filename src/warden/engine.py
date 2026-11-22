@@ -5,6 +5,7 @@ Security properties (each one is tested in tests/test_engine.py):
 - Tool specs: if the policy lists a tool's arguments, any other argument, or a
   missing required one, is denied before any rule runs.
 - Argument conditions ("when"): a rule matches only if ALL its conditions hold.
+  A condition may look inside objects (["headers", "to"]), with the same strictness.
 - Never a looser answer because something is missing or odd:
   - A MISSING argument counts as "condition holds" for deny / require_approval
     rules (they apply) and as "doesn't hold" for allow rules (they don't).
@@ -91,9 +92,9 @@ def _check_unicode(actual: str, condition: Condition) -> None:
       full-width "ｅ" in "ｅvil.net" becomes "e" (NFKC).
     """
     if any(unicodedata.category(ch) in {"Cf", "Cc"} for ch in actual):
-        raise _UncheckableArgument(condition.arg)
+        raise _UncheckableArgument(condition.label)
     if unicodedata.normalize("NFKC", actual) != unicodedata.normalize("NFC", actual):
-        raise _UncheckableArgument(condition.arg)
+        raise _UncheckableArgument(condition.label)
 
 
 def _looks_like_url(value: str) -> bool:
@@ -173,13 +174,13 @@ def _url_host(url: str, condition: Condition) -> str:
     different standards (IDNA2003 vs IDNA2008) and can reach DIFFERENT hosts."""
     _check_unicode(url, condition)
     if any(dot in url for dot in _LOOKALIKE_DOTS) or not _is_clean_url(url):
-        raise _UncheckableArgument(condition.arg)
+        raise _UncheckableArgument(condition.label)
     try:
         host = (urlsplit(url).hostname or "").rstrip(".")
     except ValueError:
-        raise _UncheckableArgument(condition.arg) from None
+        raise _UncheckableArgument(condition.label) from None
     if not host or not host.isascii():
-        raise _UncheckableArgument(condition.arg)
+        raise _UncheckableArgument(condition.label)
     return host.lower()
 
 
@@ -198,15 +199,15 @@ def _check_text_shape(actual: str, expected: list[str], condition: Condition) ->
     if any(_looks_like_url(e) or _looks_like_email(e) for e in expected) and any(
         dot in actual for dot in _LOOKALIKE_DOTS
     ):
-        raise _UncheckableArgument(condition.arg)
+        raise _UncheckableArgument(condition.label)
     if any(_looks_like_url(e) for e in expected):
         if not _is_clean_url(actual):
-            raise _UncheckableArgument(condition.arg)
+            raise _UncheckableArgument(condition.label)
         return  # a URL may legitimately contain "@" in its path: skip the email check
     if any(_looks_like_path(e) for e in expected) and not _is_clean_path(actual):
-        raise _UncheckableArgument(condition.arg)
+        raise _UncheckableArgument(condition.label)
     if any(_looks_like_email(e) for e in expected) and not _is_plain_email(actual):
-        raise _UncheckableArgument(condition.arg)
+        raise _UncheckableArgument(condition.label)
 
 
 def _same(actual: JsonValue, expected: JsonValue, condition: Condition) -> bool:
@@ -215,21 +216,42 @@ def _same(actual: JsonValue, expected: JsonValue, condition: Condition) -> bool:
     return _comparable(actual, expected) and actual == expected
 
 
+def _lookup(condition: Condition, arguments: dict[str, JsonValue]) -> JsonValue:
+    """Follow the condition's path (["headers", "to"]) into the arguments.
+
+    A missing key anywhere on the path: _MissingArgument (same rules as a missing
+    top-level argument). Something on the path that isn't an object (a text, a number,
+    a list): _UncheckableArgument, which denies the whole request, so "headers": "x"
+    can't be used to dodge a rule about headers.to. Lists are never searched.
+    """
+    value: JsonValue = arguments
+    for key in condition.path:
+        if not isinstance(value, dict):
+            raise _UncheckableArgument(condition.label)
+        if key not in value:
+            raise _MissingArgument
+        value = value[key]
+    return value
+
+
 def _holds(condition: Condition, arguments: dict[str, JsonValue]) -> bool:
-    present = condition.arg in arguments
+    try:
+        actual = _lookup(condition, arguments)
+        present = True
+    except _MissingArgument:
+        present = False
     if condition.op is Op.EXISTS:
         return present
     if condition.op is Op.MISSING:
         return not present
     if not present:
         raise _MissingArgument
-    actual = arguments[condition.arg]
     expected = condition.value
     op = condition.op
 
     if op is Op.HOST_IN:
         if not isinstance(actual, str) or not isinstance(expected, list):
-            raise _UncheckableArgument(condition.arg)
+            raise _UncheckableArgument(condition.label)
         host = _url_host(actual, condition)
         return any(
             host == entry or (entry.startswith(".") and (host == entry[1:] or host.endswith(entry)))
@@ -239,7 +261,7 @@ def _holds(condition: Condition, arguments: dict[str, JsonValue]) -> bool:
 
     if op in NUMBER_OPS:
         if not is_number(actual):
-            raise _UncheckableArgument(condition.arg)
+            raise _UncheckableArgument(condition.label)
         if not is_number(expected):  # can't happen: the policy loader checked it
             raise ValueError("policy value is not a number")
         if op is Op.GT:
@@ -252,7 +274,7 @@ def _holds(condition: Condition, arguments: dict[str, JsonValue]) -> bool:
 
     if op in {Op.STARTSWITH, Op.ENDSWITH}:
         if not isinstance(actual, str):
-            raise _UncheckableArgument(condition.arg)
+            raise _UncheckableArgument(condition.label)
         if not isinstance(expected, str):  # can't happen: the policy loader checked it
             raise ValueError("policy value is not text")
         _check_unicode(actual, condition)
@@ -263,7 +285,7 @@ def _holds(condition: Condition, arguments: dict[str, JsonValue]) -> bool:
     # eq / neq / in: the argument must have the same type as the policy value(s).
     choices = expected if isinstance(expected, list) else [expected]
     if not any(_comparable(actual, choice) for choice in choices):
-        raise _UncheckableArgument(condition.arg)
+        raise _UncheckableArgument(condition.label)
     if isinstance(actual, str):
         _check_unicode(actual, condition)
         _check_text_shape(actual, [c for c in choices if isinstance(c, str)], condition)

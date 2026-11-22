@@ -9,11 +9,22 @@ Two tables:
 What is NEVER stored: tool arguments (they may contain secrets). The action_hash
 still identifies the exact action without revealing it.
 
+Tamper evidence: every row carries `prev_hash` (the previous row's hash in the
+same table) and `row_hash` = SHA-256 over the table name, row id, prev_hash and
+the row's values. Editing, deleting or reordering a row breaks the chain from that
+row on; `warden audit verify` finds the first broken row. Retention deletes a
+prefix of each chain and saves an "anchor" (the hash of the last deleted row), in
+the anchors table AND in the chained audit_purged event. A plain hash chain can't
+stop someone who rewrites every later hash too: compare the head hash that
+`verify` prints with a copy kept elsewhere. See docs/design/audit-chain.md.
+
 Storage is kept behind the small `AuditLog` interface, so the SQLite file used
 here can later be swapped (e.g. for Postgres or a hosted service) without
 touching the engine or the API.
 """
 
+import hashlib
+import json
 import logging
 import os
 import sqlite3
@@ -93,6 +104,8 @@ class AuditEvent(BaseModel):
     agent_id: str | None = None
     tool: str | None = None
     action_hash: str | None = None
+    # Only on audit_purged: where each table's hash chain now starts (JSON).
+    chain_anchor: str | None = None
 
     @classmethod
     def now(
@@ -159,11 +172,24 @@ CREATE TABLE IF NOT EXISTS events (
     tool         TEXT,
     action_hash  TEXT
 );
+CREATE TABLE IF NOT EXISTS audit_anchors (
+    table_name   TEXT PRIMARY KEY,
+    last_deleted_id   INTEGER NOT NULL,
+    last_deleted_hash TEXT NOT NULL
+);
 """
 
 # Columns added after the first version. Older databases get them on startup
-# (a tiny "migration"), so upgrading Warden never loses audit history.
-_ADDED_COLUMNS = {"approval_id": "TEXT"}
+# (a tiny "migration"), so upgrading Warden never loses audit history. Rows written
+# before the hash chain existed have no hashes: `verify` reports them as unchained.
+_ADDED_COLUMNS = {
+    "decisions": {"approval_id": "TEXT", "prev_hash": "TEXT", "row_hash": "TEXT"},
+    "events": {"chain_anchor": "TEXT", "prev_hash": "TEXT", "row_hash": "TEXT"},
+}
+
+GENESIS_HASH = "0" * 64
+_CHAIN_VERSION = "warden-audit-chain-v1"
+_TABLES = ("decisions", "events")
 
 _EVENT_FIELDS = (
     "timestamp",
@@ -176,10 +202,51 @@ _EVENT_FIELDS = (
     "agent_id",
     "tool",
     "action_hash",
+    "chain_anchor",
 )
 _EVENT_COLUMNS = ", ".join(_EVENT_FIELDS)
 
 _COLUMNS = "timestamp, agent_id, tool, decision, reason, matched_rule, action_hash, approval_id"
+_TABLE_COLUMNS = {"decisions": _COLUMNS, "events": _EVENT_COLUMNS}
+
+
+def row_hash(table: str, row_id: int, prev_hash: str, values: tuple[object, ...]) -> str:
+    """The chain hash of one row: covers its table, id, predecessor and every value."""
+    payload = json.dumps(
+        [table, row_id, prev_hash, list(values)], separators=(",", ":"), ensure_ascii=False
+    )
+    return hashlib.sha256(f"{_CHAIN_VERSION}\n{payload}".encode()).hexdigest()
+
+
+def _chain_head(conn: sqlite3.Connection, table: str) -> str:
+    """The hash the next row must point back to."""
+    row = conn.execute(
+        f"SELECT row_hash FROM {table} ORDER BY id DESC LIMIT 1"  # noqa: S608 (constant)
+    ).fetchone()
+    if row is not None:
+        return str(row[0]) if row[0] else GENESIS_HASH  # unchained (old) rows: start over
+    anchor = conn.execute(
+        "SELECT last_deleted_hash FROM audit_anchors WHERE table_name = ?", (table,)
+    ).fetchone()
+    return str(anchor[0]) if anchor else GENESIS_HASH
+
+
+def _append(conn: sqlite3.Connection, table: str, values: tuple[object, ...]) -> None:
+    """Insert one chained row. The caller holds a write lock (BEGIN IMMEDIATE), so no
+    other writer can append between reading the head and writing the row."""
+    columns = _TABLE_COLUMNS[table]
+    prev = _chain_head(conn, table)
+    placeholders = ", ".join("?" * (len(values) + 1))
+    cursor = conn.execute(
+        f"INSERT INTO {table} ({columns}, prev_hash) VALUES ({placeholders})",  # noqa: S608
+        (*values, prev),
+    )
+    row_id = cursor.lastrowid
+    assert row_id is not None  # noqa: S101 (sqlite always sets it after an INSERT)
+    conn.execute(
+        f"UPDATE {table} SET row_hash = ? WHERE id = ?",  # noqa: S608 (constant table)
+        (row_hash(table, row_id, prev, values), row_id),
+    )
 
 
 def _make_private(path: Path) -> None:
@@ -230,15 +297,22 @@ class SQLiteAuditLog:
         _make_private(path)
         with closing(self._connect()) as conn, conn:
             conn.executescript(_SCHEMA)
-            existing = {row[1] for row in conn.execute("PRAGMA table_info(decisions)")}
-            for name, sql_type in _ADDED_COLUMNS.items():
-                if name not in existing:
-                    # Names come from the constant above, never from user input.
-                    conn.execute(f"ALTER TABLE decisions ADD COLUMN {name} {sql_type}")
+            for table, added in _ADDED_COLUMNS.items():
+                existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+                for name, sql_type in added.items():
+                    if name not in existing:
+                        # Names come from the constant above, never from user input.
+                        conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {sql_type}")
         self._maybe_purge(background=False)  # first purge at startup, before serving
 
     def _connect(self) -> sqlite3.Connection:
         return sqlite3.connect(self.path, timeout=5)
+
+    def _write(self) -> sqlite3.Connection:
+        """A connection holding the write lock (released by commit / rollback)."""
+        conn = self._connect()
+        conn.execute("BEGIN IMMEDIATE")
+        return conn
 
     def _maybe_purge(self, background: bool = True) -> None:
         """Purge at most once per PURGE_INTERVAL. Never makes a write fail or wait.
@@ -291,13 +365,16 @@ class SQLiteAuditLog:
         """
         now = self._clock()
         cutoff = (now - timedelta(days=days)).isoformat()
-        with closing(self._connect()) as conn, conn:
-            # ISO timestamps in UTC sort correctly as text, so "<" means "older".
-            decisions = conn.execute(
-                "DELETE FROM decisions WHERE timestamp < ?", (cutoff,)
-            ).rowcount
-            events = conn.execute("DELETE FROM events WHERE timestamp < ?", (cutoff,)).rowcount
+        with closing(self._write()) as conn, conn:
+            decisions = _delete_prefix(conn, "decisions", cutoff)
+            events = _delete_prefix(conn, "events", cutoff)
             if decisions + events:
+                anchors = dict(
+                    conn.execute(
+                        "SELECT table_name, last_deleted_hash FROM audit_anchors "
+                        "ORDER BY table_name"
+                    ).fetchall()
+                )
                 self._insert_event(
                     conn,
                     AuditEvent(
@@ -305,6 +382,8 @@ class SQLiteAuditLog:
                         kind=EventKind.AUDIT_PURGED,
                         reason=f"deleted {decisions} decisions and {events} events "
                         f"older than {days} days",
+                        # In the chain too, so the anchors table can't be quietly edited.
+                        chain_anchor=json.dumps(anchors, sort_keys=True) if anchors else None,
                     ),
                 )
         return decisions + events
@@ -312,9 +391,10 @@ class SQLiteAuditLog:
     def record(self, entry: AuditEntry) -> None:
         self._maybe_purge()
         # "?" placeholders: values are never pasted into the SQL text (no SQL injection).
-        with closing(self._connect()) as conn, conn:
-            conn.execute(
-                f"INSERT INTO decisions ({_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",  # noqa: S608
+        with closing(self._write()) as conn, conn:
+            _append(
+                conn,
+                "decisions",
                 (
                     entry.timestamp,
                     entry.agent_id,
@@ -350,18 +430,14 @@ class SQLiteAuditLog:
 
     def record_event(self, event: AuditEvent) -> None:
         self._maybe_purge()
-        with closing(self._connect()) as conn, conn:
+        with closing(self._write()) as conn, conn:
             self._insert_event(conn, event)
 
     @staticmethod
     def _insert_event(conn: sqlite3.Connection, event: AuditEvent) -> None:
         values = [getattr(event, name) for name in _EVENT_FIELDS]
         values[1] = event.kind.value
-        placeholders = ", ".join("?" * len(values))
-        conn.execute(
-            f"INSERT INTO events ({_EVENT_COLUMNS}) VALUES ({placeholders})",  # noqa: S608
-            values,
-        )
+        _append(conn, "events", tuple(values))
 
     def recent_events(self, limit: int = 100) -> list[AuditEvent]:
         """Newest first."""
@@ -376,3 +452,124 @@ class SQLiteAuditLog:
             data["kind"] = EventKind(data["kind"])
             events.append(AuditEvent(**data))
         return events
+
+
+def _delete_prefix(conn: sqlite3.Connection, table: str, cutoff: str) -> int:
+    """Delete the oldest rows, up to (not including) the first row at or after `cutoff`.
+
+    Only a PREFIX is deleted, so the chain of what's left stays whole. A row whose
+    timestamp is out of order (e.g. the clock moved) is kept a little longer rather
+    than cut out of the middle. The last deleted row's hash becomes the anchor.
+    ISO timestamps in UTC sort correctly as text, so "<" means "older".
+    """
+    first_kept = conn.execute(
+        f"SELECT MIN(id) FROM {table} WHERE timestamp >= ?",  # noqa: S608 (constant)
+        (cutoff,),
+    ).fetchone()[0]
+    where, args = ("id < ?", (first_kept,)) if first_kept is not None else ("1", ())
+    last = conn.execute(
+        f"SELECT id, row_hash FROM {table} WHERE {where} ORDER BY id DESC LIMIT 1",  # noqa: S608
+        args,
+    ).fetchone()
+    if last is None:
+        return 0
+    deleted = conn.execute(
+        f"DELETE FROM {table} WHERE id <= ?",  # noqa: S608 (constant table name)
+        (last[0],),
+    ).rowcount
+    if last[1]:
+        conn.execute(
+            "INSERT INTO audit_anchors (table_name, last_deleted_id, last_deleted_hash) "
+            "VALUES (?, ?, ?) ON CONFLICT(table_name) DO UPDATE SET "
+            "last_deleted_id = excluded.last_deleted_id, "
+            "last_deleted_hash = excluded.last_deleted_hash",
+            (table, last[0], last[1]),
+        )
+    return int(deleted)
+
+
+# --- Verification ----------------------------------------------------------------------
+
+
+class ChainReport(BaseModel):
+    """What `warden audit verify` found. `problems` is empty when the log is intact."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    checked: dict[str, int]  # chained rows verified per table
+    unchained: dict[str, int]  # rows written before the chain existed
+    heads: dict[str, str]  # the newest hash per table: keep a copy elsewhere
+    problems: list[str]
+
+    @property
+    def ok(self) -> bool:
+        return not self.problems
+
+
+def verify_chain(path: Path) -> ChainReport:
+    """Recompute every hash. Reports the FIRST broken row of each table. Read-only."""
+    # as_uri() percent-encodes "?", "#" and "%": pasting the raw path into the URI
+    # would make SQLite open a DIFFERENT file (e.g. "audit#1.db" -> "audit").
+    uri = f"{path.resolve().as_uri()}?mode=ro"
+    checked: dict[str, int] = {}
+    unchained: dict[str, int] = {}
+    heads: dict[str, str] = {}
+    problems: list[str] = []
+    with closing(sqlite3.connect(uri, uri=True, timeout=5)) as conn:
+        anchors = dict(
+            conn.execute("SELECT table_name, last_deleted_hash FROM audit_anchors").fetchall()
+        )
+        for table in _TABLES:
+            count, legacy, head, problem = _verify_table(conn, table, anchors.get(table))
+            checked[table], unchained[table], heads[table] = count, legacy, head
+            if problem:
+                problems.append(problem)
+        problems += _verify_anchors(conn, anchors)
+    return ChainReport(checked=checked, unchained=unchained, heads=heads, problems=problems)
+
+
+def _verify_table(
+    conn: sqlite3.Connection, table: str, anchor: str | None
+) -> tuple[int, int, str, str | None]:
+    columns = _TABLE_COLUMNS[table]
+    rows = conn.execute(
+        f"SELECT id, {columns}, prev_hash, row_hash FROM {table} ORDER BY id"  # noqa: S608
+    )
+    expected = anchor or GENESIS_HASH
+    checked = legacy = 0
+    chained = False
+    for row in rows:
+        row_id, values, prev, stored = row[0], tuple(row[1:-2]), row[-2], row[-1]
+        if stored is None and prev is None and not chained:
+            legacy += 1  # written before the chain existed
+            continue
+        where = f"{table} row id {row_id}"
+        if stored is None or prev is None:
+            return checked, legacy, expected, f"{where}: hash missing (row added or edited)"
+        if prev != expected:
+            return checked, legacy, expected, f"{where}: doesn't follow the previous row "
+            "(a row before it was deleted, inserted or edited)"
+        if row_hash(table, row_id, prev, values) != stored:
+            return checked, legacy, expected, f"{where}: contents changed after writing"
+        chained = True
+        checked += 1
+        expected = stored
+    return checked, legacy, expected, None
+
+
+def _verify_anchors(conn: sqlite3.Connection, anchors: dict[str, str]) -> list[str]:
+    """The anchors table must match what the newest audit_purged event recorded."""
+    if not anchors:
+        return []
+    row = conn.execute(
+        "SELECT chain_anchor FROM events WHERE kind = ? AND chain_anchor IS NOT NULL "
+        "ORDER BY id DESC LIMIT 1",
+        (EventKind.AUDIT_PURGED.value,),
+    ).fetchone()
+    try:
+        recorded = json.loads(row[0]) if row is not None else None
+    except ValueError:
+        recorded = None
+    if recorded != anchors:
+        return ["audit_anchors: doesn't match the last recorded purge (anchors edited?)"]
+    return []

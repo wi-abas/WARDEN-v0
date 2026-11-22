@@ -7,6 +7,7 @@
 | Audit database | --audit-db         | WARDEN_AUDIT_DB         | warden-audit.db       |
 | Retention days | --retention-days   | WARDEN_RETENTION_DAYS   | 90 (0 = keep forever) |
 | Admin key      | (none, on purpose) | WARDEN_ADMIN_KEY        | random, printed       |
+| Agent tokens   | --agents           | WARDEN_AGENTS           | none (self-declared)  |
 
 The admin key has no flag: command lines are visible to every user on the
 machine (`ps`). Environment variables are hidden from OTHER users, but programs
@@ -43,12 +44,13 @@ class Settings:
     audit_db: Path = DEFAULT_AUDIT_PATH
     retention_days: int | None = DEFAULT_RETENTION_DAYS  # None = keep forever
     admin_key: str | None = None  # None = generate a random one and print it
+    agents: Path | None = None  # None = no agent tokens (agent_id is self-declared)
 
     def __repr__(self) -> str:  # never show the admin key, e.g. in a traceback
         key = "<set>" if self.admin_key else None
         return (
             f"Settings(policy={self.policy}, port={self.port}, audit_db={self.audit_db}, "
-            f"retention_days={self.retention_days}, admin_key={key})"
+            f"retention_days={self.retention_days}, admin_key={key}, agents={self.agents})"
         )
 
 
@@ -86,6 +88,7 @@ def resolve(
     port: str | None = None,
     audit_db: str | None = None,
     retention_days: str | None = None,
+    agents: str | None = None,
     env: Mapping[str, str],
 ) -> Settings:
     """Combine flags (the keyword arguments) with environment variables."""
@@ -135,6 +138,17 @@ def resolve(
         raw, name = chosen
         days = _whole_number(name, raw)
         values["retention_days"] = None if days == 0 else days
+
+    if chosen := pick(agents, "WARDEN_AGENTS"):
+        raw, name = chosen
+        path = Path(raw)
+        if not path.is_file():
+            raise SettingsError(
+                f"{name}: agents file not found: {raw} (create it with `warden agent add`)"
+            )
+        if problem := unsafe_permissions(path):
+            raise SettingsError(f"refusing to use the agents file: {problem}")
+        values["agents"] = path
 
     key = env.get("WARDEN_ADMIN_KEY")
     if key is not None:
