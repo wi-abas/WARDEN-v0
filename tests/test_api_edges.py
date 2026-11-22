@@ -164,7 +164,8 @@ def test_not_applied_event_records_503(
 
 def test_group_decision_is_strict_and_frozen(tmp_path: Path) -> None:
     client = app_with(SQLiteAuditLog(tmp_path / "a.db"))
-    for approve in ("true", "yes", 1):
+    # Rejecting needs no hashes, so only strictness can refuse these (lax: -> False).
+    for approve in ("false", "no", 0):
         body = {"ids": ["a" * 32], "approve": approve}
         assert client.post("/v1/approvals/decide", json=body, headers=ADMIN).status_code == 422
     decision = GroupDecision(ids=["a" * 32], approve=False)

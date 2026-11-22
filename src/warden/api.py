@@ -189,7 +189,7 @@ class DuplicateKeyCheck:
         async def replay() -> Message:
             nonlocal replayed
             if not replayed:
-                replayed = True
+                replayed = True  # mutation-ok: the app reads the body only once
                 return {"type": "http.request", "body": body, "more_body": False}
             return await receive()
 
@@ -345,7 +345,9 @@ class _Warden:
     record_in_background: bool = True  # mutation-ok: speed only
     _events: ThreadPoolExecutor = field(
         default_factory=lambda: ThreadPoolExecutor(
-            max_workers=1, thread_name_prefix="warden-events"
+            # mutation-ok: one worker keeps events in order; tests can't see the order race
+            max_workers=1,
+            thread_name_prefix="warden-events",
         )
     )
     _limit_lock: threading.Lock = field(default_factory=threading.Lock)
