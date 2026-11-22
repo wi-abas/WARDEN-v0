@@ -8,6 +8,7 @@ The policy file is trusted configuration: whoever can edit it controls every
 decision. Protect it with file permissions.
 """
 
+import json
 import logging
 from pathlib import Path
 from typing import Annotated, Self
@@ -56,6 +57,29 @@ class Policy(BaseModel):
 EMPTY_POLICY = Policy(rules=())
 
 
+class DuplicateKeyError(ValueError):
+    """The same key appears twice in one JSON object. JSON parsers silently keep the
+    last one, so {"effect": "allow", "effect": "deny"} could hide an override."""
+
+
+def _no_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    seen: dict[str, object] = {}
+    for key, value in pairs:
+        if key in seen:
+            raise DuplicateKeyError(f"duplicate key '{key}' (one value would silently win)")
+        seen[key] = value
+    return seen
+
+
+def parse_policy(raw: str) -> Policy:
+    """Validate policy JSON. Raises DuplicateKeyError or pydantic's ValidationError."""
+    try:
+        json.loads(raw, object_pairs_hook=_no_duplicate_keys)
+    except json.JSONDecodeError:
+        pass  # not valid JSON at all: let pydantic report it with its location
+    return Policy.model_validate_json(raw)
+
+
 def describe_errors(exc: ValidationError) -> list[str]:
     """Where each problem is, e.g. "rules.2.when.0.op: Input should be ...".
 
@@ -76,7 +100,9 @@ def load_policy(path: Path = DEFAULT_POLICY_PATH) -> Policy:
     """Read and validate the policy file. Returns an empty policy on ANY problem."""
     try:
         raw = path.read_text(encoding="utf-8")
-        return Policy.model_validate_json(raw)
+        return parse_policy(raw)
+    except DuplicateKeyError as exc:
+        logger.error("invalid policy file %s, denying everything: %s", path, exc)
     except ValidationError as exc:
         problems = "; ".join(describe_errors(exc))
         logger.error("invalid policy file %s, denying everything: %s", path, problems)

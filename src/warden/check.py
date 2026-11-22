@@ -28,7 +28,7 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from warden.models import Decision, Op, Rule
-from warden.policy import Policy, describe_errors
+from warden.policy import DuplicateKeyError, Policy, describe_errors, parse_policy
 
 _STRICTNESS = {Decision.ALLOW: 0, Decision.REQUIRE_APPROVAL: 1, Decision.DENY: 2}
 
@@ -145,7 +145,10 @@ def check_policy(path: Path) -> Report:
         report.errors.append(f"can't read {path}: {type(exc).__name__}")
         return report
     try:
-        policy = Policy.model_validate_json(raw)
+        policy = parse_policy(raw)
+    except DuplicateKeyError as exc:
+        report.errors.append(str(exc))
+        return report
     except ValidationError as exc:
         report.errors.extend(describe_errors(exc))
         return report
