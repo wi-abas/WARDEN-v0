@@ -81,7 +81,8 @@ def resolve(
         values["policy"] = path
     elif not DEFAULT_POLICY_PATH.is_file():
         raise SettingsError(
-            f"no policy file at {DEFAULT_POLICY_PATH}; pass --policy or set WARDEN_POLICY"
+            f"no policy file at {DEFAULT_POLICY_PATH}. Create one with `warden init`, "
+            "or pass --policy / set WARDEN_POLICY"
         )
 
     if chosen := pick(port, "WARDEN_PORT"):

@@ -64,10 +64,13 @@ Requires [uv](https://docs.astral.sh/uv/).
 
 ```sh
 uv sync
-uv run warden
+uv run warden init      # creates policies/default.json (skip in this repo: it exists)
+uv run warden check     # validates it
+uv run warden           # starts the server
 ```
 
-The server listens on `http://127.0.0.1:8000` (this machine only).
+The server listens on `http://127.0.0.1:8000` (this machine only). Open
+**http://127.0.0.1:8000/docs** for an interactive page where you can send requests.
 
 ### Settings
 
@@ -87,7 +90,6 @@ WARDEN_ADMIN_KEY="$(openssl rand -base64 32)" \
 Flags beat environment variables. The admin key has no flag on purpose: command lines are
 visible to other programs (`ps`). An invalid setting stops Warden with a clear message
 instead of falling back to a default. The host is always `127.0.0.1`.
-Open **http://127.0.0.1:8000/docs** for an interactive page where you can send requests.
 
 ## Example
 
