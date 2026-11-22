@@ -95,9 +95,6 @@ Use **uv** for everything. Never call `pip` directly and never edit `uv.lock` by
 Before calling a change done, run (no pipes that hide exit codes):
 `uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run pytest --cov`
 
-If imports suddenly fail (`No module named 'warden'`), the project is on the iCloud
-Desktop and the `.pth` file got hidden: `chflags nohidden .venv/lib/python*/site-packages/*.pth`.
-
 ## Layout
 
 - `src/warden/`: the package (src layout, built with `uv_build`). All application code.
