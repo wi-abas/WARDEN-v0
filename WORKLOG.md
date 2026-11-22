@@ -80,5 +80,6 @@ coverage, ruff/format/mypy clean.
 - [x] 5. Persistent approvals (state in SQLite, arguments never on disk).
 - [x] 6. Tamper-evident audit log + `warden audit verify`.
 - [x] 7. Conditions on nested arguments (+ W013, schema, docs).
-- [~] 8. CI hardening: dependency scan (`125f65f`); mutation workflow after baseline.
+- [x] 8. CI hardening: dependency scan (`125f65f`), weekly mutation job (floor 80%,
+  baseline 83.2% = 238/286 in ~8 min).
 - [x] 9. CLAUDE.md rewritten for the current project.

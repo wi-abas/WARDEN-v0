@@ -44,11 +44,12 @@ TARGETS: dict[str, list[str]] = {
         "test_persistent_approvals.py",
         "test_revoke.py",
         "test_rate_limits.py",
+        "test_agent_tokens.py",
     ],
     "limits": ["test_rate_limits.py"],
     "agents": ["test_agent_tokens.py"],
-    "client": ["test_client.py"],
-    "sdk": ["test_sdk.py"],
+    "client": ["test_client.py", "test_sdk.py", "test_agent_tokens.py"],
+    "sdk": ["test_sdk.py", "test_agent_tokens.py"],
     "fingerprint": ["test_fingerprint.py"],
 }
 
