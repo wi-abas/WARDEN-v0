@@ -12,6 +12,9 @@ Warnings: the policy loads, but probably doesn't do what you meant:
 - W006  tool has an argument list but no rules: it's always denied.
 - W007  a condition checks an argument that isn't in the tool's argument list
         (probably a typo): it can never be present.
+- W009  a deny / require_approval rule compares a path case-sensitively, so on
+        case-insensitive filesystems (macOS, Windows) "/ETC/passwd" slips past
+        a rule for "/etc/". Add "ignore_case": true.
 - W008  an email-domain check ("...@example.com") is case-sensitive, so
         "x@EXAMPLE.com" slips past it. Add "ignore_case": true.
 
@@ -104,6 +107,21 @@ def _warnings(policy: Policy) -> list[str]:
                 out.append(
                     f'W008: rule "{rule.id}" compares an email address case-sensitively; '
                     f'"X@EXAMPLE.COM" would not match. Add "ignore_case": true.'
+                )
+            # Only risky if dodging this rule lands on a LOOSER rule for the same tool.
+            looser_exists = any(
+                r.tool == rule.tool and _STRICTNESS[r.effect] < _STRICTNESS[rule.effect]
+                for r in rules
+            )
+            if (
+                looser_exists
+                and c.op in {Op.EQ, Op.IN, Op.STARTSWITH, Op.ENDSWITH}
+                and not c.ignore_case
+                and any(isinstance(t, str) and t.startswith("/") for t in texts)
+            ):
+                out.append(
+                    f'W009: rule "{rule.id}" compares a path case-sensitively; on macOS and '
+                    f'Windows "/ETC/..." is the same file as "/etc/...". Add "ignore_case": true.'
                 )
             if spec is not None and c.arg not in spec.arguments:
                 out.append(

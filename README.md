@@ -117,9 +117,9 @@ Each of these is covered by tests in `tests/`.
 - **Warden is a checkpoint, not a sandbox.** An agent can skip asking. Enforcement depends
   on the agent runtime calling Warden and obeying the answer.
 - **Conditions check top-level arguments only**, not nested values.
-- **Text checks see text, not parsed values.** `endswith "@mycompany.com"` also matches
-  `"evil@x.com, bob@mycompany.com"`. If a tool accepts several recipients in one string,
-  the rule can't tell them apart.
+- **Text checks see text.** Paths and emails are checked for common tricks (`//`, `/./`,
+  `/../`, backslashes; spaces, display names, recipient lists, trailing dots), but Warden
+  doesn't resolve symlinks or URL-decode. Prefer "allow only..." rules for paths and emails.
 - **Without a tool argument list, arguments no rule mentions aren't checked.** Add a
   `tools` entry for every tool with "deny when..." rules.
 - **The admin key is one shared secret, not real user accounts.** Any program that can

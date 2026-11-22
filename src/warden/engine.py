@@ -10,9 +10,12 @@ Security properties (each one is tested in tests/test_engine.py):
     rules (they apply) and as "doesn't hold" for allow rules (they don't).
     So "deny when recipient endswith evil.com" can't be dodged by leaving
     recipient out. Use the `exists` / `missing` ops to say it explicitly.
-  - An argument that can't be checked (wrong type, or a ".." path for
-    startswith) denies the whole request, so a "deny" rule can't be dodged
-    by sending "50000" as text instead of a number.
+  - An argument that can't be checked denies the whole request, so a "deny"
+    rule can't be dodged. "Can't be checked" means: the wrong type ("50000"
+    as text for a number check), an unclean path when the rule compares paths
+    ("//etc", "/./etc", "/data/../etc", backslashes), or not one plain email
+    address when the rule compares emails ("x@evil.com ", "x@evil.com.",
+    "Evil <x@evil.com>", "a@x.com, b@y.com").
 - Most restrictive wins: DENY beats REQUIRE_APPROVAL, which beats ALLOW.
 - Fail closed: any unexpected error gives DENY, never ALLOW.
 - Deterministic: no network, no files, no randomness, no LLM. Rule order does not matter.
@@ -70,6 +73,46 @@ def _fold(text: str, condition: Condition) -> str:
     return text.casefold() if condition.ignore_case else text
 
 
+def _looks_like_path(value: str) -> bool:
+    return "/" in value
+
+
+def _looks_like_email(value: str) -> bool:
+    return "@" in value
+
+
+_EMAIL_TRICK_CHARS = set("<>,;\"'()[]")
+
+
+def _is_clean_path(text: str) -> bool:
+    """No tricks that make one path look like another: //, /./, /../, backslashes."""
+    if "\\" in text or "\x00" in text:
+        return False
+    segments = text.split("/")
+    inner = segments[1:-1] if text.startswith("/") else segments[:-1]
+    if any(segment == "" for segment in inner):  # "//"
+        return False
+    return not any(segment in {".", ".."} for segment in segments)
+
+
+def _is_plain_email(text: str) -> bool:
+    """Exactly one bare address: no spaces, no display names, no lists, no trailing dot."""
+    return (
+        text.count("@") == 1
+        and not any(ch.isspace() for ch in text)
+        and not any(ch in _EMAIL_TRICK_CHARS for ch in text)
+        and not text.endswith(".")
+    )
+
+
+def _check_text_shape(actual: str, expected: list[str], condition: Condition) -> None:
+    """Raise if the agent's text is shaped to slip past a path or email comparison."""
+    if any(_looks_like_path(e) for e in expected) and not _is_clean_path(actual):
+        raise _UncheckableArgument(condition.arg)
+    if any(_looks_like_email(e) for e in expected) and not _is_plain_email(actual):
+        raise _UncheckableArgument(condition.arg)
+
+
 def _same(actual: JsonValue, expected: JsonValue, condition: Condition) -> bool:
     if isinstance(actual, str) and isinstance(expected, str):
         return _fold(actual, condition) == _fold(expected, condition)
@@ -102,11 +145,11 @@ def _holds(condition: Condition, arguments: dict[str, JsonValue]) -> bool:
         return actual <= expected  # Op.LTE
 
     if op in {Op.STARTSWITH, Op.ENDSWITH}:
-        # ".." could escape a path prefix: "/data/../etc/passwd" starts with "/data/".
-        if not isinstance(actual, str) or (op is Op.STARTSWITH and ".." in actual):
+        if not isinstance(actual, str):
             raise _UncheckableArgument(condition.arg)
         if not isinstance(expected, str):  # can't happen: the policy loader checked it
             raise ValueError("policy value is not text")
+        _check_text_shape(actual, [expected], condition)
         text, affix = _fold(actual, condition), _fold(expected, condition)
         return text.startswith(affix) if op is Op.STARTSWITH else text.endswith(affix)
 
@@ -114,6 +157,8 @@ def _holds(condition: Condition, arguments: dict[str, JsonValue]) -> bool:
     choices = expected if isinstance(expected, list) else [expected]
     if not any(_comparable(actual, choice) for choice in choices):
         raise _UncheckableArgument(condition.arg)
+    if isinstance(actual, str):
+        _check_text_shape(actual, [c for c in choices if isinstance(c, str)], condition)
     found = any(_same(actual, choice, condition) for choice in choices)
     if op is Op.NEQ:
         return not found
