@@ -42,3 +42,19 @@ def test_missing_policy_error_suggests_init(
     monkeypatch.chdir(tmp_path)
     assert main(["serve"]) == 2
     assert "warden init" in capsys.readouterr().err
+
+
+def test_init_creates_a_policy_serve_accepts_even_with_a_loose_umask(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import os
+
+    from warden.settings import resolve
+
+    old = os.umask(0o002)  # common on Linux: new files are group-writable
+    try:
+        target = tmp_path / "p.json"
+        assert main(["init", str(target)]) == 0
+    finally:
+        os.umask(old)
+    assert resolve(policy=str(target), env={}).policy == target

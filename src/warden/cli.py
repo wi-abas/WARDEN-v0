@@ -88,6 +88,7 @@ def init_policy(path: Path) -> int:
         return 1
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(starter_policy(), encoding="utf-8")
+    path.chmod(0o644)  # others may read, only you may change it (serve refuses otherwise)
     print(f"Created {path}. Next:")
     print("  1. Edit it to describe your agent's tools and rules")
     print(f"  2. uv run warden check {path}")
