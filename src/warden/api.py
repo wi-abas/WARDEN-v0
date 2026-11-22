@@ -222,8 +222,10 @@ class HostCheck:
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] == "http":
-            host = dict(scope["headers"]).get(b"host", b"")
-            if _host_name(host) not in self.allowed:
+            # Exactly one Host header: with two, a dict keeps the last while a proxy or
+            # framework in front might have used the first.
+            hosts = [value for name, value in scope["headers"] if name.lower() == b"host"]
+            if len(hosts) != 1 or _host_name(hosts[0]) not in self.allowed:
                 self.on_reject(scope, 400, "host not allowed")
                 await _deny_response(400, "host not allowed")(scope, receive, send)
                 return
