@@ -139,3 +139,13 @@ def test_check_does_not_start_the_server(tmp_path: Path, monkeypatch: pytest.Mon
 
     monkeypatch.setattr(warden.api, "main", lambda: pytest.fail("server started"))
     main(["check", str(DEFAULT_POLICY_PATH)])
+
+
+def test_w004_not_raised_when_only_ignore_case_differs(tmp_path: Path) -> None:
+    a = {"arg": "a", "op": "eq", "value": "x"}
+    b = {**a, "ignore_case": True}
+    policy = {
+        "tools": {"t": {"arguments": ["a"]}},
+        "rules": [r("a", "t", "deny", a), r("b", "t", "deny", b)],
+    }
+    assert codes(tmp_path, policy) == []

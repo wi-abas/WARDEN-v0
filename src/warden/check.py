@@ -41,8 +41,10 @@ class Report:
     tools: int = 0
 
 
-def _conditions_key(rule: Rule) -> frozenset[tuple[str, str, str]]:
-    return frozenset((c.arg, c.op.value, json.dumps(c.value, sort_keys=True)) for c in rule.when)
+def _conditions_key(rule: Rule) -> frozenset[tuple[str, str, str, bool]]:
+    return frozenset(
+        (c.arg, c.op.value, json.dumps(c.value, sort_keys=True), c.ignore_case) for c in rule.when
+    )
 
 
 def _warnings(policy: Policy) -> list[str]:
@@ -77,7 +79,7 @@ def _warnings(policy: Policy) -> list[str]:
                     )
                     break
 
-        seen: dict[tuple[Decision, frozenset[tuple[str, str, str]]], str] = {}
+        seen: dict[tuple[Decision, frozenset[tuple[str, str, str, bool]]], str] = {}
         for rule in tool_rules:
             key = (rule.effect, _conditions_key(rule))
             if key in seen:
