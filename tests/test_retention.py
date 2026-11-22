@@ -89,6 +89,7 @@ def test_purges_again_after_a_day_while_running(tmp_path: Path) -> None:
 
     clock.now = START + timedelta(days=2)  # a day later and the entry is now 91 days old
     log.record(entry(clock.now, "y"))
+    log.wait_for_purge()
     assert "ages-out" not in [e.agent_id for e in log.recent()]
 
 
@@ -124,6 +125,31 @@ def test_failed_purge_is_retried_on_the_next_write(tmp_path: Path) -> None:
 
     log = FailsOnce(tmp_path / "a.db", retention_days=90, clock=Clock())  # attempt 1 fails
     log.record(entry(START))  # attempt 2 right away, not a day later
+    log.wait_for_purge()
     assert len(attempts) == 2
     log.record(entry(START))  # succeeded: no more attempts today
+    log.wait_for_purge()
     assert len(attempts) == 2
+
+
+def test_write_does_not_wait_for_a_slow_purge(tmp_path: Path) -> None:
+    import threading
+    import time
+
+    release = threading.Event()
+
+    class SlowPurge(SQLiteAuditLog):
+        def purge_older_than(self, days: int) -> int:
+            if self._last_purge is not None and self._last_purge > START:
+                release.wait(5)  # the background purge blocks until we let it go
+            return 0
+
+    clock = Clock()
+    log = SlowPurge(tmp_path / "a.db", retention_days=90, clock=clock)
+    clock.now = START + timedelta(days=2)
+    started = time.monotonic()
+    log.record(entry(clock.now))  # triggers the (slow) purge in the background
+    assert time.monotonic() - started < 1
+    assert len(log.recent()) == 1
+    release.set()
+    log.wait_for_purge()

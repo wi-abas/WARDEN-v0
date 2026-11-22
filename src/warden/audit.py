@@ -221,6 +221,8 @@ class SQLiteAuditLog:
         self._clock = clock
         self._purge_lock = threading.Lock()
         self._last_purge: datetime | None = None
+        self._purge_running = False
+        self._purge_thread: threading.Thread | None = None
         _make_private(path)
         with closing(self._connect()) as conn, conn:
             conn.executescript(_SCHEMA)
@@ -229,26 +231,53 @@ class SQLiteAuditLog:
                 if name not in existing:
                     # Names come from the constant above, never from user input.
                     conn.execute(f"ALTER TABLE decisions ADD COLUMN {name} {sql_type}")
-        self._maybe_purge()  # first purge at startup
+        self._maybe_purge(background=False)  # first purge at startup, before serving
 
     def _connect(self) -> sqlite3.Connection:
         return sqlite3.connect(self.path, timeout=5)
 
-    def _maybe_purge(self) -> None:
-        """Purge at most once per PURGE_INTERVAL. Never makes a write fail."""
+    def _maybe_purge(self, background: bool = True) -> None:
+        """Purge at most once per PURGE_INTERVAL. Never makes a write fail or wait.
+
+        During normal writes the purge runs in a background thread, so the request
+        that happens to trigger it isn't slowed down by a big DELETE.
+        """
         if self.retention_days is None:
             return
         now = self._clock()
         with self._purge_lock:
+            if self._purge_running:
+                return
             if self._last_purge is not None and now - self._last_purge < PURGE_INTERVAL:
                 return
             self._last_purge = now
+            self._purge_running = True
+        if background:
+            self._purge_thread = threading.Thread(
+                target=self._run_purge, name="warden-audit-purge", daemon=True
+            )
+            self._purge_thread.start()
+        else:
+            self._run_purge()
+
+    def _run_purge(self) -> None:
+        days = self.retention_days
         try:
-            self.purge_older_than(self.retention_days)
+            if days is not None:
+                self.purge_older_than(days)
         except Exception as exc:
             logger.error("audit retention purge failed, will retry: %s", type(exc).__name__)
             with self._purge_lock:
                 self._last_purge = None  # retry on the next write, not in 24 hours
+        finally:
+            with self._purge_lock:
+                self._purge_running = False
+
+    def wait_for_purge(self, timeout: float = 10) -> None:
+        """Wait for a background purge to finish (used by tests and at shutdown)."""
+        thread = self._purge_thread
+        if thread is not None:
+            thread.join(timeout)
 
     def purge_older_than(self, days: int) -> int:
         """Delete entries older than `days` from both tables. Returns how many.
