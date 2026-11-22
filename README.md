@@ -1,6 +1,6 @@
-# WARDEN-v0
+# Warden
 
-[![CI](https://github.com/wi-abas/WARDEN-v0/actions/workflows/ci.yml/badge.svg)](https://github.com/wi-abas/WARDEN-v0/actions/workflows/ci.yml)
+[![CI](https://github.com/wi-abas/agent-warden/actions/workflows/ci.yml/badge.svg)](https://github.com/wi-abas/agent-warden/actions/workflows/ci.yml)
 
 A deterministic, local-first policy layer for AI agent tool calls.
 
