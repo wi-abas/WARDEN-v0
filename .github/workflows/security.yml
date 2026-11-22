@@ -1,0 +1,34 @@
+name: Security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "17 6 * * 1" # Mondays: new advisories appear even when the code doesn't change
+  workflow_dispatch:
+
+# Read-only: this workflow only checks code, it never writes to the repo.
+permissions:
+  contents: read
+
+jobs:
+  dependency-audit:
+    name: known vulnerabilities in dependencies
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # Actions are pinned to exact commits (a tag can be moved); Dependabot updates them.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+        with:
+          python-version: "3.12"
+      - name: Export exactly the locked versions, with hashes (runtime and dev)
+        run: uv export --frozen --all-groups --no-emit-project -o audit-requirements.txt
+      - name: pip-audit (checks the pinned list against the PyPI advisory database)
+        # --disable-pip: audit the exact hashed list, install nothing.
+        run: >
+          uvx --from "pip-audit==2.9.0" pip-audit --strict --disable-pip
+          --requirement audit-requirements.txt
