@@ -44,7 +44,12 @@ An approval works **once**, only for the **exact action** that was approved (sam
 tool and arguments, checked via `action_hash`), and **expires after 15 minutes**. It can
 never turn a `deny` into `allow`. Each approval can be decided only once, with one
 exception: an approved approval the agent hasn't used yet can still be **revoked** with
-`/deny`. Approvals are kept
+`/deny`.
+
+In `GET /v1/approvals`, hidden or look-alike characters in arguments (zero-width spaces,
+right-to-left overrides, full-width letters) are shown as visible `\uXXXX` escapes and
+the item gets a `warnings` entry, so an agent can't make you approve something that
+*looks* different from what it is. The approval is still bound to the real action. Approvals are kept
 in memory only (arguments never touch disk), so restarting Warden clears them.
 
 ## Audit log

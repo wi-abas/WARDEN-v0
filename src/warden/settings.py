@@ -18,6 +18,8 @@ silently falls back to a default. The host is always 127.0.0.1 (no network
 exposure until real authentication exists).
 """
 
+import os
+import stat
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -48,6 +50,25 @@ class Settings:
             f"Settings(policy={self.policy}, port={self.port}, audit_db={self.audit_db}, "
             f"retention_days={self.retention_days}, admin_key={key})"
         )
+
+
+def unsafe_permissions(path: Path) -> str | None:
+    """Why other users could change `path`, or None if they can't (POSIX only).
+
+    The policy decides every answer, so whoever can rewrite it controls Warden: like SSH
+    with key files, refuse a policy that other users can write, or that sits in a folder
+    where they could replace it (world-writable without the sticky bit, e.g. not /tmp).
+    """
+    if os.name != "posix":
+        return None
+    mode = stat.S_IMODE(path.stat().st_mode)
+    if mode & 0o022:
+        return f"{path} can be changed by other users (mode {mode:o}); fix: chmod go-w {path}"
+    folder = path.resolve().parent
+    folder_mode = folder.stat().st_mode
+    if folder_mode & 0o002 and not folder_mode & stat.S_ISVTX:
+        return f"{path} is in {folder}, where any user can replace files; move it"
+    return None
 
 
 def _whole_number(name: str, raw: str) -> int:
@@ -89,6 +110,8 @@ def resolve(
             f"no policy file at {DEFAULT_POLICY_PATH}. Create one with `warden init`, "
             "or pass --policy / set WARDEN_POLICY"
         )
+    if problem := unsafe_permissions(values.get("policy", DEFAULT_POLICY_PATH)):
+        raise SettingsError(f"refusing to use the policy: {problem}")
 
     if chosen := pick(port, "WARDEN_PORT"):
         raw, name = chosen

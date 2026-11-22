@@ -75,9 +75,14 @@ def main(argv: list[str] | None = None) -> int:
         print("warden: not starting: fix the policy file first", file=sys.stderr)
         return 2
 
-    from warden.api import main as serve  # imported here: `check` never loads the server
+    from warden.api import StartupError  # imported here: `check` never loads the server
+    from warden.api import main as serve
 
-    serve(settings)
+    try:
+        serve(settings)
+    except StartupError as exc:
+        print(f"warden: {exc}", file=sys.stderr)
+        return 2
     return 0
 
 
@@ -88,6 +93,7 @@ def init_policy(path: Path) -> int:
         return 1
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(starter_policy(), encoding="utf-8")
+    path.chmod(0o644)  # others may read, only you may change it (serve refuses otherwise)
     print(f"Created {path}. Next:")
     print("  1. Edit it to describe your agent's tools and rules")
     print(f"  2. uv run warden check {path}")

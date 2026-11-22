@@ -124,3 +124,8 @@ def test_real_ports_and_ipv6_still_work(url: str) -> None:
 )
 def test_bad_schemes_and_malformed_ipv6_are_refused(url: str) -> None:
     assert ask(DENY_EVIL, url) == Decision.DENY
+
+
+@pytest.mark.parametrize("url", ["https://api.mycompany.com/a b", "https://api.mycompany.com/a\tb"])
+def test_urls_with_spaces_are_refused(url: str) -> None:
+    assert ask(ALLOW_API, url) == Decision.DENY

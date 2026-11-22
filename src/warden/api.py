@@ -19,14 +19,18 @@ Run it with `uv run warden` (listens on 127.0.0.1 only: this machine, not the ne
 """
 
 import copy
+import json
 import logging
 import logging.config
 import re
 import secrets
+import sqlite3
 import sys
 import threading
 import time
+import unicodedata
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -38,14 +42,20 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import JsonValue
 from starlette.exceptions import HTTPException as StarletteHTTPException
-from starlette.types import ASGIApp, Receive, Scope, Send
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from warden import __version__, audit
 from warden.approvals import Approval, ApprovalStore, DecideError, Status, apply_approval
 from warden.audit import AuditEntry, AuditEvent, AuditLog, EventKind, SQLiteAuditLog
 from warden.engine import evaluate
 from warden.models import APPROVAL_ID_PATTERN, ActionRequest, Decision, EvaluationResult
-from warden.policy import DEFAULT_POLICY_PATH, Policy, load_policy
+from warden.policy import (
+    DEFAULT_POLICY_PATH,
+    DuplicateKeyError,
+    Policy,
+    load_policy,
+    no_duplicate_keys,
+)
 from warden.settings import Settings
 
 logger = logging.getLogger(__name__)
@@ -53,6 +63,10 @@ logger = logging.getLogger(__name__)
 HOST = "127.0.0.1"
 MAX_BODY_BYTES = 64 * 1024  # 64 KB is far more than any real tool call needs
 REJECTIONS_PER_MINUTE = 60
+# Rejected requests are recorded by a background worker, never on the server's main
+# loop: if the database is locked (e.g. someone has it open), a synchronous write would
+# freeze EVERY request for up to 5 seconds. Tests switch this off to read events at once.
+RECORD_REJECTIONS_IN_BACKGROUND = True
 
 
 def _deny_response(status_code: int, reason: str) -> JSONResponse:
@@ -98,6 +112,56 @@ class BodySizeLimit:
         await _deny_response(status, reason)(scope, receive, send)
 
 
+class DuplicateKeyCheck:
+    """Refuses JSON bodies that repeat a key, e.g. {"tool": "read_file", "tool": "delete_file"}.
+
+    Parsers disagree on which copy wins (Python keeps the last, others the first), so the
+    tool that finally runs could act on a different value than the one Warden checked.
+    Runs after BodySizeLimit, so the body it reads is at most MAX_BODY_BYTES.
+    """
+
+    def __init__(
+        self,
+        app: ASGIApp,
+        on_reject: Callable[[Scope, int, str], None] = lambda scope, status, reason: None,
+    ) -> None:
+        self.app = app
+        self.on_reject = on_reject
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or scope.get("method") not in {"POST", "PUT", "PATCH"}:
+            await self.app(scope, receive, send)
+            return
+        chunks: list[bytes] = []
+        while True:
+            message = await receive()
+            if message["type"] != "http.request":  # client went away
+                return
+            chunks.append(message.get("body", b""))
+            if not message.get("more_body", False):
+                break
+        body = b"".join(chunks)
+        try:
+            json.loads(body, object_pairs_hook=no_duplicate_keys)
+        except DuplicateKeyError:
+            self.on_reject(scope, 422, "duplicate key in request")
+            await _deny_response(422, "duplicate key in request")(scope, receive, send)
+            return
+        except ValueError:
+            pass  # not valid JSON at all: request validation reports it
+
+        replayed = False
+
+        async def replay() -> Message:
+            nonlocal replayed
+            if not replayed:
+                replayed = True
+                return {"type": "http.request", "body": body, "more_body": False}
+            return await receive()
+
+        await self.app(scope, replay, send)
+
+
 # Host names a request may be addressed to. Anything else is refused, which stops
 # "DNS rebinding": a malicious web page pointing its own domain at 127.0.0.1 to
 # talk to Warden from your browser.
@@ -135,6 +199,36 @@ class HostCheck:
         await self.app(scope, receive, send)
 
 
+def _is_deceptive_char(ch: str) -> bool:
+    """Characters that make text DISPLAY differently from what it is: invisible or
+    control characters, direction overrides (U+202E reverses what follows), and
+    compatibility look-alikes such as the full-width "ｅ"."""
+    return unicodedata.category(ch) in {"Cf", "Cc"} or unicodedata.normalize("NFKC", ch) != ch
+
+
+def _display_safe(value: JsonValue, warnings: list[str]) -> JsonValue:
+    """A copy of `value` with deceptive characters written as visible escapes (\\u202e),
+    so an approver can't be shown something other than the real action."""
+    if isinstance(value, str):
+        if not any(_is_deceptive_char(ch) for ch in value):
+            return value
+        warnings.append("contains hidden or look-alike characters (shown as \\uXXXX)")
+        return "".join(f"\\u{ord(ch):04x}" if _is_deceptive_char(ch) else ch for ch in value)
+    if isinstance(value, list):
+        return [_display_safe(item, warnings) for item in value]
+    if isinstance(value, dict):
+        out: dict[str, JsonValue] = {}
+        for key, item in value.items():
+            safe_key = _display_safe(key, warnings)
+            out[safe_key if isinstance(safe_key, str) else key] = _display_safe(item, warnings)
+        return out
+    return value
+
+
+class StartupError(Exception):
+    """Warden can't start; the message says why (and never contains secrets)."""
+
+
 class _AdminKeyError(Exception):
     pass
 
@@ -151,6 +245,12 @@ class _Warden:
     # requests can't fill the disk. The rest are counted and summarised in one event.
     rejections_per_minute: int = REJECTIONS_PER_MINUTE
     clock: Callable[[], float] = time.monotonic
+    record_in_background: bool = True
+    _events: ThreadPoolExecutor = field(
+        default_factory=lambda: ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="warden-events"
+        )
+    )
     _limit_lock: threading.Lock = field(default_factory=threading.Lock)
     _window_start: float = -1e18
     _window_count: int = 0
@@ -168,7 +268,7 @@ class _Warden:
         """Audit a refused request: method and URL path only, never the body."""
         if not self._within_rejection_limit():
             return
-        self._record_event_safely(
+        self._emit(
             AuditEvent.now(
                 EventKind.REQUEST_REJECTED,
                 reason,
@@ -193,13 +293,24 @@ class _Warden:
             else:
                 self._suppressed += 1
         if suppressed:
-            self._record_event_safely(
+            self._emit(
                 AuditEvent.now(
                     EventKind.REQUEST_REJECTED,
                     f"{suppressed} more rejected requests not recorded (rate limit)",
                 )
             )
         return allowed
+
+    def _emit(self, event: AuditEvent) -> None:
+        """Record an event that doesn't change the answer, without blocking the caller."""
+        if self.record_in_background:
+            self._events.submit(self._record_event_safely, event)
+        else:
+            self._record_event_safely(event)
+
+    def flush_events(self, timeout: float = 10) -> None:
+        """Wait until queued events are written (tests, shutdown)."""
+        self._events.submit(lambda: None).result(timeout)
 
     def reject(self, request: Request, status: int, reason: str) -> JSONResponse:
         self.record_rejection(request.scope, status, reason)
@@ -248,17 +359,24 @@ class _Warden:
     # --- Humans (admin) ----------------------------------------------------------------
 
     def list_approvals(self) -> list[dict[str, JsonValue]]:
-        return [
-            {
-                "approval_id": a.approval_id,
-                "agent_id": a.agent_id,
-                "tool": a.tool,
-                "arguments": a.arguments,  # the human must see what they approve
-                "action_hash": a.action_hash,
-                "expires_in_seconds": int(seconds_left),
-            }
-            for a, seconds_left in self.approvals.pending()
-        ]
+        items: list[dict[str, JsonValue]] = []
+        for a, seconds_left in self.approvals.pending():
+            warnings: list[str] = []
+            shown = _display_safe(a.arguments, warnings)
+            items.append(
+                {
+                    "approval_id": a.approval_id,
+                    "agent_id": a.agent_id,
+                    "tool": a.tool,
+                    # The human must see what they approve, and see it HONESTLY: hidden
+                    # characters are shown escaped (see _display_safe).
+                    "arguments": shown,
+                    "warnings": [w for w in sorted(set(warnings))],
+                    "action_hash": a.action_hash,
+                    "expires_in_seconds": int(seconds_left),
+                }
+            )
+        return items
 
     def decide(self, approval_id: str, approve: bool, request: Request) -> JSONResponse:
         try:
@@ -329,10 +447,14 @@ def create_app(
         audit_log=audit_log or SQLiteAuditLog(audit.DEFAULT_AUDIT_PATH),
         approvals=approvals or ApprovalStore(),
         admin_key=admin_key,
+        record_in_background=RECORD_REJECTIONS_IN_BACKGROUND,
     )
 
     app = FastAPI(title="Warden", version=__version__)
     app.state.warden = w  # for tests and debugging
+    # Middleware runs in reverse order of adding: HostCheck, then BodySizeLimit, then
+    # DuplicateKeyCheck (which may read the body, so it must come after the size limit).
+    app.add_middleware(DuplicateKeyCheck, on_reject=w.record_rejection)
     app.add_middleware(BodySizeLimit, on_reject=w.record_rejection)
     # Added last, so it runs first: refuse foreign Host headers before anything else.
     app.add_middleware(HostCheck, allowed=ALLOWED_HOSTS, on_reject=w.record_rejection)
@@ -392,11 +514,17 @@ def main(settings: Settings | None = None) -> None:
     config = log_config()
     # Configure logging BEFORE building the app, so policy-file errors are shown.
     logging.config.dictConfig(config)
+    try:
+        audit_log = SQLiteAuditLog(settings.audit_db, retention_days=settings.retention_days)
+    except (sqlite3.Error, OSError, ValueError) as exc:
+        # e.g. a corrupted file, or a folder Warden can't write to. Without an audit
+        # log nothing could ever be allowed, so stop with a clear message.
+        raise StartupError(f"can't open the audit database {settings.audit_db}: {exc}") from exc
     if settings.admin_key is not None:
         print("\nWarden admin key: using WARDEN_ADMIN_KEY\n", file=sys.stderr)
     app = create_app(
         policy_path=settings.policy,
-        audit_log=SQLiteAuditLog(settings.audit_db, retention_days=settings.retention_days),
+        audit_log=audit_log,
         admin_key=settings.admin_key,
     )
     uvicorn.run(app, host=HOST, port=settings.port, log_config=config)

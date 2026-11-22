@@ -56,7 +56,12 @@ def guarded(
     wait_seconds: float = 300,
     poll_every: float = 2.0,
 ) -> Any:
-    """Run `run(**arguments)` only if Warden says allow. Waits for human approval."""
+    """Run `run(**arguments)` only if Warden says allow. Waits for human approval.
+
+    The tool runs with a frozen COPY of exactly what Warden checked: if the caller's
+    dict (or a list inside it) changes after the check, the change is not used.
+    """
+    arguments = json.loads(json.dumps(arguments))  # snapshot: checked == executed
     answer = ask_warden(tool, arguments, url=url)
     if answer.get("decision") == "require_approval" and answer.get("approval_id"):
         approval_id = answer["approval_id"]
