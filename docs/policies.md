@@ -120,6 +120,7 @@ do what you meant:
 | W006 | A tool has an argument list but no rules: it's always denied |
 | W007 | A condition checks an argument that isn't in the tool's argument list (typo?) |
 | W008 | An email address is compared case-sensitively (`x@EVIL.com` would slip past) |
+| W009 | A deny rule compares a path or URL case-sensitively (`/ETC/passwd`, `HTTPS://EVIL.NET/` slip past) |
 | W010 | An `allow` rule uses `neq` or `missing` ("allow everything except X"), a deny-list in disguise |
 | W011 | A URL prefix has no `/` after the host (`"https://api.x.com"` also matches `"https://api.x.com.evil.net"`) |
 
