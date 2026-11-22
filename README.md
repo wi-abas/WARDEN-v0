@@ -73,6 +73,8 @@ uv run warden           # starts the server
 
 The server listens on `http://127.0.0.1:8000` (this machine only). Open
 **http://127.0.0.1:8000/docs** for an interactive page where you can send requests.
+(That page loads its scripts and styles from cdn.jsdelivr.net, so your browser contacts a
+third party. Warden itself never makes outside connections.)
 
 Settings (`--policy`, `--port`, the admin key, ...): see [docs/api.md](https://github.com/wi-abas/agent-warden/blob/main/docs/api.md#settings).
 
