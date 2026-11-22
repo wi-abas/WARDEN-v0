@@ -8,6 +8,9 @@ warden init [FILE]     create a starter policy (default policies/default.json)
 warden check FILE      validate a policy file; exit 1 on errors
 warden check --strict  ...also exit 1 on warnings (useful in CI)
 warden schema          print the JSON Schema for policy files
+warden proxy --config FILE
+warden proxy [--agent-id ID] [--warden-url URL] [--tool-prefix P] -- COMMAND [ARGS...]
+                       run an MCP server behind Warden (see docs/mcp-proxy.md)
 """
 
 import argparse
@@ -41,7 +44,17 @@ def main(argv: list[str] | None = None) -> int:
     check = commands.add_parser("check", help="validate a policy file")
     check.add_argument("policy", nargs="?", type=Path, default=DEFAULT_POLICY_PATH)
     check.add_argument("--strict", action="store_true", help="exit 1 on warnings too")
+    proxy = commands.add_parser("proxy", help="run an MCP server behind Warden")
+    proxy.add_argument("--config", type=Path, help="proxy config file (JSON)")
+    proxy.add_argument("--warden-url", help="default http://127.0.0.1:8000")
+    proxy.add_argument("--agent-id", help="agent id sent to Warden (default mcp-proxy)")
+    proxy.add_argument("--tool-prefix", help='put in front of tool names, e.g. "github."')
+    proxy.add_argument("--approval", choices=["wait", "error"], help="default wait")
+    proxy.add_argument("server", nargs=argparse.REMAINDER, help="-- COMMAND [ARGS...]")
     args = parser.parse_args(argv)
+
+    if args.command == "proxy":
+        return run_proxy(args)
 
     if args.command == "schema":
         print(policy_schema(), end="")
@@ -84,6 +97,49 @@ def main(argv: list[str] | None = None) -> int:
         print(f"warden: {exc}", file=sys.stderr)
         return 2
     return 0
+
+
+def run_proxy(args: argparse.Namespace) -> int:
+    """`warden proxy`: config file and/or flags, then relay stdin/stdout until done."""
+    import logging
+
+    from warden.mcp_proxy import ConfigError, ProxyConfig, load_config, serve_stdio
+
+    # stdout carries the MCP protocol: every human-readable line goes to stderr.
+    logging.basicConfig(stream=sys.stderr, level=logging.INFO, format="warden proxy: %(message)s")
+    server = args.server[1:] if args.server[:1] == ["--"] else args.server
+    try:
+        data = load_config(args.config).model_dump() if args.config else {}
+        overrides = {
+            "warden_url": args.warden_url,
+            "agent_id": args.agent_id,
+            "tool_prefix": args.tool_prefix,
+        }
+        data.update({k: v for k, v in overrides.items() if v is not None})
+        if args.approval:
+            data["approval"] = {**data.get("approval", {}), "mode": args.approval}
+        if server:
+            data["server"] = {**data.get("server", {}), "command": server[0], "args": server[1:]}
+        if "server" not in data:
+            raise ConfigError("no MCP server given: use --config FILE or -- COMMAND [ARGS...]")
+        config = ProxyConfig.model_validate(data, strict=False)
+    except ConfigError as exc:
+        print(f"warden proxy: {exc}", file=sys.stderr)
+        return 2
+    except ValueError as exc:  # pydantic's ValidationError is a ValueError
+        print(f"warden proxy: invalid settings ({_first_line(exc)})", file=sys.stderr)
+        return 2
+    return serve_stdio(config)
+
+
+def _first_line(exc: Exception) -> str:
+    from pydantic import ValidationError
+
+    from warden.policy import describe_errors
+
+    if isinstance(exc, ValidationError):
+        return "; ".join(describe_errors(exc))
+    return type(exc).__name__
 
 
 def init_policy(path: Path) -> int:
