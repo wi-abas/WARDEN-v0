@@ -126,3 +126,18 @@ def test_version_flag(capsys: pytest.CaptureFixture[str]) -> None:
     assert exc.value.code == 0
     assert capsys.readouterr().out.strip() == f"warden {warden.__version__}"
     assert warden.__version__ == "0.2.0"
+
+
+@pytest.mark.parametrize("raw", ["²", "٨٠٠٠", "9" * 5000, "1_000", "+80", " ", ""])
+def test_odd_numbers_give_a_clean_error(raw: str) -> None:
+    with pytest.raises(SettingsError, match="whole number"):
+        resolve(port=raw, env={})
+
+
+@pytest.mark.parametrize(("raw", "port"), [("1", 1), ("65535", 65535), (" 8080 ", 8080)])
+def test_port_boundaries_accepted(raw: str, port: int) -> None:
+    assert resolve(port=raw, env={}).port == port
+
+
+def test_retention_of_one_day_accepted() -> None:
+    assert resolve(retention_days="1", env={}).retention_days == 1

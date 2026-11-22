@@ -51,9 +51,12 @@ class Settings:
 
 
 def _whole_number(name: str, raw: str) -> int:
-    if not raw.strip().isdigit():
-        raise SettingsError(f"{name} must be a whole number, got {raw!r}")
-    return int(raw)
+    text = raw.strip()
+    # Plain 0-9 only (str.isdigit also accepts "²" and Arabic digits), and short enough
+    # that int() can't fail or produce absurd values.
+    if not (text.isascii() and text.isdigit() and len(text) <= 10):
+        raise SettingsError(f"{name} must be a whole number, got {raw[:20]!r}")
+    return int(text)
 
 
 def resolve(
