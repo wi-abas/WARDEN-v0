@@ -12,7 +12,7 @@ Runs alongside `feature/group-approvals`; avoids `approvals.py` and `api.py`.
 - [x] Fix: deeply nested JSON (found while preparing fuzzing)
 - [x] Stricter email check (found by fuzzing)
 - [x] Coverage-guided fuzzing: 5 targets, Hypothesis in every run, Atheris weekly in CI
-- [ ] Release workflow (prepared, not run)
+- [x] Release workflow (prepared, not run): `.github/workflows/release.yml`, `docs/releasing.md`
 - [ ] Threat model
 - [ ] Re-audit of this batch
 
@@ -31,6 +31,13 @@ Runs alongside `feature/group-approvals`; avoids `approvals.py` and `api.py`.
   It can't build on macOS (needs a libFuzzer clang), so the Atheris runner itself was
   NOT run locally; the targets were (100,000 inputs through Hypothesis, clean). The
   weekly workflow is the first real Atheris run: check it once.
+
+- **Release: two jobs.** Build (read-only, runs our code and tests) is separate from
+  publish (OIDC token only there, behind a reviewer-protected environment). uv's own
+  `uv publish --trusted-publishing always` instead of a third-party publish action;
+  SBOM from `uv export --format cyclonedx1.5` (experimental in uv 0.13, pinned by the
+  setup-uv version). Action SHAs looked up from the GitHub API; all releases > 2 weeks old.
+  The workflow doesn't create GitHub releases (no write permission needed).
 
 ## Findings
 
@@ -61,4 +68,9 @@ Runs alongside `feature/group-approvals`; avoids `approvals.py` and `api.py`.
 
 ## Blocked / needs Wissam
 
-(none yet)
+- **Release setup by hand** (docs/releasing.md): add the PyPI trusted publisher
+  (repo wi-abas/agent-warden, workflow release.yml, environment pypi), create the
+  `pypi` environment in GitHub with yourself as required reviewer, optionally protect
+  `v*` tags. Until then a tag push fails at the publish step (safe).
+- **First Atheris run**: trigger "Fuzzing" once by hand (Actions > Fuzzing > Run
+  workflow) to confirm it installs and runs on Linux; it couldn't be run on macOS.

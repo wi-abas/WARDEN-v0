@@ -3,6 +3,9 @@
 ## Unreleased
 
 ### Hardening
+- **Release workflow** (prepared, not yet used): tag `vX.Y.Z` → checks, build, CycloneDX
+  SBOM, GitHub build-provenance attestation, PyPI trusted publishing (no stored token)
+  behind a protected `pypi` environment. Setup steps in `docs/releasing.md`.
 - **Fuzzing**: five fuzz targets with independent oracles (`tests/fuzz_targets.py`),
   run through Hypothesis in every test run and weekly with Atheris in CI
   (`scripts/fuzz.py`, `.github/workflows/fuzz.yml`; Linux-only `fuzz` dependency group).
