@@ -44,7 +44,21 @@ def test_approved_reason_keeps_the_message() -> None:
     assert final.reason == f"approved by a human ({MESSAGE})"
 
 
-@pytest.mark.parametrize("bad", ["", "x" * 201, "line one\nline two", "tab\there", 5])
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "",
+        "x" * 201,
+        "line one\nline two",
+        "tab\there",
+        5,
+        "approve \u202eevil",  # right-to-left override
+        "zero\u200bwidth",
+        "bom\ufeff",
+        "c1\x85control",
+        "isolate\u2066x\u2069",
+    ],
+)
 def test_bad_messages_rejected(bad: object) -> None:
     with pytest.raises(ValidationError):
         rule(message=bad)

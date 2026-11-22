@@ -19,7 +19,9 @@ TOOL_NAME_PATTERN = r"^[a-z0-9_.\-]{1,64}$"
 AGENT_ID_PATTERN = r"^[A-Za-z0-9_.\-]{1,128}$"
 RULE_ID_PATTERN = r"^[a-z0-9_.\-]{1,64}$"
 ARG_NAME_PATTERN = r"^[A-Za-z0-9_.\-]{1,64}$"
-MESSAGE_PATTERN = r"^[^\x00-\x1f\x7f]{1,200}$"
+# One line of visible text: no control characters (C0, DEL, C1), and no invisible
+# formatting characters that can make logs lie (zero-width, bidi overrides like U+202E).
+MESSAGE_PATTERN = r"^[^\x00-\x1f\x7f-\x9f\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]{1,200}$"
 APPROVAL_ID_PATTERN = r"^[A-Za-z0-9_\-]{16,64}$"
 
 MAX_ARGUMENTS = 50

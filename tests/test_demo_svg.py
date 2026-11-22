@@ -3,6 +3,10 @@
 import importlib.util
 from pathlib import Path
 
+import pytest
+
+import warden.api
+
 
 def test_demo_svg_renders() -> None:
     path = Path(__file__).parent.parent / "scripts" / "demo_svg.py"
@@ -13,11 +17,6 @@ def test_demo_svg_renders() -> None:
     svg = module.render(module.demo_output())
     assert svg.startswith("<svg") and "REQUIRE_APPROVAL" in svg
     assert "\033" not in svg  # no raw terminal codes left
-
-
-import pytest  # noqa: E402
-
-import warden.api  # noqa: E402
 
 
 @pytest.fixture(autouse=True)

@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+import warden.api
 from warden.check import check_policy
 
 EXAMPLES = Path(__file__).parent.parent / "examples"
@@ -24,11 +25,6 @@ def test_demo_runs_and_every_step_behaves(capsys: pytest.CaptureFixture[str]) ->
 def test_demo_policy_passes_warden_check() -> None:
     report = check_policy(EXAMPLES / "demo-policy.json")
     assert report.errors == [] and report.warnings == []
-
-
-import pytest  # noqa: E402
-
-import warden.api  # noqa: E402
 
 
 @pytest.fixture(autouse=True)

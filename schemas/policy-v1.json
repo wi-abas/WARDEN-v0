@@ -88,7 +88,7 @@
         "message": {
           "anyOf": [
             {
-              "pattern": "^[^\\x00-\\x1f\\x7f]{1,200}$",
+              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f\\u200b-\\u200f\\u202a-\\u202e\\u2060-\\u2069\\ufeff]{1,200}$",
               "type": "string"
             },
             {
