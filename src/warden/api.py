@@ -24,6 +24,7 @@ import logging
 import logging.config
 import re
 import secrets
+import sqlite3
 import sys
 import threading
 import time
@@ -222,6 +223,10 @@ def _display_safe(value: JsonValue, warnings: list[str]) -> JsonValue:
             out[safe_key if isinstance(safe_key, str) else key] = _display_safe(item, warnings)
         return out
     return value
+
+
+class StartupError(Exception):
+    """Warden can't start; the message says why (and never contains secrets)."""
 
 
 class _AdminKeyError(Exception):
@@ -509,11 +514,17 @@ def main(settings: Settings | None = None) -> None:
     config = log_config()
     # Configure logging BEFORE building the app, so policy-file errors are shown.
     logging.config.dictConfig(config)
+    try:
+        audit_log = SQLiteAuditLog(settings.audit_db, retention_days=settings.retention_days)
+    except (sqlite3.Error, OSError, ValueError) as exc:
+        # e.g. a corrupted file, or a folder Warden can't write to. Without an audit
+        # log nothing could ever be allowed, so stop with a clear message.
+        raise StartupError(f"can't open the audit database {settings.audit_db}: {exc}") from exc
     if settings.admin_key is not None:
         print("\nWarden admin key: using WARDEN_ADMIN_KEY\n", file=sys.stderr)
     app = create_app(
         policy_path=settings.policy,
-        audit_log=SQLiteAuditLog(settings.audit_db, retention_days=settings.retention_days),
+        audit_log=audit_log,
         admin_key=settings.admin_key,
     )
     uvicorn.run(app, host=HOST, port=settings.port, log_config=config)

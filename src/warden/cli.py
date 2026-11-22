@@ -75,9 +75,14 @@ def main(argv: list[str] | None = None) -> int:
         print("warden: not starting: fix the policy file first", file=sys.stderr)
         return 2
 
-    from warden.api import main as serve  # imported here: `check` never loads the server
+    from warden.api import StartupError  # imported here: `check` never loads the server
+    from warden.api import main as serve
 
-    serve(settings)
+    try:
+        serve(settings)
+    except StartupError as exc:
+        print(f"warden: {exc}", file=sys.stderr)
+        return 2
     return 0
 
 
