@@ -22,6 +22,13 @@
   nested path; such rules can only become stricter.
 - CI: weekly and per-PR dependency scan (pip-audit), weekly mutation tests.
 
+### Behaviour changes
+- **Default per-agent limits now apply**: 600 requests per minute and 50 pending
+  approvals per agent, even without a `limits` section (429 / deny above them). Raise
+  them in the policy for high-volume agents.
+- `agent_id` in `/v1/evaluate` is optional when an agent token is sent.
+- Rule arguments containing a dot are read as nested paths (stricter only, see above).
+
 - Package renamed to **agent-warden** (`pip install agent-warden`); import name and the
   `warden` command are unchanged. Repository renamed to `wi-abas/agent-warden`.
 - `warden init` creates a starter policy; `warden schema` prints a JSON Schema so editors

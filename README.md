@@ -126,9 +126,10 @@ Settings (`--policy`, `--port`, the admin key, ...): see [docs/api.md](https://g
 
 ## Speed
 
-About **1 ms per tool call** over HTTP on an Apple M1, including the audit-log write
-(p99 under 2 ms). The decision itself takes about 10 microseconds. Measure on your machine:
-`uv run python scripts/benchmark.py`.
+About **1.1 ms per tool call** over HTTP on an Apple M1, including the hash-chained
+audit-log write (p99 under 2 ms). The decision itself takes about 10 microseconds.
+Through the MCP proxy, a `tools/call` takes about **1.3 ms more** than calling the server
+directly. Measure on your machine: `uv run python scripts/benchmark.py`.
 
 ## Documentation
 

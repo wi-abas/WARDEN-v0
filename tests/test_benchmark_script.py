@@ -12,3 +12,5 @@ def test_benchmark_runs() -> None:
     spec.loader.exec_module(bench)
     assert "median" in bench.bench_engine(n=200)
     assert "median" in bench.bench_http(n=30)
+    direct, proxied = bench.bench_proxy(n=20)
+    assert "median" in direct and "median" in proxied
