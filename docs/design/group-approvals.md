@@ -111,8 +111,9 @@ Held up (each has a test):
   look-alikes from arguments or from a misbehaving server are escaped.
 
 Not fixed (documented):
-- **Single decisions have the same "audited but not saved" gap** as finding 2. It
-  predates this feature; left as is to keep the change focused.
+- ~~Single decisions have the same "audited but not saved" gap~~: fixed afterwards
+  the same way (follow-up commit). Also fixed afterwards: the CLI treats JSON nested too
+  deeply to parse as a bad answer (exit 2) instead of crashing.
 - **The CLI sends the admin key to whatever listens on the URL.** If Warden isn't
   running and another local program holds the port, it gets the key (as with `curl`).
   The key is only useful against Warden itself, but it's a reason to keep the key

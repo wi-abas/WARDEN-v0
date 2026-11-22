@@ -465,10 +465,15 @@ class _Warden:
         }
 
     def decide(self, approval_id: str, approve: bool, request: Request) -> JSONResponse:
+        audited = False
+
+        def audit_first(approval: Approval, new_status: Status) -> None:
+            nonlocal audited
+            self._audit_human_decision(approval, new_status)
+            audited = True
+
         try:
-            status = self.approvals.decide(
-                approval_id, approve, before_commit=self._audit_human_decision
-            )
+            status = self.approvals.decide(approval_id, approve, before_commit=audit_first)
         except DecideError as exc:
             code = 404 if exc.not_found else 409
             reason = (
@@ -494,7 +499,20 @@ class _Warden:
             )
             return JSONResponse(status_code=code, content={"error": reason})
         except Exception as exc:
-            logger.error("approval not changed, audit failed: %s", type(exc).__name__)
+            logger.error("approval not changed, audit or save failed: %s", type(exc).__name__)
+            if audited:
+                # In the audit log, but saving the approval failed: say so in the log too,
+                # so it never claims a decision that didn't take effect.
+                self._record_event_safely(
+                    AuditEvent.now(
+                        EventKind.APPROVAL_DECIDE_FAILED,
+                        "decision NOT applied (approval storage failed), nothing changed",
+                        http_status=503,
+                        method=request.method,
+                        path=request.url.path,
+                        approval_id=approval_id,  # known: the store found it
+                    )
+                )
             return JSONResponse(
                 status_code=503, content={"error": "audit log unavailable, nothing changed"}
             )

@@ -234,3 +234,29 @@ def test_query_filters_are_not_a_thing(tmp_path: Path) -> None:
     )
     assert response.json()["count"] == 1
     assert [store._items[i].status for i in ids[1:]] == [Status.PENDING] * 2
+
+
+@pytest.mark.parametrize("action", ["approve", "deny"])
+def test_single_decision_storage_failure_after_audit_is_recorded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, action: str
+) -> None:
+    """The same gap for single decisions: audited, then saving fails. Nothing changes,
+    and the log says the decision was NOT applied."""
+    log = SQLiteAuditLog(tmp_path / "a.db")
+    db = ApprovalDB(tmp_path / "a.db")
+    store = ApprovalStore(db=db, ttl_seconds=900)
+    client = TestClient(create_app(BASIC_POLICY, audit_log=log, approvals=store, admin_key=KEY))
+    approval_id = client.post("/v1/evaluate", json=email(0)).json()["approval_id"]
+
+    def locked(approvals: object) -> None:
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(db, "save_many", locked)
+    response = client.post(f"/v1/approvals/{approval_id}/{action}", headers=ADMIN)
+    assert response.status_code == 503
+    assert store._items[approval_id].status is Status.PENDING
+    kinds = [e.kind for e in reversed(log.recent_events())]
+    assert kinds[-1] is EventKind.APPROVAL_DECIDE_FAILED
+    [failed] = [e for e in log.recent_events() if e.kind is EventKind.APPROVAL_DECIDE_FAILED]
+    assert failed.reason.startswith("decision NOT applied")
+    assert failed.approval_id == approval_id
