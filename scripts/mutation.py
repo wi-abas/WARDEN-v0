@@ -85,6 +85,7 @@ TARGETS: dict[str, list[str]] = {
         "test_retention.py",
         "test_locked_database.py",
         "test_group_approvals_api.py",
+        "test_audit_edges.py",
     ],
     "audit_checkpoint": ["test_audit_checkpoint.py", "test_audit_checkpoint_edges.py"],
     "mcp_proxy": ["test_mcp_proxy.py", "test_mcp_proxy_hardening.py"],

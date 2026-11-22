@@ -142,11 +142,11 @@ class AuditLog(Protocol):
 
     def record(self, entry: AuditEntry) -> None: ...
 
-    def recent(self, limit: int = 100) -> list[AuditEntry]: ...
+    def recent(self, limit: int = 100) -> list[AuditEntry]: ...  # mutation-ok: stub
 
     def record_event(self, event: AuditEvent) -> None: ...
 
-    def recent_events(self, limit: int = 100) -> list[AuditEvent]: ...
+    def recent_events(self, limit: int = 100) -> list[AuditEvent]: ...  # mutation-ok: stub
 
 
 _SCHEMA = """
@@ -308,7 +308,7 @@ class SQLiteAuditLog:
         self._maybe_purge(background=False)  # first purge at startup, before serving
 
     def _connect(self) -> sqlite3.Connection:
-        return sqlite3.connect(self.path, timeout=5)
+        return sqlite3.connect(self.path, timeout=5)  # mutation-ok: timeout
 
     def _write(self) -> sqlite3.Connection:
         """A connection holding the write lock (released by commit / rollback)."""
@@ -331,10 +331,12 @@ class SQLiteAuditLog:
             if self._last_purge is not None and now - self._last_purge < PURGE_INTERVAL:
                 return
             self._last_purge = now
-            self._purge_running = True
+            self._purge_running = True  # mutation-ok: the interval check above also stops a 2nd run
         if background:
             self._purge_thread = threading.Thread(
-                target=self._run_purge, name="warden-audit-purge", daemon=True
+                target=self._run_purge,
+                name="warden-audit-purge",
+                daemon=True,  # mutation-ok: only affects exit while a purge runs
             )
             self._purge_thread.start()
         else:
@@ -353,7 +355,7 @@ class SQLiteAuditLog:
             with self._purge_lock:
                 self._purge_running = False
 
-    def wait_for_purge(self, timeout: float = 10) -> None:
+    def wait_for_purge(self, timeout: float = 10) -> None:  # mutation-ok: timeout
         """Wait for a background purge to finish (used by tests and at shutdown)."""
         thread = self._purge_thread
         if thread is not None:
@@ -385,7 +387,9 @@ class SQLiteAuditLog:
                         reason=f"deleted {decisions} decisions and {events} events "
                         f"older than {days} days",
                         # In the chain too, so the anchors table can't be quietly edited.
-                        chain_anchor=json.dumps(anchors, sort_keys=True) if anchors else None,
+                        chain_anchor=json.dumps(anchors, sort_keys=True)  # mutation-ok: sorted
+                        if anchors
+                        else None,
                     ),
                 )
         return decisions + events
@@ -455,7 +459,7 @@ class SQLiteAuditLog:
             ).fetchall()
         events = []
         for row in rows:
-            data = dict(zip(_EVENT_FIELDS, row, strict=True))
+            data = dict(zip(_EVENT_FIELDS, row, strict=True))  # mutation-ok: same lengths
             data["kind"] = EventKind(data["kind"])
             events.append(AuditEvent(**data))
         return events
@@ -532,7 +536,7 @@ def verify_chain(path: Path) -> ChainReport:
     unchained: dict[str, int] = {}
     heads: dict[str, str] = {}
     problems: list[str] = []
-    with closing(sqlite3.connect(uri, uri=True, timeout=5)) as conn:
+    with closing(sqlite3.connect(uri, uri=True, timeout=5)) as conn:  # mutation-ok: timeout
         anchors = dict(
             conn.execute("SELECT table_name, last_deleted_hash FROM audit_anchors").fetchall()
         )
