@@ -9,11 +9,31 @@ authors = [
     { name = "Wissam Abas" }
 ]
 requires-python = ">=3.12"
+keywords = ["ai-agents", "llm", "security", "policy", "guardrails", "tool-calling", "mcp", "approval"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Framework :: FastAPI",
+    "Topic :: Security",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Typing :: Typed",
+]
 dependencies = [
     "fastapi>=0.165.0",
     "pydantic>=2.14.4",
     "uvicorn>=0.54.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/wi-abas/agent-warden"
+Documentation = "https://github.com/wi-abas/agent-warden/tree/main/docs"
+Issues = "https://github.com/wi-abas/agent-warden/issues"
+Changelog = "https://github.com/wi-abas/agent-warden/blob/main/CHANGELOG.md"
+Security = "https://github.com/wi-abas/agent-warden/blob/main/SECURITY.md"
 
 [project.scripts]
 warden = "warden.cli:run"

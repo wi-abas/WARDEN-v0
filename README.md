@@ -22,12 +22,12 @@ uv sync
 uv run python examples/demo.py
 ```
 
-<img src="docs/demo.svg" alt="Demo output: allow, deny and require_approval decisions, a blocked path trick, a blocked bcc, a human approval, and a rejected modified-after-approval attempt" width="700">
+<img src="https://raw.githubusercontent.com/wi-abas/agent-warden/main/docs/demo.svg" alt="Demo output: allow, deny and require_approval decisions, a blocked path trick, a blocked bcc, a human approval, and a rejected modified-after-approval attempt" width="700">
 
 A pretend agent reads files, tries a path trick, emails colleagues (and tries a sneaky
 `bcc`), sends invoices, gets one approved by a human, then tries to change the amount after
 approval and to replay it. Warden's answer to each is shown and checked. The policy it uses
-is [`examples/demo-policy.json`](examples/demo-policy.json).
+is [`examples/demo-policy.json`](https://github.com/wi-abas/agent-warden/blob/main/examples/demo-policy.json).
 
 ## Use it from your agent
 
@@ -57,7 +57,7 @@ else:
     print("Not allowed:", answer["reason"])  # deny, require_approval, or an error
 ```
 
-[`examples/agent.py`](examples/agent.py) is a complete version: a small agent loop that
+[`examples/agent.py`](https://github.com/wi-abas/agent-warden/blob/main/examples/agent.py) is a complete version: a small agent loop that
 also waits for human approval (polling with the `approval_id`) and gives up after a timeout.
 
 ## Quick start
@@ -74,7 +74,7 @@ uv run warden           # starts the server
 The server listens on `http://127.0.0.1:8000` (this machine only). Open
 **http://127.0.0.1:8000/docs** for an interactive page where you can send requests.
 
-Settings (`--policy`, `--port`, the admin key, ...): see [docs/api.md](docs/api.md#settings).
+Settings (`--policy`, `--port`, the admin key, ...): see [docs/api.md](https://github.com/wi-abas/agent-warden/blob/main/docs/api.md#settings).
 
 ## Speed
 
@@ -84,9 +84,9 @@ About **1 ms per tool call** over HTTP on an Apple M1, including the audit-log w
 
 ## Documentation
 
-- [Writing policies](docs/policies.md): rules, argument conditions, tool argument lists, `warden check`
-- [API and operations](docs/api.md): endpoints, approvals, audit log, settings
-- [Security](SECURITY.md): threat model, what Warden does and doesn't protect against
+- [Writing policies](https://github.com/wi-abas/agent-warden/blob/main/docs/policies.md): rules, argument conditions, tool argument lists, `warden check`
+- [API and operations](https://github.com/wi-abas/agent-warden/blob/main/docs/api.md): endpoints, approvals, audit log, settings
+- [Security](https://github.com/wi-abas/agent-warden/blob/main/SECURITY.md): threat model, what Warden does and doesn't protect against
 
 ## Rule for clients: fail closed
 
@@ -157,7 +157,7 @@ uv run mypy                    # type check (strict)
 ## Roadmap
 
 Done in v0.2.0: argument rules, tool argument lists, audit log with retention, human
-approvals, `warden check`, settings, demo, CI. See [CHANGELOG.md](CHANGELOG.md).
+approvals, `warden check`, settings, demo, CI. See [CHANGELOG.md](https://github.com/wi-abas/agent-warden/blob/main/CHANGELOG.md).
 
 Next, shaped by feedback from early users:
 
@@ -170,9 +170,9 @@ Next, shaped by feedback from early users:
 
 ## Security and contributing
 
-See [SECURITY.md](SECURITY.md) for the threat model (what Warden does and doesn't protect
-against) and how to report a vulnerability, and [CONTRIBUTING.md](CONTRIBUTING.md) to help.
+See [SECURITY.md](https://github.com/wi-abas/agent-warden/blob/main/SECURITY.md) for the threat model (what Warden does and doesn't protect
+against) and how to report a vulnerability, and [CONTRIBUTING.md](https://github.com/wi-abas/agent-warden/blob/main/CONTRIBUTING.md) to help.
 
 ## License
 
-[MIT](LICENSE)
+[MIT](https://github.com/wi-abas/agent-warden/blob/main/LICENSE)

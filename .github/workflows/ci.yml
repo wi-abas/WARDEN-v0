@@ -13,9 +13,15 @@ jobs:
   check:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    strategy:
+      matrix:
+        python: ["3.12", "3.13"]
+    name: check (Python ${{ matrix.python }})
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: astral-sh/setup-uv@v10.4.0
+        with:
+          python-version: ${{ matrix.python }}
       - name: Install (exactly the locked versions)
         run: uv sync --locked
       - name: Lint
