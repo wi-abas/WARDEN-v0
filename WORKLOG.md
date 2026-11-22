@@ -48,6 +48,12 @@ coverage, ruff/format/mypy clean.
   approvals write then fails, the API answers 503 "nothing changed" yet the events table
   has an approve entry (the state really didn't change). Acceptable; noted.
 
+- **Audit chain: one chain per table**, prefix-only retention deletes with anchors
+  (stored in `audit_anchors` and in the chained purge event), `BEGIN IMMEDIATE` around
+  every write. Kept the purge reason text unchanged (existing tests assert it). No
+  HMAC key: a key on the same disk adds little; documented that a full rewrite needs an
+  outside copy of the head hash to detect.
+
 ## Blocked / needs Wissam
 
 (none yet)
@@ -61,3 +67,4 @@ coverage, ruff/format/mypy clean.
 - [x] 3. Per-agent tokens (`warden agent add/list/remove`, `--agents`, Bearer auth).
 - [x] 4. Per-agent rate limits and pending-approval quotas (`limits` in the policy).
 - [x] 5. Persistent approvals (state in SQLite, arguments never on disk).
+- [x] 6. Tamper-evident audit log + `warden audit verify`.

@@ -10,6 +10,7 @@ warden check --strict  ...also exit 1 on warnings (useful in CI)
 warden schema          print the JSON Schema for policy files
 warden agent add ID     create an agent token (printed once; only its hash is stored)
 warden agent list | remove ID     manage the agents file (--agents FILE)
+warden audit verify [--audit-db FILE]   check the audit log's hash chain
 warden proxy --config FILE
 warden proxy [--agent-id ID] [--warden-url URL] [--tool-prefix P] -- COMMAND [ARGS...]
                        run an MCP server behind Warden (see docs/mcp-proxy.md)
@@ -18,6 +19,7 @@ warden proxy [--agent-id ID] [--warden-url URL] [--tool-prefix P] -- COMMAND [AR
 import argparse
 import json
 import os
+import sqlite3
 import sys
 from importlib import resources
 from pathlib import Path
@@ -30,6 +32,7 @@ from warden.agents import (
     read_agents_file,
     remove_agent,
 )
+from warden.audit import DEFAULT_AUDIT_PATH, verify_chain
 from warden.check import check_policy, format_report
 from warden.policy import DEFAULT_POLICY_PATH, Policy
 from warden.settings import SettingsError, resolve
@@ -52,6 +55,11 @@ def main(argv: list[str] | None = None) -> int:
     agent.add_argument("action", choices=["add", "list", "remove"])
     agent.add_argument("agent_id", nargs="?")
     agent.add_argument("--agents", type=Path, default=DEFAULT_AGENTS_PATH, help="agents file")
+    audit_parser = commands.add_parser("audit", help="audit log tools")
+    audit_parser.add_argument("action", choices=["verify"])
+    audit_parser.add_argument(
+        "--audit-db", type=Path, help="default WARDEN_AUDIT_DB or warden-audit.db"
+    )
     init = commands.add_parser("init", help="create a starter policy file")
     init.add_argument("policy", nargs="?", type=Path, default=DEFAULT_POLICY_PATH)
     commands.add_parser("schema", help="print the JSON Schema for policy files")
@@ -69,6 +77,10 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "proxy":
         return run_proxy(args)
+
+    if args.command == "audit":
+        path = args.audit_db or Path(os.environ.get("WARDEN_AUDIT_DB") or DEFAULT_AUDIT_PATH)
+        return verify_audit(path)
 
     if args.command == "agent":
         return manage_agents(args.action, args.agent_id, args.agents)
@@ -114,6 +126,32 @@ def main(argv: list[str] | None = None) -> int:
     except StartupError as exc:
         print(f"warden: {exc}", file=sys.stderr)
         return 2
+    return 0
+
+
+def verify_audit(path: Path) -> int:
+    """`warden audit verify`: 0 intact, 1 broken, 2 can't read."""
+    if not path.is_file():
+        print(f"warden: no audit database at {path}", file=sys.stderr)
+        return 2
+    try:
+        report = verify_chain(path)
+    except sqlite3.Error as exc:
+        print(f"warden: can't read {path}: {type(exc).__name__}", file=sys.stderr)
+        return 2
+    for table in report.checked:
+        line = f"{table}: {report.checked[table]} rows verified"
+        if report.unchained[table]:
+            line += f", {report.unchained[table]} older rows from before the hash chain"
+        print(line)
+    if not report.ok:
+        for problem in report.problems:
+            print(f"BROKEN: {problem}")
+        return 1
+    print("OK: the hash chain is intact.")
+    print("Newest hashes (keep a copy elsewhere to detect a rewrite of the whole log):")
+    for table, head in report.heads.items():
+        print(f"  {table}: {head}")
     return 0
 
 

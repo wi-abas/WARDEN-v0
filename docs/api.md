@@ -98,6 +98,13 @@ Each deletion is itself recorded as an `audit_purged` event ("deleted 120 decisi
 4 events older than 90 days"), so gaps in the history are explained. Retention can be
 turned off with `--retention-days 0`.
 
+**Tamper evidence:** each table is a hash chain (every row includes the hash of the one
+before it). `uv run warden audit verify` recomputes it and reports the first row that was
+edited, deleted or inserted, and prints the newest hashes. Keep a copy of those somewhere
+else: someone who rewrites the whole file (or cuts off the newest rows) can only be
+caught by comparing with a copy. Retention keeps the chain verifiable. Design:
+[design/audit-chain.md](design/audit-chain.md).
+
 ```sh
 sqlite3 warden-audit.db "SELECT timestamp, tool, decision FROM decisions ORDER BY id DESC LIMIT 10"
 sqlite3 warden-audit.db "SELECT timestamp, kind, http_status, reason FROM events ORDER BY id DESC LIMIT 10"
