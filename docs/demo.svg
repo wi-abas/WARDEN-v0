@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="947" height="1204" viewBox="0 0 947 1204" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="14">
+<rect width="947" height="1204" rx="10" fill="#111827"/>
+<circle cx="22" cy="20" r="6" fill="#f87171"/>
+<circle cx="42" cy="20" r="6" fill="#facc15"/>
+<circle cx="62" cy="20" r="6" fill="#4ade80"/>
+<text x="20" y="63" xml:space="preserve"><tspan fill="#e5e7eb">$ uv run python examples/demo.py</tspan></text>
+<text x="20" y="82" xml:space="preserve"></text>
+<text x="20" y="101" xml:space="preserve"><tspan fill="#e5e7eb">1. Simple rules</tspan></text>
+<text x="20" y="120" xml:space="preserve"></text>
+<text x="20" y="139" xml:space="preserve"><tspan fill="#e5e7eb">  Read /data/report.txt</tspan></text>
+<text x="20" y="158" xml:space="preserve"><tspan fill="#e5e7eb">    → </tspan><tspan fill="#4ade80" font-weight="bold">ALLOW</tspan><tspan fill="#e5e7eb">  (matched rule &#x27;read-data&#x27;)  ✓</tspan></text>
+<text x="20" y="177" xml:space="preserve"></text>
+<text x="20" y="196" xml:space="preserve"><tspan fill="#e5e7eb">  Read /data/../etc/passwd (path trick)</tspan></text>
+<text x="20" y="215" xml:space="preserve"><tspan fill="#e5e7eb">    → </tspan><tspan fill="#f87171" font-weight="bold">DENY</tspan><tspan fill="#e5e7eb">  (argument &#x27;path&#x27; could not be checked)  ✓</tspan></text>
+<text x="20" y="234" xml:space="preserve"></text>
+<text x="20" y="253" xml:space="preserve"><tspan fill="#e5e7eb">  Delete /data/report.txt</tspan></text>
+<text x="20" y="272" xml:space="preserve"><tspan fill="#e5e7eb">    → </tspan><tspan fill="#f87171" font-weight="bold">DENY</tspan><tspan fill="#e5e7eb">  (Agents may never delete files)  ✓</tspan></text>
+<text x="20" y="291" xml:space="preserve"></text>
+<text x="20" y="310" xml:space="preserve"><tspan fill="#e5e7eb">  Use a tool nobody mentioned (shell)</tspan></text>
+<text x="20" y="329" xml:space="preserve"><tspan fill="#e5e7eb">    → </tspan><tspan fill="#f87171" font-weight="bold">DENY</tspan><tspan fill="#e5e7eb">  (no matching rule)  ✓</tspan></text>
+<text x="20" y="348" xml:space="preserve"></text>
+<text x="20" y="367" xml:space="preserve"><tspan fill="#e5e7eb">2. Email: colleagues only</tspan></text>
+<text x="20" y="386" xml:space="preserve"></text>
+<text x="20" y="405" xml:space="preserve"><tspan fill="#e5e7eb">  Email bob@mycompany.com</tspan></text>
+<text x="20" y="424" xml:space="preserve"><tspan fill="#e5e7eb">    → </tspan><tspan fill="#4ade80" font-weight="bold">ALLOW</tspan><tspan fill="#e5e7eb">  (matched rule &#x27;email-colleagues&#x27;)  ✓</tspan></text>
+<text x="20" y="443" xml:space="preserve"></text>
+<text x="20" y="462" xml:space="preserve"><tspan fill="#e5e7eb">  Email Bob@MyCompany.COM (case trick)</tspan></text>
+<text x="20" y="481" xml:space="preserve"><tspan fill="#e5e7eb">    → </tspan><tspan fill="#4ade80" font-weight="bold">ALLOW</tspan><tspan fill="#e5e7eb">  (matched rule &#x27;email-colleagues&#x27;)  ✓</tspan></text>
+<text x="20" y="500" xml:space="preserve"></text>
+<text x="20" y="519" xml:space="preserve"><tspan fill="#e5e7eb">  Email someone@gmail.com</tspan></text>
+<text x="20" y="538" xml:space="preserve"><tspan fill="#e5e7eb">    → </tspan><tspan fill="#f87171" font-weight="bold">DENY</tspan><tspan fill="#e5e7eb">  (no matching rule)  ✓</tspan></text>
+<text x="20" y="557" xml:space="preserve"></text>
+<text x="20" y="576" xml:space="preserve"><tspan fill="#e5e7eb">  Email a colleague but sneak in a bcc</tspan></text>
+<text x="20" y="595" xml:space="preserve"><tspan fill="#e5e7eb">    → </tspan><tspan fill="#f87171" font-weight="bold">DENY</tspan><tspan fill="#e5e7eb">  (unexpected argument)  ✓</tspan></text>
+<text x="20" y="614" xml:space="preserve"></text>
+<text x="20" y="633" xml:space="preserve"><tspan fill="#e5e7eb">3. Invoices and human approval</tspan></text>
+<text x="20" y="652" xml:space="preserve"></text>
+<text x="20" y="671" xml:space="preserve"><tspan fill="#e5e7eb">  Invoice €200</tspan></text>
+<text x="20" y="690" xml:space="preserve"><tspan fill="#e5e7eb">    → </tspan><tspan fill="#4ade80" font-weight="bold">ALLOW</tspan><tspan fill="#e5e7eb">  (matched rule &#x27;small-invoice&#x27;)  ✓</tspan></text>
+<text x="20" y="709" xml:space="preserve"></text>
+<text x="20" y="728" xml:space="preserve"><tspan fill="#e5e7eb">  Invoice €5,000</tspan></text>
+<text x="20" y="747" xml:space="preserve"><tspan fill="#e5e7eb">    → </tspan><tspan fill="#facc15" font-weight="bold">REQUIRE_APPROVAL</tspan><tspan fill="#e5e7eb">  (Invoices over €500 need a human to approve)  ✓</tspan></text>
+<text x="20" y="766" xml:space="preserve"></text>
+<text x="20" y="785" xml:space="preserve"><tspan fill="#e5e7eb">  Human checks the queue: 1 pending, send_invoice {&#x27;to&#x27;: &#x27;acme&#x27;, &#x27;amount&#x27;: 5000}</tspan></text>
+<text x="20" y="804" xml:space="preserve"><tspan fill="#e5e7eb">  Human approves it.</tspan></text>
+<text x="20" y="823" xml:space="preserve"></text>
+<text x="20" y="842" xml:space="preserve"><tspan fill="#e5e7eb">  Agent changes the amount to €50,000 and reuses the approval</tspan></text>
+<text x="20" y="861" xml:space="preserve"><tspan fill="#e5e7eb">    → </tspan><tspan fill="#f87171" font-weight="bold">DENY</tspan><tspan fill="#e5e7eb">  (approval not valid)  ✓</tspan></text>
+<text x="20" y="880" xml:space="preserve"></text>
+<text x="20" y="899" xml:space="preserve"><tspan fill="#e5e7eb">  Agent sends the exact approved invoice</tspan></text>
+<text x="20" y="918" xml:space="preserve"><tspan fill="#e5e7eb">    → </tspan><tspan fill="#4ade80" font-weight="bold">ALLOW</tspan><tspan fill="#e5e7eb">  (approved by a human (Invoices over €500 need a human to approve))  ✓</tspan></text>
+<text x="20" y="937" xml:space="preserve"></text>
+<text x="20" y="956" xml:space="preserve"><tspan fill="#e5e7eb">  Agent tries to reuse the approval (replay)</tspan></text>
+<text x="20" y="975" xml:space="preserve"><tspan fill="#e5e7eb">    → </tspan><tspan fill="#f87171" font-weight="bold">DENY</tspan><tspan fill="#e5e7eb">  (approval already used)  ✓</tspan></text>
+<text x="20" y="994" xml:space="preserve"></text>
+<text x="20" y="1013" xml:space="preserve"><tspan fill="#e5e7eb">4. Audit log (newest first, arguments never stored)</tspan></text>
+<text x="20" y="1032" xml:space="preserve"></text>
+<text x="20" y="1051" xml:space="preserve"><tspan fill="#e5e7eb">  12:00:00  send_invoice  deny              approval already used</tspan></text>
+<text x="20" y="1070" xml:space="preserve"><tspan fill="#e5e7eb">  12:00:00  send_invoice  allow             approved by a human (Invoices over €500 need a human to approve)</tspan></text>
+<text x="20" y="1089" xml:space="preserve"><tspan fill="#e5e7eb">  12:00:00  send_invoice  deny              approval not valid</tspan></text>
+<text x="20" y="1108" xml:space="preserve"><tspan fill="#e5e7eb">  12:00:00  send_invoice  require_approval  Invoices over €500 need a human to approve</tspan></text>
+<text x="20" y="1127" xml:space="preserve"><tspan fill="#e5e7eb">  12:00:00  send_invoice  allow             matched rule &#x27;small-invoice&#x27;</tspan></text>
+<text x="20" y="1146" xml:space="preserve"><tspan fill="#e5e7eb">  12:00:00  event: approval approved by admin</tspan></text>
+<text x="20" y="1165" xml:space="preserve"></text>
+<text x="20" y="1184" xml:space="preserve"><tspan fill="#e5e7eb">All steps behaved as expected.</tspan></text>
+</svg>

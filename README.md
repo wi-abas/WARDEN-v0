@@ -22,6 +22,8 @@ uv sync
 uv run python examples/demo.py
 ```
 
+<img src="docs/demo.svg" alt="Demo output: allow, deny and require_approval decisions, a blocked path trick, a blocked bcc, a human approval, and a rejected modified-after-approval attempt" width="700">
+
 A pretend agent reads files, tries a path trick, emails colleagues (and tries a sneaky
 `bcc`), sends invoices, gets one approved by a human, then tries to change the amount after
 approval and to replay it. Warden's answer to each is shown and checked. The policy it uses
