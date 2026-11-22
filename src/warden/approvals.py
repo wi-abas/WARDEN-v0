@@ -179,6 +179,15 @@ class PendingQuotaExceeded(Exception):
     """This agent already has as many pending approvals as it may have."""
 
 
+def _new_approval_id() -> str:
+    """Unguessable, 32 characters. Never starts with "-", so it can't be mistaken for
+    an option on a command line (`warden approvals approve ID`)."""
+    while True:
+        approval_id = secrets.token_urlsafe(24)
+        if not approval_id.startswith("-"):
+            return approval_id
+
+
 class ApprovalStore:
     """Thread-safe approvals. Every method takes the lock.
 
@@ -252,7 +261,7 @@ class ApprovalStore:
                 )
                 if mine >= agent_limit:
                     raise PendingQuotaExceeded
-            approval_id = secrets.token_urlsafe(24)  # unguessable, 32 characters
+            approval_id = _new_approval_id()
             approval = Approval(
                 approval_id=approval_id,
                 agent_id=action.agent_id,
