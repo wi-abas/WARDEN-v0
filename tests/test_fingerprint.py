@@ -85,3 +85,18 @@ def test_api_response_includes_the_fingerprint() -> None:
     request = action(tool="send_email", to="a@b.c")
     response = client.post("/v1/evaluate", json=request.model_dump())
     assert response.json()["action_hash"] == fingerprint(request)
+
+
+def test_non_ascii_fingerprint_never_changes_by_accident() -> None:
+    # Pins how non-ASCII text is encoded (UTF-8, not \u escapes). Changing it would
+    # silently change every fingerprint of non-English actions.
+    request = ActionRequest.model_validate(
+        {
+            "agent_id": "agent-1",
+            "tool": "send_email",
+            "arguments": {"to": "zoë@例え.jp", "body": "Grüße 🚀"},
+        }
+    )
+    assert fingerprint(request) == (
+        "663ad0b7e661a0dbf11216cafa13aaeaee504faa64b4f094860f30994b358d31"
+    )
