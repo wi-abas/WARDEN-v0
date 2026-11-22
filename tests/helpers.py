@@ -5,6 +5,7 @@ import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Any
 
 import uvicorn
 from fastapi import FastAPI
@@ -29,3 +30,9 @@ def live_server(app: FastAPI) -> Iterator[str]:
     finally:
         server.should_exit = True
         thread.join(timeout=5)
+
+
+def shown_hashes(store: Any, ids: list[str]) -> list[str]:
+    """The action_hash a human would have been shown for each id (as `warden approvals`
+    sends them). Unknown ids get a dummy hash: they fail as "not found" anyway."""
+    return [store._items[i].action_hash if i in store._items else "0" * 64 for i in ids]

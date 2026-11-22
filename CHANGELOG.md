@@ -27,6 +27,15 @@
   retention deleted are skipped; the newest per table must still match.
 
 ### New
+- **Group approvals**: `GET /v1/approvals?group=true` lists pending approvals grouped by
+  agent and tool (every action in full); `POST /v1/approvals/decide` approves or rejects
+  up to 100 exact ids, all or nothing, one agent and tool at a time, audited before it
+  takes effect. CLI: `warden approvals list [--group]` and `warden approvals
+  approve|reject ID ...` (shows every action, then asks; `--yes` for scripts; admin key
+  from `WARDEN_ADMIN_KEY` only). Approving a group needs the `action_hash` shown for each
+  id, so ids alone (e.g. pasted from an agent's message) can't be approved unseen.
+- `/v1/approvals/{id}/approve` and `/deny` accept an optional `{"action_hash": ...}`
+  body; when sent, it must match (409 otherwise).
 - **MCP proxy** (`warden proxy`): put Warden in front of any stdio MCP server; every
   `tools/call` is checked (deny → tool error, approval → wait or "pending"). Config file
   or flags; Claude Desktop / Cursor / Claude Code setup in `docs/mcp-proxy.md`.

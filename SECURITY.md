@@ -53,6 +53,11 @@ Assuming the agent runtime calls Warden and obeys the answer:
   the first edited, deleted or inserted row.
 - **Checked ≠ executed**: the SDK and the MCP proxy run a tool with exactly the object
   that was checked; the proxy refuses duplicate JSON keys, batches and unknown methods.
+- **Bulk-approval tricks** (group approvals): a group decision names every approval by
+  id (no filters, so nothing that arrived later is swept in) together with the
+  `action_hash` the human was shown, never mixes agents or
+  tools, is all or nothing under one lock, and is audited before it takes effect. The
+  CLI shows every action in full, escaped, before asking.
 - **Approval loss or replay across restarts**: approval state is persisted (without
   arguments) and `used` is saved before an allow is returned. After a restart nothing
   can be approved until the human can see its arguments again.
@@ -71,11 +76,15 @@ Assuming the agent runtime calls Warden and obeys the answer:
   decision.
 - **Whoever has the admin key** (or can read the terminal it's printed in, or the
   environment of the Warden process: any program running as the same OS user usually can). It's one shared
-  secret, so there's no record of *which* person approved.
+  secret, so there's no record of *which* person approved. `warden approvals` sends the
+  key to whatever listens on the Warden URL, so only use it while Warden is running.
 - **Whoever can edit the audit database.** The hash chain shows edits, but someone who
   rewrites every later hash too (or cuts off the newest rows) is only caught by comparing
   with checkpoints kept elsewhere (`warden audit head`, `warden audit verify --expect`). They can also change approval state
   stored in the same file.
+- **A reviewer who doesn't read.** Group approvals make a careful review possible, not
+  certain: similar-looking actions in one group must still be compared, and a script
+  with the admin key (or `--yes`) can decide ids nobody looked at.
 - **Things the rules don't express.** Text checks see text, not meaning:
   `endswith "@mycompany.com"` can't tell two recipients in one string apart; nested
   conditions don't search lists, and argument lists only cover top-level names.

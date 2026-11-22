@@ -30,7 +30,8 @@ It is an early MVP and **not production-secure**. Never claim otherwise.
 - **Clients**: `client.py` (stdlib HTTP client, local URLs only, fails closed),
   `sdk.py` (`@guard`: freeze arguments, check, run exactly what was checked),
   `mcp_proxy.py` (`warden proxy`: stdio MCP proxy checking every `tools/call`).
-- **CLI** (`cli.py`): `serve`, `check`, `init`, `schema`, `agent`, `audit verify|head`, `proxy`.
+- **CLI** (`cli.py`): `serve`, `check`, `init`, `schema`, `agent`, `audit verify|head`,
+  `limits`, `approvals` (`approvals_cli.py`: group decisions, all or nothing), `proxy`.
 
 ## Technology
 
@@ -86,6 +87,7 @@ Use **uv** for everything. Never call `pip` directly and never edit `uv.lock` by
 | Save an audit checkpoint | `uv run warden audit head` |
 | Run policy tests | `uv run warden test examples/policy-tests.json` |
 | Fuzz (deep, local) | `HYPOTHESIS_PROFILE=deep uv run pytest tests/test_fuzz_targets.py` |
+| Review / decide approvals | `uv run warden approvals list --group` / `... approve ID ...` (needs `WARDEN_ADMIN_KEY`) |
 | Show / change rate limits | `uv run warden limits [set\|reset]` |
 | Mutation tests (slow) | `uv run python scripts/mutation.py --target engine` |
 | Benchmark | `uv run python scripts/benchmark.py` |
