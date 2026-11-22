@@ -162,7 +162,8 @@ Each of these is covered by tests in `tests/`.
 - Every result carries an `action_hash`: a SHA-256 fingerprint of the exact action
   (agent, tool, arguments). Approvals are bound to it.
 - Optional agent tokens: the agent id comes from a secret, not from the request.
-- Per-agent rate limits and caps on pending approvals.
+- Per-agent rate limits and caps on pending approvals (default 1,200 requests a minute
+  and 100 waiting approvals; change them with `warden limits set`).
 - The SDK and the MCP proxy run a tool with exactly the arguments that were checked.
 
 ## Known limitations
@@ -207,11 +208,12 @@ uv run mypy                    # type check (strict, incl. tests)
 | `src/warden/approvals.py` | Human approvals (persisted state, no arguments on disk) |
 | `src/warden/agents.py` | Agent tokens |
 | `src/warden/limits.py` | Per-agent rate limits and approval quotas |
+| `src/warden/limits_cli.py` | `warden limits`: show and change them |
 | `src/warden/api.py` | HTTP API |
 | `src/warden/client.py` | Small HTTP client used by the SDK and the proxy |
 | `src/warden/sdk.py` | Python SDK (`@guard`) |
 | `src/warden/mcp_proxy.py` | MCP proxy (`warden proxy`) |
-| `src/warden/cli.py` | The `warden` command (`serve`, `check`, `init`, `schema`, `agent`, `audit`, `proxy`) |
+| `src/warden/cli.py` | The `warden` command (`serve`, `check`, `init`, `schema`, `agent`, `audit`, `limits`, `proxy`) |
 | `src/warden/check.py` | Policy checks and warnings |
 | `src/warden/settings.py` | Server settings (flags and environment variables) |
 | `examples/demo.py` | The 30-second demo (also run as a test) |
