@@ -27,6 +27,7 @@ import sys
 import threading
 import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -53,6 +54,10 @@ logger = logging.getLogger(__name__)
 HOST = "127.0.0.1"
 MAX_BODY_BYTES = 64 * 1024  # 64 KB is far more than any real tool call needs
 REJECTIONS_PER_MINUTE = 60
+# Rejected requests are recorded by a background worker, never on the server's main
+# loop: if the database is locked (e.g. someone has it open), a synchronous write would
+# freeze EVERY request for up to 5 seconds. Tests switch this off to read events at once.
+RECORD_REJECTIONS_IN_BACKGROUND = True
 
 
 def _deny_response(status_code: int, reason: str) -> JSONResponse:
@@ -151,6 +156,12 @@ class _Warden:
     # requests can't fill the disk. The rest are counted and summarised in one event.
     rejections_per_minute: int = REJECTIONS_PER_MINUTE
     clock: Callable[[], float] = time.monotonic
+    record_in_background: bool = True
+    _events: ThreadPoolExecutor = field(
+        default_factory=lambda: ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="warden-events"
+        )
+    )
     _limit_lock: threading.Lock = field(default_factory=threading.Lock)
     _window_start: float = -1e18
     _window_count: int = 0
@@ -168,7 +179,7 @@ class _Warden:
         """Audit a refused request: method and URL path only, never the body."""
         if not self._within_rejection_limit():
             return
-        self._record_event_safely(
+        self._emit(
             AuditEvent.now(
                 EventKind.REQUEST_REJECTED,
                 reason,
@@ -193,13 +204,24 @@ class _Warden:
             else:
                 self._suppressed += 1
         if suppressed:
-            self._record_event_safely(
+            self._emit(
                 AuditEvent.now(
                     EventKind.REQUEST_REJECTED,
                     f"{suppressed} more rejected requests not recorded (rate limit)",
                 )
             )
         return allowed
+
+    def _emit(self, event: AuditEvent) -> None:
+        """Record an event that doesn't change the answer, without blocking the caller."""
+        if self.record_in_background:
+            self._events.submit(self._record_event_safely, event)
+        else:
+            self._record_event_safely(event)
+
+    def flush_events(self, timeout: float = 10) -> None:
+        """Wait until queued events are written (tests, shutdown)."""
+        self._events.submit(lambda: None).result(timeout)
 
     def reject(self, request: Request, status: int, reason: str) -> JSONResponse:
         self.record_rejection(request.scope, status, reason)
@@ -329,6 +351,7 @@ def create_app(
         audit_log=audit_log or SQLiteAuditLog(audit.DEFAULT_AUDIT_PATH),
         approvals=approvals or ApprovalStore(),
         admin_key=admin_key,
+        record_in_background=RECORD_REJECTIONS_IN_BACKGROUND,
     )
 
     app = FastAPI(title="Warden", version=__version__)
