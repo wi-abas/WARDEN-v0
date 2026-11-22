@@ -9,6 +9,7 @@ Runs alongside `feature/group-approvals`; avoids `approvals.py` and `api.py`.
   `audit_checkpoint.py` so `audit.py` stays untouched.
 - [x] `warden test` (policy tests), `examples/policy-tests.json` (18 cases incl. tricks),
   CI step.
+- [x] Fix: deeply nested JSON (found while preparing fuzzing)
 - [ ] Coverage-guided fuzzing
 - [ ] Release workflow (prepared, not run)
 - [ ] Threat model
@@ -26,6 +27,15 @@ Runs alongside `feature/group-approvals`; avoids `approvals.py` and `api.py`.
 
 ## Findings
 
+- **Deeply nested JSON (found while preparing the fuzz targets).** Python's json.loads
+  raises RecursionError (not a ValueError) on input like 30,000 nested brackets, which
+  fits easily in the 64 KB body limit. Effects: the API answered 500 "internal error"
+  (still deny, server stayed up); **one such line ended a whole MCP proxy session**
+  (availability: a prompt-injected model could cut off all tools; nothing unchecked was
+  forwarded); `warden check`, `audit verify`, the SDK and config readers crashed with a
+  traceback. Fixed at all 11 parse sites; 14 regression tests (10 fail without the fix).
+  Touches api.py (one except clause in DuplicateKeyCheck), kept minimal to avoid
+  conflicts with the group-approvals branch.
 - Chain hashes don't include any database identity, so two logs with identical rows
   have identical hashes (found while writing a test). Not a weakness for edit
   detection; documented in docs/design/audit-chain.md.

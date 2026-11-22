@@ -127,7 +127,7 @@ def load_config(path: Path) -> ProxyConfig:
         raise ConfigError(f"{path}: {exc}") from None
     except ValidationError as exc:
         raise ConfigError(f"{path}: {'; '.join(describe_errors(exc))}") from None
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, RecursionError) as exc:
         raise ConfigError(f"{path}: can't read it ({type(exc).__name__})") from None
 
 
@@ -156,7 +156,7 @@ def parse_message(line: bytes) -> Any:
         return json.loads(line, object_pairs_hook=no_duplicate_keys, parse_constant=_no_constants)
     except DuplicateKeyError:
         raise _Refused(INVALID_REQUEST, "repeated key in message (refused by Warden)") from None
-    except ValueError:
+    except (ValueError, RecursionError):  # RecursionError: nested too deeply
         raise _Refused(PARSE_ERROR, "invalid JSON") from None
 
 

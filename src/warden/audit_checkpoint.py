@@ -118,7 +118,7 @@ def read_checkpoints(path: Path) -> list[Checkpoint]:
         try:
             data = json.loads(line, object_pairs_hook=no_duplicate_keys)
             checkpoints.append(Checkpoint.model_validate(data))
-        except (ValueError, DuplicateKeyError, ValidationError) as exc:
+        except (ValueError, RecursionError, DuplicateKeyError, ValidationError) as exc:
             raise CheckpointError(f"{path} line {number} isn't a valid checkpoint") from exc
         if len(checkpoints) > MAX_CHECKPOINTS:
             raise CheckpointError(f"{path} has more than {MAX_CHECKPOINTS} checkpoints")

@@ -568,7 +568,7 @@ def _verify_anchors(conn: sqlite3.Connection, anchors: dict[str, str]) -> list[s
     ).fetchone()
     try:
         recorded = json.loads(row[0]) if row is not None else None
-    except ValueError:
+    except (ValueError, RecursionError):
         recorded = None
     if recorded != anchors:
         return ["audit_anchors: doesn't match the last recorded purge (anchors edited?)"]

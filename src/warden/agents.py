@@ -103,7 +103,7 @@ def read_agents_file(path: Path) -> AgentsFile:
         raise AgentsError(f"{path}: {exc}") from None
     except ValidationError as exc:
         raise AgentsError(f"{path}: {'; '.join(describe_errors(exc))}") from None
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, RecursionError) as exc:
         raise AgentsError(f"{path}: can't read it ({type(exc).__name__})") from None
 
 

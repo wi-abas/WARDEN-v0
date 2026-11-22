@@ -86,6 +86,8 @@ def load_tests(path: Path) -> CaseFile:
         tests = CaseFile.model_validate(data)
     except json.JSONDecodeError as exc:
         raise PolicyTestError(f"{path} isn't valid JSON (line {exc.lineno})") from exc
+    except RecursionError as exc:
+        raise PolicyTestError(f"{path} is nested too deeply") from exc
     except DuplicateKeyError as exc:
         raise PolicyTestError(f"{path}: {exc}") from exc
     except ValidationError as exc:

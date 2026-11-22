@@ -3,6 +3,10 @@
 ## Unreleased
 
 ### Hardening
+- **Fix: deeply nested JSON** (`[[[[...]]]]` thousands deep) raised RecursionError, which
+  slipped past `except ValueError`: the API answered 500 instead of 422/400 (still deny),
+  and one such message ended a whole MCP proxy session. Now refused as invalid input
+  everywhere JSON is read (API, proxy, SDK, client, policy, config files, audit verify).
 - **`warden test`**: policy tests. Example requests with expected decisions (and
   optionally rule and reason), run through the real engine; exit 1 on any failure.
   `examples/policy-tests.json` covers the default policy, including bypass tricks; CI runs it.
