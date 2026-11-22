@@ -73,8 +73,12 @@ def _fold(text: str, condition: Condition) -> str:
     return text.casefold() if condition.ignore_case else text
 
 
+def _looks_like_url(value: str) -> bool:
+    return "://" in value
+
+
 def _looks_like_path(value: str) -> bool:
-    return "/" in value
+    return "/" in value and not _looks_like_url(value)
 
 
 def _looks_like_email(value: str) -> bool:
@@ -95,6 +99,23 @@ def _is_clean_path(text: str) -> bool:
     return not any(segment in {".", ".."} for segment in segments)
 
 
+def _is_clean_url(text: str) -> bool:
+    """scheme://host[:port]/clean/path, with no tricks in the host part.
+
+    Refuses "https://good.com@evil.net" (everything before @ is a username, the real
+    host is evil.net), backslashes, spaces, and unclean paths ("/a/../b", "//").
+    """
+    if "://" not in text or any(ch.isspace() for ch in text) or "\\" in text:
+        return False
+    scheme, rest = text.split("://", 1)
+    if not scheme or not scheme.replace("+", "").replace("-", "").replace(".", "").isalnum():
+        return False
+    host, slash, path = rest.partition("/")
+    if not host or "@" in host:
+        return False
+    return not slash or _is_clean_path("/" + path)
+
+
 def _is_plain_email(text: str) -> bool:
     """Exactly one bare address: no spaces, no display names, no lists, no trailing dot."""
     return (
@@ -106,7 +127,11 @@ def _is_plain_email(text: str) -> bool:
 
 
 def _check_text_shape(actual: str, expected: list[str], condition: Condition) -> None:
-    """Raise if the agent's text is shaped to slip past a path or email comparison."""
+    """Raise if the agent's text is shaped to slip past a URL, path or email comparison."""
+    if any(_looks_like_url(e) for e in expected):
+        if not _is_clean_url(actual):
+            raise _UncheckableArgument(condition.arg)
+        return  # a URL may legitimately contain "@" in its path: skip the email check
     if any(_looks_like_path(e) for e in expected) and not _is_clean_path(actual):
         raise _UncheckableArgument(condition.arg)
     if any(_looks_like_email(e) for e in expected) and not _is_plain_email(actual):
