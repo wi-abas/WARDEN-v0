@@ -65,6 +65,13 @@ def _comparable(a: JsonValue, b: JsonValue) -> bool:
     return (is_number(a) and is_number(b)) or type(a) is type(b)
 
 
+def _fold(value: JsonValue, condition: Condition) -> JsonValue:
+    """Lower-case text (casefold handles e.g. German ß) when ignore_case is set."""
+    if condition.ignore_case and isinstance(value, str):
+        return value.casefold()
+    return value
+
+
 def _holds(condition: Condition, arguments: dict[str, JsonValue]) -> bool:
     present = condition.arg in arguments
     if condition.op is Op.EXISTS:
@@ -88,17 +95,20 @@ def _holds(condition: Condition, arguments: dict[str, JsonValue]) -> bool:
             return actual < expected
         return actual <= expected  # Op.LTE
 
-    if op is Op.STARTSWITH:
-        # ".." could escape the prefix: "/data/../etc/passwd" starts with "/data/".
-        if not isinstance(actual, str) or ".." in actual:
+    if op in {Op.STARTSWITH, Op.ENDSWITH}:
+        # ".." could escape a path prefix: "/data/../etc/passwd" starts with "/data/".
+        if not isinstance(actual, str) or (op is Op.STARTSWITH and ".." in actual):
             raise _UncheckableArgument(condition.arg)
-        return actual.startswith(expected)
+        text, affix = _fold(actual, condition), _fold(expected, condition)
+        return text.startswith(affix) if op is Op.STARTSWITH else text.endswith(affix)
 
     # eq / neq / in: the argument must have the same type as the policy value(s).
     choices = expected if op is Op.IN else [expected]
     if not any(_comparable(actual, choice) for choice in choices):
         raise _UncheckableArgument(condition.arg)
-    found = any(_comparable(actual, c) and actual == c for c in choices)
+    found = any(
+        _comparable(actual, c) and _fold(actual, condition) == _fold(c, condition) for c in choices
+    )
     if op is Op.NEQ:
         return not found
     return found  # Op.EQ, Op.IN

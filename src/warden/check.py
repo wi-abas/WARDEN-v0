@@ -12,6 +12,8 @@ Warnings: the policy loads, but probably doesn't do what you meant:
 - W006  tool has an argument list but no rules: it's always denied.
 - W007  a condition checks an argument that isn't in the tool's argument list
         (probably a typo): it can never be present.
+- W008  an email-domain check ("...@example.com") is case-sensitive, so
+        "x@EXAMPLE.com" slips past it. Add "ignore_case": true.
 
 Only reads the file. Never starts the server or changes anything.
 """
@@ -92,6 +94,16 @@ def _warnings(policy: Policy) -> list[str]:
                 out.append(
                     f'W005: rule "{rule.id}" checks startswith "{c.value}" without a '
                     f'trailing "/", so it also matches e.g. "{c.value}base/...".'
+                )
+            texts = c.value if isinstance(c.value, list) else [c.value]
+            if (
+                c.op in {Op.EQ, Op.NEQ, Op.IN, Op.ENDSWITH}
+                and not c.ignore_case
+                and any(isinstance(t, str) and "@" in t for t in texts)
+            ):
+                out.append(
+                    f'W008: rule "{rule.id}" compares an email address case-sensitively; '
+                    f'"X@EXAMPLE.COM" would not match. Add "ignore_case": true.'
                 )
             if spec is not None and c.arg not in spec.arguments:
                 out.append(

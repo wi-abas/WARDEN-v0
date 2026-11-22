@@ -59,12 +59,14 @@ class Op(StrEnum):
     LTE = "lte"
     IN = "in"
     STARTSWITH = "startswith"
+    ENDSWITH = "endswith"
     EXISTS = "exists"  # the argument is present (takes no value)
     MISSING = "missing"  # the argument is absent (takes no value)
 
 
 NUMBER_OPS = {Op.GT, Op.GTE, Op.LT, Op.LTE}
 PRESENCE_OPS = {Op.EXISTS, Op.MISSING}
+TEXT_OPS = {Op.EQ, Op.NEQ, Op.IN, Op.STARTSWITH, Op.ENDSWITH}  # may use ignore_case
 
 
 def is_number(value: object) -> bool:
@@ -87,6 +89,8 @@ class Condition(BaseModel):
     arg: str = Field(pattern=ARG_NAME_PATTERN)
     op: Op
     value: JsonValue = None  # required for every op except exists / missing
+    # Compare text without caring about upper/lower case, e.g. email domains.
+    ignore_case: bool = False
 
     @model_validator(mode="after")
     def value_fits_op(self) -> "Condition":
@@ -95,8 +99,14 @@ class Condition(BaseModel):
             raise ValueError(f"'{self.op}' takes no value")
         if self.op in NUMBER_OPS and not is_number(self.value):
             raise ValueError(f"'{self.op}' needs a number value")
-        if self.op is Op.STARTSWITH and not (isinstance(self.value, str) and self.value):
-            raise ValueError("'startswith' needs a non-empty text value")
+        if self.op in {Op.STARTSWITH, Op.ENDSWITH} and not (
+            isinstance(self.value, str) and self.value
+        ):
+            raise ValueError(f"'{self.op}' needs a non-empty text value")
+        if self.ignore_case:
+            values = self.value if isinstance(self.value, list) else [self.value]
+            if self.op not in TEXT_OPS or not all(isinstance(v, str) for v in values):
+                raise ValueError("'ignore_case' only works with text values")
         if self.op is Op.IN:
             ok = isinstance(self.value, list) and 1 <= len(self.value) <= MAX_IN_VALUES
             if not ok or not all(is_scalar(v) for v in self.value):

@@ -125,7 +125,7 @@ A rule can add `when` conditions. It then matches only if **all** of them hold:
 | `eq`, `neq` | equals / doesn't equal | text, number or true/false |
 | `gt`, `gte`, `lt`, `lte` | number comparison | number |
 | `in` | is one of | list of 1–100 text/number values |
-| `startswith` | text starts with | non-empty text |
+| `startswith`, `endswith` | text starts / ends with | non-empty text |
 | `exists`, `missing` | argument is present / absent | *(no value)* |
 
 - **Warden never gives a looser answer because an argument is missing.** On a `deny` or
@@ -135,6 +135,9 @@ A rule can add `when` conditions. It then matches only if **all** of them hold:
 - An argument of the **wrong type** (e.g. `"50000"` as text for `gt`), or a value containing
   `..` for `startswith`, **denies the whole request**. This stops a `deny` rule being dodged.
 - `true` is never treated as the number `1`.
+- Add `"ignore_case": true` to compare text without caring about upper/lower case
+  (works with `eq`, `neq`, `in`, `startswith`, `endswith`). Use it for email domains:
+  `{ "arg": "to", "op": "endswith", "value": "@mycompany.com", "ignore_case": true }`.
 - Conditions only look at top-level arguments. No regex, no code.
 
 ### Tool argument lists
@@ -197,6 +200,7 @@ do what you meant:
 | W005 | A path prefix without a trailing `/` (`"/data"` also matches `"/database"`) |
 | W006 | A tool has an argument list but no rules: it's always denied |
 | W007 | A condition checks an argument that isn't in the tool's argument list (typo?) |
+| W008 | An email address is compared case-sensitively (`x@EVIL.com` would slip past) |
 
 Exit code `1` on errors; with `--strict`, also on warnings (useful in CI).
 
@@ -229,6 +233,9 @@ Each of these is covered by tests in `tests/`.
 - **Warden is a checkpoint, not a sandbox.** An agent can skip asking. Enforcement depends
   on the agent runtime calling Warden and obeying the answer.
 - **Conditions check top-level arguments only**, not nested values.
+- **Text checks see text, not parsed values.** `endswith "@mycompany.com"` also matches
+  `"evil@x.com, bob@mycompany.com"`. If a tool accepts several recipients in one string,
+  the rule can't tell them apart.
 - **Without a tool argument list, arguments no rule mentions aren't checked.** Add a
   `tools` entry for every tool with "deny when..." rules.
 - **The admin key is one shared secret, not real user accounts.** Any program that can
