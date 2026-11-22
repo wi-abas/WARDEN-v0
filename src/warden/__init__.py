@@ -3,6 +3,6 @@
 from importlib.metadata import PackageNotFoundError, version
 
 try:
-    __version__ = version("warden")
+    __version__ = version("agent-warden")
 except PackageNotFoundError:  # running from source without installing
     __version__ = "unknown"

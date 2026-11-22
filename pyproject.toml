@@ -1,5 +1,5 @@
 [project]
-name = "warden"
+name = "agent-warden"
 version = "0.2.0"
 description = "Deterministic, local-first policy layer for AI agent tool calls"
 readme = "README.md"
@@ -49,3 +49,9 @@ pythonpath = ["src"]
 files = ["src", "examples"]
 strict = true
 plugins = ["pydantic.mypy"]
+
+[tool.uv.build-backend]
+# Installed as "agent-warden" (the name "warden" is taken on PyPI), imported as "warden".
+module-name = "warden"
+source-exclude = ["**/.DS_Store", "**/__pycache__"]
+wheel-exclude = ["**/.DS_Store", "**/__pycache__"]
