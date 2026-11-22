@@ -12,9 +12,9 @@ Warnings: the policy loads, but probably doesn't do what you meant:
 - W006  tool has an argument list but no rules: it's always denied.
 - W007  a condition checks an argument that isn't in the tool's argument list
         (probably a typo): it can never be present.
-- W009  a deny / require_approval rule compares a path case-sensitively, so on
-        case-insensitive filesystems (macOS, Windows) "/ETC/passwd" slips past
-        a rule for "/etc/". Add "ignore_case": true.
+- W009  a deny / require_approval rule compares a path or URL case-sensitively, so
+        "/ETC/passwd" (same file on macOS and Windows) or "HTTPS://EVIL.NET/" (hosts
+        ignore case) slips past it. Add "ignore_case": true.
 - W010  an "allow" rule uses neq or missing, i.e. "allow everything except X":
         a deny-list in disguise. Every value nobody thought of is allowed.
 - W011  a URL prefix without "/" after the host: "https://api.example.com"
@@ -134,11 +134,13 @@ def _warnings(policy: Policy) -> list[str]:
                 looser_exists
                 and c.op in {Op.EQ, Op.IN, Op.STARTSWITH, Op.ENDSWITH}
                 and not c.ignore_case
-                and any(isinstance(t, str) and t.startswith("/") for t in texts)
+                and any(isinstance(t, str) and (t.startswith("/") or "://" in t) for t in texts)
             ):
                 out.append(
-                    f'W009: rule "{rule.id}" compares a path case-sensitively; on macOS and '
-                    f'Windows "/ETC/..." is the same file as "/etc/...". Add "ignore_case": true.'
+                    f'W009: rule "{rule.id}" compares a path or URL case-sensitively; '
+                    f'"/ETC/..." is the same file as "/etc/..." on macOS and Windows, and '
+                    f'"HTTPS://EVIL.NET/" the same site as "https://evil.net/". '
+                    f'Add "ignore_case": true.'
                 )
             if rule.effect is Decision.ALLOW and c.op in {Op.NEQ, Op.MISSING}:
                 out.append(

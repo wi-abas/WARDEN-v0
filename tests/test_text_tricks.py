@@ -146,3 +146,17 @@ def test_w009_not_raised_when_nothing_looser_exists(tmp_path: Path) -> None:
         }
     ]
     assert check_policy(write(tmp_path, rules)).warnings == []
+
+
+def test_w009_also_covers_urls(tmp_path: Path) -> None:
+    rules = [
+        {"id": "all", "tool": "fetch", "effect": "allow"},
+        {
+            "id": "no-evil",
+            "tool": "fetch",
+            "effect": "deny",
+            "when": [{"arg": "url", "op": "startswith", "value": "https://evil.net/"}],
+        },
+    ]
+    codes = [w[:4] for w in check_policy(write(tmp_path, rules)).warnings]
+    assert "W009" in codes
