@@ -113,3 +113,14 @@ def test_crash_does_not_log_secrets(
         response = client.post("/v1/evaluate", json=secret_request("read_file"))
     assert response.status_code == 500
     assert CANARY not in caplog.text
+
+
+@pytest.mark.parametrize("number", ["1e400", "-1e400", "NaN", "Infinity", '[1, {"x": 1e999}]'])
+def test_non_finite_numbers_are_invalid_input(
+    client: TestClient, number: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    raw = '{"agent_id": "a", "tool": "read_file", "arguments": {"n": ' + number + "}}"
+    result = post_raw(client, raw.encode())
+    assert result["status"] == 422
+    assert result["body"]["decision"] == "deny"
+    assert "evaluation failed" not in caplog.text  # bad input, not an internal error

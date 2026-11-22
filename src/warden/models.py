@@ -10,7 +10,7 @@ from enum import StrEnum
 from math import isfinite
 from typing import Annotated, TypeGuard
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
 
 # Lowercase letters, digits, "_", "." and "-", 1 to 64 characters.
 # Strict on purpose: "Delete_File", "delete_file " or lookalike Unicode letters
@@ -49,6 +49,22 @@ class ActionRequest(BaseModel):
     arguments: dict[str, JsonValue] = Field(default_factory=dict, max_length=MAX_ARGUMENTS)
     # Sent on the retry after a human approved. NOT part of the action fingerprint.
     approval_id: str | None = Field(default=None, pattern=APPROVAL_ID_PATTERN)
+
+    @field_validator("arguments")
+    @classmethod
+    def numbers_are_finite(cls, arguments: dict[str, JsonValue]) -> dict[str, JsonValue]:
+        # JSON parsers accept 1e400 (infinity) and NaN, but they have no exact JSON
+        # form, so the action can't be fingerprinted. Reject them as bad input.
+        stack: list[JsonValue] = [arguments]
+        while stack:
+            value = stack.pop()
+            if isinstance(value, float) and not isfinite(value):
+                raise ValueError("numbers must be finite (no infinity or NaN)")
+            if isinstance(value, dict):
+                stack.extend(value.values())
+            elif isinstance(value, list):
+                stack.extend(value)
+        return arguments
 
 
 class Op(StrEnum):
