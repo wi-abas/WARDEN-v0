@@ -38,6 +38,7 @@ TARGETS: dict[str, list[str]] = {
         "test_unicode_tricks.py",
         "test_percent_encoding.py",
         "test_tool_specs.py",
+        "test_mutation_gaps.py",
     ],
     "approvals": [
         "test_approvals.py",
@@ -45,11 +46,12 @@ TARGETS: dict[str, list[str]] = {
         "test_revoke.py",
         "test_rate_limits.py",
         "test_agent_tokens.py",
+        "test_mutation_gaps.py",
     ],
-    "limits": ["test_rate_limits.py"],
+    "limits": ["test_rate_limits.py", "test_mutation_gaps.py"],
     "agents": ["test_agent_tokens.py"],
     "client": ["test_client.py", "test_sdk.py", "test_agent_tokens.py"],
-    "sdk": ["test_sdk.py", "test_agent_tokens.py"],
+    "sdk": ["test_sdk.py", "test_agent_tokens.py", "test_mutation_gaps.py"],
     "fingerprint": ["test_fingerprint.py"],
 }
 
