@@ -97,13 +97,11 @@ class RateLimiter:
 
     def _forget_idle(self, now: float) -> bool:
         """Drop buckets that have refilled completely (their agents are idle)."""
-        idle = [
-            agent
-            for agent, bucket in self._buckets.items()
-            if bucket.tokens
-            + (now - bucket.updated) * self._limits.requests_per_minute(agent) / 60.0
-            >= self._limits.requests_per_minute(agent)
-        ]
+        idle = []
+        for agent, bucket in self._buckets.items():
+            capacity = self._limits.requests_per_minute(agent)
+            if bucket.tokens + (now - bucket.updated) * capacity / 60.0 >= capacity:
+                idle.append(agent)
         for agent in idle:
             del self._buckets[agent]
         return bool(idle)

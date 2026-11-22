@@ -24,6 +24,8 @@ import sys
 from importlib import resources
 from pathlib import Path
 
+from pydantic import ValidationError
+
 from warden import __version__
 from warden.agents import (
     DEFAULT_AGENTS_PATH,
@@ -34,7 +36,7 @@ from warden.agents import (
 )
 from warden.audit import DEFAULT_AUDIT_PATH, verify_chain
 from warden.check import check_policy, format_report
-from warden.policy import DEFAULT_POLICY_PATH, Policy
+from warden.policy import DEFAULT_POLICY_PATH, Policy, describe_errors
 from warden.settings import SettingsError, resolve
 
 
@@ -214,20 +216,12 @@ def run_proxy(args: argparse.Namespace) -> int:
     except ConfigError as exc:
         print(f"warden proxy: {exc}", file=sys.stderr)
         return 2
-    except ValueError as exc:  # pydantic's ValidationError is a ValueError
-        print(f"warden proxy: invalid settings ({_first_line(exc)})", file=sys.stderr)
+    except ValidationError as exc:
+        print(
+            f"warden proxy: invalid settings ({'; '.join(describe_errors(exc))})", file=sys.stderr
+        )
         return 2
     return serve_stdio(config)
-
-
-def _first_line(exc: Exception) -> str:
-    from pydantic import ValidationError
-
-    from warden.policy import describe_errors
-
-    if isinstance(exc, ValidationError):
-        return "; ".join(describe_errors(exc))
-    return type(exc).__name__
 
 
 def init_policy(path: Path) -> int:

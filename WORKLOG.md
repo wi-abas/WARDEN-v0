@@ -67,7 +67,15 @@ coverage, ruff/format/mypy clean.
 
 ## Blocked / needs Wissam
 
-(none yet)
+- **Confirm the default rate limit** (600 requests/min, 50 pending approvals per agent,
+  applied even without a `limits` section). It's a behaviour change: a busy agent that
+  used to work could now get 429s (the benchmark hit it). Options: keep, raise, or only
+  apply limits when the policy has a `limits` section.
+- **Consider making agent tokens the default** (refuse to start without `--agents`, or
+  warn louder). It's the single biggest remaining weakness; not done because it would
+  break every current setup.
+- **Release decision**: CHANGELOG "Unreleased" is ready for review; nothing tagged or
+  published (as instructed).
 
 ## Progress
 
@@ -85,3 +93,4 @@ coverage, ruff/format/mypy clean.
 - [x] 9. CLAUDE.md rewritten for the current project.
 - [x] 10. Docs pass (`03c94ee`).
 - [x] 11. Re-audit: 5 fixes + tests, fuzz/race suite, report docs/security-audit-2026-11-22-build-session.md.
+- [x] 12. Benchmark (proxy ~+1.3 ms/call, HTTP ~1.1 ms), more property tests, cleanup.
