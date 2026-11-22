@@ -38,6 +38,11 @@ Assuming the agent runtime calls Warden and obeys the answer:
 - **Secret leaks through Warden itself**: tool arguments are never logged or written to
   disk, and error responses never echo input.
 - **Silent failure**: any error, broken policy, or failed audit write results in `deny`.
+- **Misleading the approver**: hidden and look-alike characters in arguments are shown
+  escaped in the approval list.
+- **Parser tricks**: request bodies that repeat a JSON key are refused, so Warden and the
+  tool can't read different values.
+- **A writable policy**: `warden serve` refuses a policy file other users could change.
 
 ### What Warden does NOT protect against
 

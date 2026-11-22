@@ -81,7 +81,7 @@ Settings (`--policy`, `--port`, the admin key, ...): see [docs/api.md](https://g
 ## Speed
 
 About **1 ms per tool call** over HTTP on an Apple M1, including the audit-log write
-(p99 under 2 ms). The decision itself takes about 5 microseconds. Measure on your machine:
+(p99 under 2 ms). The decision itself takes about 10 microseconds. Measure on your machine:
 `uv run python scripts/benchmark.py`.
 
 ## Documentation

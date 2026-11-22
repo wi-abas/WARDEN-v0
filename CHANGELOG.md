@@ -46,6 +46,21 @@
   suggests it for URL deny rules written as text.
 - URL hosts with a trailing dot, an empty port or `::` are refused.
 
+### Overnight security audit
+- A locked audit database no longer freezes the server: rejected-request records are
+  written by a background worker instead of on the main loop.
+- The approval list shows hidden/look-alike characters as `\uXXXX` escapes, with a
+  warning, so the approver sees the real action.
+- Request bodies with duplicate JSON keys are refused (parser-differential protection).
+- `warden serve` refuses a policy that other users could change; `warden init` writes 644.
+- Rule values with typos that could never match (invisible characters, look-alikes,
+  stray spaces around paths/URLs/emails/exact values) fail to load.
+- A corrupted or unwritable audit database gives a clear startup error instead of a crash.
+- The example agent runs tools with a frozen copy of exactly what was checked.
+- `host_in` requires punycode host names (IDNA2003 vs IDNA2008 mismatch).
+- Settings accept only plain 0-9 numbers; a symlinked audit database is refused; an
+  approval isn't burned when the audit write fails.
+
 ## v0.2.0 (2026-11-22)
 
 First release meant for other people to try. Still an early MVP, **not production-secure**:
