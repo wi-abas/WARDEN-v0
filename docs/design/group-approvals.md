@@ -87,4 +87,39 @@ Does NOT protect against:
 
 ## Re-audit findings
 
-(Filled in after the re-audit.)
+Attacked: sneaking an action into a group, racing decisions, replaying a group
+approval, mixing agents and tools, huge or malformed id lists, hidden characters in
+the grouped display, audit and storage failures. Tests: `test_group_approvals_attacks.py`,
+`test_group_approvals_store.py` (races), `test_group_approvals_properties.py`.
+
+Fixed:
+
+| # | Severity | Finding | Fix |
+|---|---|---|---|
+| 1 | Medium (usability, could push people to `--yes`-style workarounds) | **Approval ids could start with `-`** (`token_urlsafe`), so `warden approvals approve -abc...` was read as an unknown option. Found by a flaky CLI test. | New ids never start with `-`; older ids work after `--` (documented). |
+| 2 | Low (audit accuracy) | **Audit written, approval save failed**: the log said "approved" for approvals that stayed pending. Nothing was approved (fail closed), but the record disagreed with what happened. | A follow-up `approval_decide_failed` event "group decision NOT applied ..." with the ids. |
+
+Held up (each has a test):
+- Overlapping groups racing over real HTTP with agent retries: exactly one group wins,
+  no approval allowed twice, audit matches the final state, hash chain intact.
+- An action queued while the CLI waits for "y" is not shown and not decided.
+- Each approved id only fits its own action and agent; used up after one allow.
+- Malformed ids (look-alike letters, newlines, paths, objects, 65 characters), 101 ids,
+  duplicates, a string `approve`, extra fields, query "filters", repeated JSON keys:
+  refused without echoing input; an oversized body is refused before it's read (413).
+- The CLI prints only ASCII: control sequences (`ESC[2J`), bidi overrides and
+  look-alikes from arguments or from a misbehaving server are escaped.
+
+Not fixed (documented):
+- **Single decisions have the same "audited but not saved" gap** as finding 2. It
+  predates this feature; left as is to keep the change focused.
+- **The CLI sends the admin key to whatever listens on the URL.** If Warden isn't
+  running and another local program holds the port, it gets the key (as with `curl`).
+  The key is only useful against Warden itself, but it's a reason to keep the key
+  per-session (the default) and to want per-person keys later.
+- **Reviewer DoS**: the CLI reads at most 16 MB. Agents filling every pending slot with
+  large, heavily escaped arguments can make `warden approvals list` fail (exit 2,
+  nothing approved); per-agent pending quotas bound this. Use `curl` or reject by id.
+- **Double escaping in the CLI**: characters the server already escaped (`\u202e`)
+  appear with a doubled backslash. Safe, a little harder to read; the warning line says
+  why.

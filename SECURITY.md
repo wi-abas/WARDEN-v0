@@ -75,7 +75,8 @@ Assuming the agent runtime calls Warden and obeys the answer:
   decision.
 - **Whoever has the admin key** (or can read the terminal it's printed in, or the
   environment of the Warden process: any program running as the same OS user usually can). It's one shared
-  secret, so there's no record of *which* person approved.
+  secret, so there's no record of *which* person approved. `warden approvals` sends the
+  key to whatever listens on the Warden URL, so only use it while Warden is running.
 - **Whoever can edit the audit database.** The hash chain shows edits, but someone who
   rewrites every later hash too (or cuts off the newest rows) is only caught by comparing
   with checkpoints kept elsewhere (`warden audit head`, `warden audit verify --expect`). They can also change approval state

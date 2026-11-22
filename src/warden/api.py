@@ -508,10 +508,15 @@ class _Warden:
 
     def decide_group(self, body: GroupDecision, request: Request) -> JSONResponse:
         """Approve or deny several approvals of one agent and tool, all or nothing."""
+        audited = False
+
+        def audit_first(approvals: list[Approval], new_status: Status) -> None:
+            nonlocal audited
+            self._audit_group_decision(approvals, new_status)
+            audited = True
+
         try:
-            decided = self.approvals.decide_group(
-                body.ids, body.approve, before_commit=self._audit_group_decision
-            )
+            decided = self.approvals.decide_group(body.ids, body.approve, before_commit=audit_first)
         except GroupDecideError as exc:
             if self._within_rejection_limit():  # a flood of bad calls can't fill the disk
                 self._emit(
@@ -534,6 +539,19 @@ class _Warden:
             )
         except Exception as exc:
             logger.error("group not changed, audit or save failed: %s", type(exc).__name__)
+            if audited:
+                # The decision is in the audit log, but saving it failed: say so in the
+                # log too, so the log never claims a decision that didn't take effect.
+                self._record_event_safely(
+                    AuditEvent.now(
+                        EventKind.APPROVAL_DECIDE_FAILED,
+                        "group decision NOT applied (approval storage failed), nothing "
+                        f"changed: {' '.join(body.ids)}",
+                        http_status=503,
+                        method=request.method,
+                        path=request.url.path,
+                    )
+                )
             return JSONResponse(
                 status_code=503, content={"error": "audit log unavailable, nothing changed"}
             )
