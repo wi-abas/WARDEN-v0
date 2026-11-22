@@ -25,7 +25,7 @@ import threading
 import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Any, BinaryIO, Literal, Protocol
+from typing import Annotated, Any, BinaryIO, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError, field_validator
 
@@ -54,9 +54,14 @@ PASS_THROUGH = frozenset(
     }
 )
 
-# The fields a tools/call may carry. "_meta" is protocol metadata (e.g. a progress
-# token) and is forwarded unchecked; anything else is refused.
+# The fields a tools/call may carry; anything else is refused. "_meta" is protocol
+# metadata (e.g. a progress token): only keys on the config's "allow_meta_keys" list,
+# holding short text or a whole number, may be in it (see _meta_problem).
 TOOL_CALL_PARAMS = frozenset({"name", "arguments", "_meta"})
+DEFAULT_META_KEYS = ("progressToken",)
+META_KEY_PATTERN = r"^[A-Za-z][A-Za-z0-9._/-]{0,63}$"  # ASCII only: no look-alikes
+MAX_META_TEXT = 256
+MAX_META_INT = 2**53 - 1  # the largest whole number every JSON parser reads exactly
 
 # JSON-RPC error codes
 PARSE_ERROR = -32700
@@ -103,6 +108,8 @@ class ProxyConfig(BaseModel):
     server: ServerSpec
     approval: ApprovalSettings = ApprovalSettings()
     allow_methods: tuple[str, ...] = ()
+    # Keys a tools/call's "_meta" may hold. Anything else refuses the whole call.
+    allow_meta_keys: tuple[Annotated[str, Field(pattern=META_KEY_PATTERN)], ...] = DEFAULT_META_KEYS
     warden_timeout_seconds: float = Field(default=5, gt=0, le=60)
 
     @field_validator("warden_url")
@@ -345,6 +352,13 @@ class McpProxy:
         if not isinstance(arguments, dict):
             self._reply(rpc_error(request_id, INVALID_PARAMS, "arguments must be an object"))
             return
+        if "_meta" in params:
+            problem = _meta_problem(params["_meta"], self.config.allow_meta_keys)
+            if problem is not None:
+                # Refuse the whole call: never forward a partly cleaned message.
+                logger.warning("refused tools/call: _meta %s", problem)
+                self._reply(rpc_error(request_id, INVALID_PARAMS, f"_meta {problem}"))
+                return
         name: str = params["name"]
         try:
             answer = await self._decide(self.config.tool_prefix + name, arguments)
@@ -412,6 +426,26 @@ class McpProxy:
             await writer.drain()
         except (ConnectionError, RuntimeError):
             logger.error("MCP server is no longer reading its input")
+
+
+def _meta_problem(meta: object, allowed_keys: tuple[str, ...]) -> str | None:
+    """Why a tools/call's "_meta" can't be forwarded, or None if it can.
+
+    The answer never contains the keys or values themselves (they come from the agent)."""
+    if not isinstance(meta, dict):
+        return "must be an object"
+    for key, value in meta.items():
+        if key not in allowed_keys:
+            return "has a key that isn't allowed"
+        if type(value) is int:
+            if abs(value) > MAX_META_INT:
+                return "has a number that is too large"
+        elif isinstance(value, str):
+            if not 0 < len(value) <= MAX_META_TEXT or not (value.isascii() and value.isprintable()):
+                return f"text must be 1-{MAX_META_TEXT} printable ASCII characters"
+        else:
+            return "values must be text or whole numbers"
+    return None
 
 
 def _is_response(message: dict[str, Any]) -> bool:
