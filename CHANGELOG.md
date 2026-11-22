@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.3.0 (alpha, not yet tagged)
 
 ### Hardening
 - **Threat model** (`docs/threat-model.md`): assets, attackers, every defence linked to
