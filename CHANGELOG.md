@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.3.0 (alpha, not yet tagged)
 
 ### Hardening
 - **Threat model** (`docs/threat-model.md`): assets, attackers, every defence linked to
@@ -27,6 +27,10 @@
   retention deleted are skipped; the newest per table must still match.
 
 ### New
+- **Approval list filters**: `GET /v1/approvals?ids=A,B&agent_id=X&tool=Y` (and
+  `warden approvals list --agent A --tool T`). `approve`/`reject` fetch only the ids
+  they name, so a flood of pending approvals (the stress test made a 63 MB list) can no
+  longer stop a reviewer from rejecting. Filters only narrow the view.
 - **Group approvals**: `GET /v1/approvals?group=true` lists pending approvals grouped by
   agent and tool (every action in full); `POST /v1/approvals/decide` approves or rejects
   up to 100 exact ids, all or nothing, one agent and tool at a time, audited before it

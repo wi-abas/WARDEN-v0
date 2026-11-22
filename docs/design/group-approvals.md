@@ -120,6 +120,15 @@ Held up (each has a test):
 - The CLI prints only ASCII: control sequences (`ESC[2J`), bidi overrides and
   look-alikes from arguments or from a misbehaving server are escaped.
 
+Found later by the stress test (fixed): **a flood could lock the reviewer out.** 10
+agents x 100 pending approvals full of invisible characters (each escaped as `\u200b`)
+made the list 63 MB, over the CLI's answer limit, so `list` and even `reject` exited 2.
+Fix: `GET /v1/approvals` takes `ids`, `agent_id` and `tool` filters (pattern-checked,
+at most 100 ids); `approve`/`reject` fetch only their ids; `list --agent/--tool`. The
+filters only narrow what is shown: decisions still need exact ids and action hashes.
+Long arguments are NOT shortened in the list, because a shortened action would be
+approved partly unseen. Regression test: `tests/test_approvals_flood.py`.
+
 Not fixed (documented):
 - ~~Single decisions have the same "audited but not saved" gap~~: fixed afterwards
   the same way (follow-up commit). Also fixed afterwards: the CLI treats JSON nested too
