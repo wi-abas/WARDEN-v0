@@ -1,0 +1,24 @@
+{
+  "tools": {
+    "send_email": { "arguments": ["to", "subject", "body"], "required": ["to"] },
+    "send_invoice": { "arguments": ["to", "amount"], "required": ["to", "amount"] },
+    "read_file": { "arguments": ["path"], "required": ["path"] },
+    "delete_file": { "arguments": ["path"], "required": ["path"] }
+  },
+  "rules": [
+    { "id": "read-data", "tool": "read_file", "effect": "allow",
+      "when": [ { "arg": "path", "op": "startswith", "value": "/data/" } ] },
+
+    { "id": "no-deleting", "tool": "delete_file", "effect": "deny",
+      "message": "Agents may never delete files" },
+
+    { "id": "email-colleagues", "tool": "send_email", "effect": "allow",
+      "when": [ { "arg": "to", "op": "endswith", "value": "@mycompany.com", "ignore_case": true } ] },
+
+    { "id": "small-invoice", "tool": "send_invoice", "effect": "allow",
+      "when": [ { "arg": "amount", "op": "lte", "value": 500 } ] },
+    { "id": "big-invoice", "tool": "send_invoice", "effect": "require_approval",
+      "when": [ { "arg": "amount", "op": "gt", "value": 500 } ],
+      "message": "Invoices over €500 need a human to approve" }
+  ]
+}

@@ -13,6 +13,18 @@ Warden never runs tools itself and never uses an LLM to decide.
 > **Status: early MVP. Not production-secure.** It has no authentication and is meant
 > to run on your own machine only. See [Known limitations](#known-limitations).
 
+## See it in 30 seconds
+
+```sh
+uv sync
+uv run python examples/demo.py
+```
+
+A pretend agent reads files, tries a path trick, emails colleagues (and tries a sneaky
+`bcc`), sends invoices, gets one approved by a human, then tries to change the amount after
+approval and to replay it. Warden's answer to each is shown and checked. The policy it uses
+is [`examples/demo-policy.json`](examples/demo-policy.json).
+
 ## Quick start
 
 Requires [uv](https://docs.astral.sh/uv/).
@@ -269,6 +281,7 @@ uv run ruff format .           # format
 | `src/warden/cli.py` | The `warden` command (`serve`, `check`) |
 | `src/warden/check.py` | Policy checks and warnings |
 | `src/warden/settings.py` | Server settings (flags and environment variables) |
+| `examples/demo.py` | The 30-second demo (also run as a test) |
 
 ## Roadmap
 
