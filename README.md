@@ -23,6 +23,25 @@ uv run warden
 ```
 
 The server listens on `http://127.0.0.1:8000` (this machine only).
+
+### Settings
+
+```sh
+WARDEN_ADMIN_KEY="$(openssl rand -base64 32)" \
+  uv run warden serve --policy my-rules.json --port 9000 --audit-db logs/audit.db --retention-days 365
+```
+
+| Setting | Flag | Environment variable | Default |
+|---|---|---|---|
+| Policy file | `--policy` | `WARDEN_POLICY` | `policies/default.json` |
+| Port | `--port` | `WARDEN_PORT` | `8000` |
+| Audit database | `--audit-db` | `WARDEN_AUDIT_DB` | `warden-audit.db` |
+| Audit retention | `--retention-days` (`0` = forever) | `WARDEN_RETENTION_DAYS` | `90` |
+| Admin key | *(no flag)* | `WARDEN_ADMIN_KEY` (32+ characters) | random, printed at startup |
+
+Flags beat environment variables. The admin key has no flag on purpose: command lines are
+visible to other programs (`ps`). An invalid setting stops Warden with a clear message
+instead of falling back to a default. The host is always `127.0.0.1`.
 Open **http://127.0.0.1:8000/docs** for an interactive page where you can send requests.
 
 ## Example
@@ -153,7 +172,7 @@ that was tried, so misuse is visible.
 **Retention:** entries older than 90 days are deleted at startup and then once a day.
 Each deletion is itself recorded as an `audit_purged` event ("deleted 120 decisions and
 4 events older than 90 days"), so gaps in the history are explained. Retention can be
-turned off with `SQLiteAuditLog(retention_days=None)` (a startup setting is coming).
+turned off with `--retention-days 0`.
 
 ```sh
 sqlite3 warden-audit.db "SELECT timestamp, tool, decision FROM decisions ORDER BY id DESC LIMIT 10"
@@ -239,6 +258,7 @@ uv run ruff format .           # format
 | `src/warden/api.py` | HTTP API |
 | `src/warden/cli.py` | The `warden` command (`serve`, `check`) |
 | `src/warden/check.py` | Policy checks and warnings |
+| `src/warden/settings.py` | Server settings (flags and environment variables) |
 
 ## Roadmap
 

@@ -20,6 +20,7 @@ Run it with `uv run warden` (listens on 127.0.0.1 only: this machine, not the ne
 
 import copy
 import logging
+import logging.config
 import re
 import secrets
 import sys
@@ -40,11 +41,11 @@ from warden.audit import AuditEntry, AuditEvent, AuditLog, EventKind, SQLiteAudi
 from warden.engine import evaluate
 from warden.models import APPROVAL_ID_PATTERN, ActionRequest, Decision, EvaluationResult
 from warden.policy import DEFAULT_POLICY_PATH, load_policy
+from warden.settings import Settings
 
 logger = logging.getLogger(__name__)
 
 HOST = "127.0.0.1"
-PORT = 8000
 MAX_BODY_BYTES = 64 * 1024  # 64 KB is far more than any real tool call needs
 
 
@@ -274,8 +275,17 @@ def log_config() -> dict:
     return config
 
 
-def main() -> None:
+def main(settings: Settings | None = None) -> None:
     """Start the server on this machine only."""
-    uvicorn.run(
-        "warden.api:create_app", factory=True, host=HOST, port=PORT, log_config=log_config()
+    settings = settings or Settings()
+    config = log_config()
+    # Configure logging BEFORE building the app, so policy-file errors are shown.
+    logging.config.dictConfig(config)
+    if settings.admin_key is not None:
+        print("\nWarden admin key: using WARDEN_ADMIN_KEY\n", file=sys.stderr)
+    app = create_app(
+        policy_path=settings.policy,
+        audit_log=SQLiteAuditLog(settings.audit_db, retention_days=settings.retention_days),
+        admin_key=settings.admin_key,
     )
+    uvicorn.run(app, host=HOST, port=settings.port, log_config=config)
