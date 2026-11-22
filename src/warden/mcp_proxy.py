@@ -155,7 +155,7 @@ def load_config(path: Path) -> ProxyConfig:
         raise ConfigError(f"{path}: {exc}") from None
     except ValidationError as exc:
         raise ConfigError(f"{path}: {'; '.join(describe_errors(exc))}") from None
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, RecursionError) as exc:
         raise ConfigError(f"{path}: can't read it ({type(exc).__name__})") from None
 
 

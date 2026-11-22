@@ -8,12 +8,17 @@ warden init [FILE]     create a starter policy (default policies/default.json)
 warden check FILE      validate a policy file; exit 1 on errors
 warden check --strict  ...also exit 1 on warnings (useful in CI)
 warden schema          print the JSON Schema for policy files
+warden test FILE [--policy FILE]        run policy tests (example requests + expected decisions)
 warden limits [--policy FILE]           show rate limits and approval quotas
 warden limits set [--agent ID] [--requests-per-minute N] [--pending N]
 warden limits reset [--agent ID]        change them in the policy file
 warden agent add ID     create an agent token (printed once; only its hash is stored)
 warden agent list | remove ID     manage the agents file (--agents FILE)
-warden audit verify [--audit-db FILE]   check the audit log's hash chain
+warden audit verify [--audit-db FILE] [--expect FILE]   check the audit log's hash chain
+warden audit head [--audit-db FILE]     print a checkpoint to keep elsewhere
+warden approvals list [--group]          pending approvals, every action in full
+warden approvals approve|reject ID [ID ...] [--yes]
+                       decide exactly these, all or nothing (needs WARDEN_ADMIN_KEY)
 warden proxy --config FILE
 warden proxy [--agent-id ID] [--warden-url URL] [--tool-prefix P] -- COMMAND [ARGS...]
                        run an MCP server behind Warden (see docs/mcp-proxy.md)
@@ -61,13 +66,23 @@ def main(argv: list[str] | None = None) -> int:
     agent.add_argument("agent_id", nargs="?")
     agent.add_argument("--agents", type=Path, default=DEFAULT_AGENTS_PATH, help="agents file")
     audit_parser = commands.add_parser("audit", help="audit log tools")
-    audit_parser.add_argument("action", choices=["verify"])
+    audit_parser.add_argument("action", choices=["verify", "head"])
+    audit_parser.add_argument("--expect", type=Path, help="checkpoint file from `audit head`")
     audit_parser.add_argument(
         "--audit-db", type=Path, help="default WARDEN_AUDIT_DB or warden-audit.db"
     )
+    approvals = commands.add_parser("approvals", help="review and decide pending approvals")
+    approvals.add_argument("action", choices=["list", "approve", "reject"])
+    approvals.add_argument("ids", nargs="*", metavar="ID", help="approval ids")
+    approvals.add_argument("--group", action="store_true", help="list: group by agent and tool")
+    approvals.add_argument("--yes", action="store_true", help="don't ask (for scripts)")
+    approvals.add_argument("--warden-url", help="default WARDEN_URL or http://127.0.0.1:8000")
     init = commands.add_parser("init", help="create a starter policy file")
     init.add_argument("policy", nargs="?", type=Path, default=DEFAULT_POLICY_PATH)
     commands.add_parser("schema", help="print the JSON Schema for policy files")
+    test_parser = commands.add_parser("test", help="run policy tests")
+    test_parser.add_argument("tests", type=Path, help="test file (JSON)")
+    test_parser.add_argument("--policy", type=Path, help="policy file (overrides the test file)")
     check = commands.add_parser("check", help="validate a policy file")
     check.add_argument("policy", nargs="?", type=Path, default=DEFAULT_POLICY_PATH)
     check.add_argument("--strict", action="store_true", help="exit 1 on warnings too")
@@ -102,12 +117,26 @@ def main(argv: list[str] | None = None) -> int:
 
         return run_limits(args)
 
+    if args.command == "approvals":
+        from warden.approvals_cli import run as run_approvals
+
+        return run_approvals(args)
+
     if args.command == "audit":
         path = args.audit_db or Path(os.environ.get("WARDEN_AUDIT_DB") or DEFAULT_AUDIT_PATH)
-        return verify_audit(path)
+        if args.action == "head":
+            from warden.audit_checkpoint import run_head
+
+            return run_head(path)
+        return verify_audit(path, args.expect)
 
     if args.command == "agent":
         return manage_agents(args.action, args.agent_id, args.agents)
+
+    if args.command == "test":
+        from warden.policy_tests import run as run_tests
+
+        return run_tests(args.tests, args.policy)
 
     if args.command == "schema":
         print(policy_schema(), end="")
@@ -153,7 +182,7 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-def verify_audit(path: Path) -> int:
+def verify_audit(path: Path, expect: Path | None = None) -> int:
     """`warden audit verify`: 0 intact, 1 broken, 2 can't read."""
     if not path.is_file():
         print(f"warden: no audit database at {path}", file=sys.stderr)
@@ -172,6 +201,10 @@ def verify_audit(path: Path) -> int:
         for problem in report.problems:
             print(f"BROKEN: {problem}")
         return 1
+    if expect is not None:
+        from warden.audit_checkpoint import run_expect
+
+        return run_expect(path, expect)
     print("OK: the hash chain is intact.")
     print("Newest hashes (keep a copy elsewhere to detect a rewrite of the whole log):")
     for table, head in report.heads.items():

@@ -79,8 +79,8 @@ def parse_policy(raw: str) -> Policy:
     """Validate policy JSON. Raises DuplicateKeyError or pydantic's ValidationError."""
     try:
         json.loads(raw, object_pairs_hook=no_duplicate_keys)
-    except json.JSONDecodeError:
-        pass  # not valid JSON at all: let pydantic report it with its location
+    except (json.JSONDecodeError, RecursionError):
+        pass  # not valid JSON, or nested too deeply: let pydantic report it
     return Policy.model_validate_json(raw)
 
 

@@ -116,6 +116,7 @@ Requires [uv](https://docs.astral.sh/uv/).
 uv sync
 uv run warden init      # creates policies/default.json (skip in this repo: it exists)
 uv run warden check     # validates it
+uv run warden test examples/policy-tests.json   # checks it decides what you expect
 uv run warden           # starts the server
 ```
 
@@ -123,6 +124,15 @@ The server listens on `http://127.0.0.1:8000` (this machine only). Open
 **http://127.0.0.1:8000/docs** for an interactive page where you can send requests.
 (That page loads its scripts and styles from cdn.jsdelivr.net, so your browser contacts a
 third party. Warden itself never makes outside connections.)
+
+Review and decide waiting approvals from a second terminal (the admin key is printed at
+startup):
+
+```sh
+export WARDEN_ADMIN_KEY=<key>
+uv run warden approvals list --group          # every pending action, in full
+uv run warden approvals approve ID1 ID2       # shows them again, then asks [y/N]
+```
 
 Settings (`--policy`, `--port`, the admin key, ...): see [docs/api.md](https://github.com/wi-abas/agent-warden/blob/main/docs/api.md#settings).
 
@@ -140,6 +150,8 @@ directly. Measure on your machine: `uv run python scripts/benchmark.py`.
 - [MCP proxy](https://github.com/wi-abas/agent-warden/blob/main/docs/mcp-proxy.md): `warden proxy` for Claude Desktop, Cursor, Claude Code
 - [Design notes](https://github.com/wi-abas/agent-warden/tree/main/docs/design): how each feature works and what it doesn't cover
 - [Security](https://github.com/wi-abas/agent-warden/blob/main/SECURITY.md): threat model, what Warden does and doesn't protect against
+- [Threat model](https://github.com/wi-abas/agent-warden/blob/main/docs/threat-model.md): attackers, defences with their tests, remaining risks
+- [Releasing](https://github.com/wi-abas/agent-warden/blob/main/docs/releasing.md): signed, attested releases through PyPI trusted publishing
 
 ## Rule for clients: fail closed
 
@@ -164,6 +176,8 @@ Each of these is covered by tests in `tests/`.
 - Every result carries an `action_hash`: a SHA-256 fingerprint of the exact action
   (agent, tool, arguments). Approvals are bound to it.
 - Optional agent tokens: the agent id comes from a secret, not from the request.
+- Group approvals (`warden approvals approve ID ...`) take exact ids only, one agent and
+  tool at a time, all or nothing, and show every action in full before asking.
 - Per-agent rate limits and caps on pending approvals (default 1,200 requests a minute
   and 100 waiting approvals; change them with `warden limits set`).
 - The SDK and the MCP proxy run a tool with exactly the arguments that were checked.
@@ -185,7 +199,8 @@ Each of these is covered by tests in `tests/`.
 - **After a restart, pending approvals can't be approved until the agent asks again**
   (arguments are never written to disk, so the human couldn't see them).
 - **The audit log is tamper-evident, not tamper-proof.** Someone who can edit the file
-  can rewrite the whole chain; keep a copy of the hashes `warden audit verify` prints.
+  can rewrite the whole chain; save checkpoints elsewhere with `warden audit head` and
+  check them with `warden audit verify --expect FILE`.
 - **Import name clash.** The package installs as `agent-warden` but is imported as `warden`,
   the same import name as the unrelated `warden` package on PyPI. Don't install both in one
   environment.
@@ -211,11 +226,12 @@ uv run mypy                    # type check (strict, incl. tests)
 | `src/warden/agents.py` | Agent tokens |
 | `src/warden/limits.py` | Per-agent rate limits and approval quotas |
 | `src/warden/limits_cli.py` | `warden limits`: show and change them |
+| `src/warden/approvals_cli.py` | `warden approvals`: review and decide pending approvals |
 | `src/warden/api.py` | HTTP API |
 | `src/warden/client.py` | Small HTTP client used by the SDK and the proxy |
 | `src/warden/sdk.py` | Python SDK (`@guard`) |
 | `src/warden/mcp_proxy.py` | MCP proxy (`warden proxy`) |
-| `src/warden/cli.py` | The `warden` command (`serve`, `check`, `init`, `schema`, `agent`, `audit`, `limits`, `proxy`) |
+| `src/warden/cli.py` | The `warden` command (`serve`, `check`, `init`, `schema`, `agent`, `audit`, `limits`, `approvals`, `proxy`) |
 | `src/warden/check.py` | Policy checks and warnings |
 | `src/warden/settings.py` | Server settings (flags and environment variables) |
 | `examples/demo.py` | The 30-second demo (also run as a test) |

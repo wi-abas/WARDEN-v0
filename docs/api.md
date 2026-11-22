@@ -25,6 +25,8 @@ curl -s -X POST http://127.0.0.1:8000/v1/evaluate \
 | `GET /v1/approvals` | Admin: list pending approvals, with their arguments. |
 | `POST /v1/approvals/{id}/approve` | Admin: approve one (once). |
 | `POST /v1/approvals/{id}/deny` | Admin: deny one (once). |
+| `GET /v1/approvals?group=true` | Admin: the same list, grouped by agent and tool. |
+| `POST /v1/approvals/decide` | Admin: approve or reject several by id, all or nothing. |
 
 ## Approvals
 
@@ -33,7 +35,8 @@ curl -s -X POST http://127.0.0.1:8000/v1/evaluate \
    the terminal at startup (a new one every start):
    ```sh
    curl -s http://127.0.0.1:8000/v1/approvals -H 'X-Warden-Admin-Key: <key>'
-   curl -s -X POST http://127.0.0.1:8000/v1/approvals/<approval_id>/approve -H 'X-Warden-Admin-Key: <key>'
+   curl -s -X POST http://127.0.0.1:8000/v1/approvals/<approval_id>/approve -H 'X-Warden-Admin-Key: <key>' \
+     -H 'content-type: application/json' -d '{"action_hash": "<action_hash from the list>"}'
    ```
 3. The agent sends the **exact same action** again, plus `"approval_id": "<approval_id>"`.
    While the human hasn't decided, the answer stays `require_approval` ("waiting for a human
@@ -46,10 +49,77 @@ never turn a `deny` into `allow`. Each approval can be decided only once, with o
 exception: an approved approval the agent hasn't used yet can still be **revoked** with
 `/deny`.
 
+The body `{"action_hash": "..."}` on `/approve` and `/deny` is optional: when sent, it
+must be the approval's `action_hash` (409 otherwise), which proves you listed it first.
+Send it; a later version may require it.
+
 In `GET /v1/approvals`, hidden or look-alike characters in arguments (zero-width spaces,
 right-to-left overrides, full-width letters) are shown as visible `\uXXXX` escapes and
 the item gets a `warnings` entry, so an agent can't make you approve something that
 *looks* different from what it is. The approval is still bound to the real action.
+
+### Several at once (group approvals)
+
+When an agent queues several similar actions, you can decide them together. This is
+built so that you can't approve something you didn't see:
+
+```sh
+export WARDEN_ADMIN_KEY=<key>
+uv run warden approvals list --group          # every pending action, in full
+uv run warden approvals approve ID1 ID2 ID3   # shows them again, then asks [y/N]
+uv run warden approvals reject ID1 ID2        # same, for "no"
+```
+
+The CLI fetches the named approvals again, prints every action in full (non-ASCII and
+control characters escaped) and asks `Approve these 3 actions? [y/N]`; `--yes` skips
+the question for scripts. Exit codes: 0 done, 1 refused or answered no, 2 usage error,
+missing `WARDEN_ADMIN_KEY` (never accepted as a flag) or Warden unreachable.
+
+Over HTTP:
+
+```sh
+curl -s 'http://127.0.0.1:8000/v1/approvals?group=true' -H 'X-Warden-Admin-Key: <key>'
+```
+```json
+{"groups": [{"agent_id": "mail-bot", "tool": "send_email", "count": 2, "approvals": [
+  {"approval_id": "Qd3...", "agent_id": "mail-bot", "tool": "send_email",
+   "arguments": {"to": "ann@example.com"}, "warnings": [], "action_hash": "9f2...",
+   "expires_in_seconds": 812},
+  {"approval_id": "Zk8...", "...": "..."}]}]}
+```
+
+```sh
+curl -s -X POST http://127.0.0.1:8000/v1/approvals/decide -H 'X-Warden-Admin-Key: <key>' \
+  -H 'content-type: application/json' \
+  -d '{"ids": ["Qd3...", "Zk8..."], "action_hashes": ["9f2...", "41c..."], "approve": true}'
+```
+```json
+{"status": "approved", "count": 2, "results": [
+  {"approval_id": "Qd3...", "status": "approved"}, {"approval_id": "Zk8...", "status": "approved"}]}
+```
+
+Rules:
+- **Approve what you saw**: approving needs `action_hashes`, the `action_hash` the list
+  showed for each id, in the same order (422 without them). A hash that doesn't match its
+  id refuses the whole group (409, "list the approvals again"), so ids copied from an
+  agent's message or an old list can't be approved without listing. Rejecting doesn't
+  need them (checked if sent). The CLI sends them for you.
+- **Exact ids only**, 1 to 100, no repeats (else 422). There is no "approve everything
+  from agent X": an approval that arrives after you looked is never included.
+- **One agent and one tool** per decision. A group never mixes them.
+- **All or nothing.** If any id is unknown or expired, already decided (approved, used,
+  denied or revoked), from another agent or tool, or has no arguments yet after a
+  restart, nothing changes and you get 409:
+  ```json
+  {"error": "nothing changed: some approvals can't be decided",
+   "failed": [{"id": "Zk8...", "reason": "already decided"}]}
+  ```
+- **Each approval stays separate**: single use, bound to its own action and agent, a
+  fresh 15-minute window from the moment of approval. Revoking one approved approval
+  is still done one at a time with `/deny`.
+- **Audit**: one `approval_approved`/`approval_denied` event per approval plus one
+  `approval_group_decided` event (count and ids), all written in one transaction before
+  anything changes. If that write fails: 503, nothing changed.
 
 **Restarts:** approval state (id, agent, tool, `action_hash`, status, expiry) is kept in
 the audit database, so pending and approved approvals survive a restart; `used` is saved

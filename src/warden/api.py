@@ -9,6 +9,8 @@ Admin only (header "X-Warden-Admin-Key", printed in the terminal at startup):
 - GET  /v1/approvals                  -> pending approvals, with their arguments
 - POST /v1/approvals/{id}/approve     -> approve one (once)
 - POST /v1/approvals/{id}/deny        -> deny one (once)
+- GET  /v1/approvals?group=true       -> the same, grouped by (agent_id, tool)
+- POST /v1/approvals/decide           -> approve or deny several by id, all or nothing
 
 Every decision is written to the audit log before it is returned. If the
 audit log can't be written, the answer is deny (503): no unrecorded allows.
@@ -35,24 +37,34 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
 import uvicorn
 import uvicorn.config
 from fastapi import Depends, FastAPI, Header, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from pydantic import JsonValue
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from warden import __version__, audit
 from warden.agents import AgentRegistry, AgentsError, load_agents
 from warden.approvals import (
+    MAX_GROUP,
     Approval,
     ApprovalDB,
     ApprovalStore,
     DecideError,
+    GroupDecideError,
     Status,
     apply_approval,
 )
@@ -164,8 +176,10 @@ class DuplicateKeyCheck:
             self.on_reject(scope, 422, "duplicate key in request")
             await _deny_response(422, "duplicate key in request")(scope, receive, send)
             return
-        except ValueError:
-            pass  # not valid JSON at all: request validation reports it
+        except (ValueError, RecursionError):
+            # Not valid JSON, or nested too deeply for Python's parser: request
+            # validation reports it (as 422, not a 500 "internal error").
+            pass
 
         replayed = False
 
@@ -240,6 +254,47 @@ def _display_safe(value: JsonValue, warnings: list[str]) -> JsonValue:
             out[safe_key if isinstance(safe_key, str) else key] = _display_safe(item, warnings)
         return out
     return value
+
+
+ActionHash = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
+
+
+class SingleDecision(BaseModel):
+    """Optional body of POST /v1/approvals/{id}/approve|deny: the action_hash the human
+    was shown. When sent, it must match the approval (proof they looked at it)."""
+
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+
+    action_hash: ActionHash
+
+
+class GroupDecision(BaseModel):
+    """Body of POST /v1/approvals/decide: the exact approvals the human decides, and,
+    to approve, the action_hash shown for each (same order): you can't approve a group
+    you haven't listed."""
+
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+
+    ids: list[Annotated[str, StringConstraints(pattern=APPROVAL_ID_PATTERN)]] = Field(
+        min_length=1, max_length=MAX_GROUP
+    )
+    action_hashes: list[ActionHash] | None = Field(default=None, max_length=MAX_GROUP)
+    approve: bool
+
+    @field_validator("ids")
+    @classmethod
+    def no_duplicates(cls, ids: list[str]) -> list[str]:
+        if len(set(ids)) != len(ids):
+            raise ValueError("an id is listed more than once")
+        return ids
+
+    @model_validator(mode="after")
+    def hashes_fit(self) -> "GroupDecision":
+        if self.approve and self.action_hashes is None:
+            raise ValueError("approving needs action_hashes")
+        if self.action_hashes is not None and len(self.action_hashes) != len(self.ids):
+            raise ValueError("one action_hash per id")
+        return self
 
 
 class StartupError(Exception):
@@ -423,37 +478,43 @@ class _Warden:
 
     # --- Humans (admin) ----------------------------------------------------------------
 
-    def list_approvals(self) -> list[dict[str, JsonValue]]:
-        items: list[dict[str, JsonValue]] = []
-        for a, seconds_left in self.approvals.pending():
-            warnings: list[str] = []
-            if a.arguments is None:
-                shown: JsonValue = None
-                warnings.append(
-                    "arguments not available (Warden restarted); they appear when the agent "
-                    "asks again. Approving is blocked until then."
-                )
-            else:
-                shown = _display_safe(a.arguments, warnings)
-            items.append(
+    def list_approvals(self, group: bool = False) -> JsonValue:
+        """Pending approvals, every one in full. With group=true: grouped by
+        (agent_id, tool), never just a count (see docs/design/group-approvals.md)."""
+        if not group:
+            return [_approval_item(a, left) for a, left in self.approvals.pending()]
+        return {
+            "groups": [
                 {
-                    "approval_id": a.approval_id,
-                    "agent_id": a.agent_id,
-                    "tool": a.tool,
-                    # The human must see what they approve, and see it HONESTLY: hidden
-                    # characters are shown escaped (see _display_safe).
-                    "arguments": shown,
-                    "warnings": [w for w in sorted(set(warnings))],
-                    "action_hash": a.action_hash,
-                    "expires_in_seconds": int(seconds_left),
+                    "agent_id": agent_id,
+                    "tool": tool,
+                    "count": len(items),
+                    "approvals": [_approval_item(a, left) for a, left in items],
                 }
-            )
-        return items
+                for (agent_id, tool), items in self.approvals.pending_groups()
+            ]
+        }
 
-    def decide(self, approval_id: str, approve: bool, request: Request) -> JSONResponse:
+    def decide(
+        self,
+        approval_id: str,
+        approve: bool,
+        request: Request,
+        body: SingleDecision | None = None,
+    ) -> JSONResponse:
+        audited = False
+
+        def audit_first(approval: Approval, new_status: Status) -> None:
+            nonlocal audited
+            self._audit_human_decision(approval, new_status)
+            audited = True
+
         try:
             status = self.approvals.decide(
-                approval_id, approve, before_commit=self._audit_human_decision
+                approval_id,
+                approve,
+                before_commit=audit_first,
+                expected_hash=body.action_hash if body is not None else None,
             )
         except DecideError as exc:
             code = 404 if exc.not_found else 409
@@ -463,6 +524,8 @@ class _Warden:
                 else "arguments not available yet (Warden restarted): approve after the "
                 "agent asks again"
                 if exc.no_arguments
+                else "action_hash doesn't match this approval (list the approvals again)"
+                if exc.hash_mismatch
                 else "approval already decided"
             )
             self._record_event_safely(
@@ -480,7 +543,20 @@ class _Warden:
             )
             return JSONResponse(status_code=code, content={"error": reason})
         except Exception as exc:
-            logger.error("approval not changed, audit failed: %s", type(exc).__name__)
+            logger.error("approval not changed, audit or save failed: %s", type(exc).__name__)
+            if audited:
+                # In the audit log, but saving the approval failed: say so in the log too,
+                # so it never claims a decision that didn't take effect.
+                self._record_event_safely(
+                    AuditEvent.now(
+                        EventKind.APPROVAL_DECIDE_FAILED,
+                        "decision NOT applied (approval storage failed), nothing changed",
+                        http_status=503,
+                        method=request.method,
+                        path=request.url.path,
+                        approval_id=approval_id,  # known: the store found it
+                    )
+                )
             return JSONResponse(
                 status_code=503, content={"error": "audit log unavailable, nothing changed"}
             )
@@ -490,23 +566,129 @@ class _Warden:
     def _audit_human_decision(self, approval: Approval, new_status: Status) -> None:
         """Runs BEFORE the approval changes. If this write fails, decide() raises and
         the approval stays pending: no human decision goes unrecorded."""
-        kind = (
-            EventKind.APPROVAL_APPROVED
-            if new_status is Status.APPROVED
-            else EventKind.APPROVAL_DENIED
-        )
-        # approval.status is still the OLD status here.
-        revoked = approval.status is Status.APPROVED
-        self.audit_log.record_event(
-            AuditEvent.now(
-                kind,
-                "approval revoked by admin" if revoked else f"approval {new_status.value} by admin",
-                approval_id=approval.approval_id,
-                agent_id=approval.agent_id,
-                tool=approval.tool,
-                action_hash=approval.action_hash,
+        self.audit_log.record_event(_decision_event(approval, new_status))
+
+    def decide_group(self, body: GroupDecision, request: Request) -> JSONResponse:
+        """Approve or deny several approvals of one agent and tool, all or nothing."""
+        audited = False
+
+        def audit_first(approvals: list[Approval], new_status: Status) -> None:
+            nonlocal audited
+            self._audit_group_decision(approvals, new_status)
+            audited = True
+
+        try:
+            decided = self.approvals.decide_group(
+                body.ids,
+                body.approve,
+                before_commit=audit_first,
+                expected_hashes=body.action_hashes,
             )
+        except GroupDecideError as exc:
+            if self._within_rejection_limit():  # a flood of bad calls can't fill the disk
+                self._emit(
+                    AuditEvent.now(
+                        EventKind.APPROVAL_DECIDE_FAILED,
+                        f"group decision refused: {len(exc.failed)} of {len(body.ids)} ids "
+                        "failed, nothing changed",
+                        http_status=409,
+                        method=request.method,
+                        path=request.url.path,
+                    )
+                )
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "error": "nothing changed: some approvals can't be decided",
+                    # Ids matched APPROVAL_ID_PATTERN, so echoing them is safe.
+                    "failed": [{"id": i, "reason": reason.value} for i, reason in exc.failed],
+                },
+            )
+        except Exception as exc:
+            logger.error("group not changed, audit or save failed: %s", type(exc).__name__)
+            if audited:
+                # The decision is in the audit log, but saving it failed: say so in the
+                # log too, so the log never claims a decision that didn't take effect.
+                self._record_event_safely(
+                    AuditEvent.now(
+                        EventKind.APPROVAL_DECIDE_FAILED,
+                        "group decision NOT applied (approval storage failed), nothing "
+                        f"changed: {' '.join(body.ids)}",
+                        http_status=503,
+                        method=request.method,
+                        path=request.url.path,
+                    )
+                )
+            return JSONResponse(
+                status_code=503, content={"error": "audit log unavailable, nothing changed"}
+            )
+        status = Status.APPROVED if body.approve else Status.DENIED
+        logger.info("group of %d approvals %s", len(decided), status)
+        return JSONResponse(
+            content={
+                "status": status.value,
+                "count": len(decided),
+                "results": [
+                    {"approval_id": a.approval_id, "status": a.status.value} for a in decided
+                ],
+            }
         )
+
+    def _audit_group_decision(self, approvals: list[Approval], new_status: Status) -> None:
+        """One event for the group, one per approval (as for single decisions), in one
+        transaction, BEFORE anything changes. If it fails, nothing changes."""
+        first = approvals[0]  # a group shares one agent and tool
+        verb = "approved" if new_status is Status.APPROVED else "rejected"
+        ids = " ".join(a.approval_id for a in approvals)
+        group = AuditEvent.now(
+            EventKind.APPROVAL_GROUP_DECIDED,
+            f"group of {len(approvals)} {verb} by admin: {ids}",
+            agent_id=first.agent_id,
+            tool=first.tool,
+        )
+        audit.record_events(
+            self.audit_log, [group, *(_decision_event(a, new_status) for a in approvals)]
+        )
+
+
+def _approval_item(a: Approval, seconds_left: float) -> dict[str, JsonValue]:
+    """One pending approval as shown to the human."""
+    warnings: list[str] = []
+    if a.arguments is None:
+        shown: JsonValue = None
+        warnings.append(
+            "arguments not available (Warden restarted); they appear when the agent "
+            "asks again. Approving is blocked until then."
+        )
+    else:
+        shown = _display_safe(a.arguments, warnings)
+    return {
+        "approval_id": a.approval_id,
+        "agent_id": a.agent_id,
+        "tool": a.tool,
+        # The human must see what they approve, and see it HONESTLY: hidden
+        # characters are shown escaped (see _display_safe).
+        "arguments": shown,
+        "warnings": [w for w in sorted(set(warnings))],
+        "action_hash": a.action_hash,
+        "expires_in_seconds": int(seconds_left),
+    }
+
+
+def _decision_event(approval: Approval, new_status: Status) -> AuditEvent:
+    """The audit event for one human decision. approval.status is still the OLD one."""
+    kind = (
+        EventKind.APPROVAL_APPROVED if new_status is Status.APPROVED else EventKind.APPROVAL_DENIED
+    )
+    revoked = approval.status is Status.APPROVED
+    return AuditEvent.now(
+        kind,
+        "approval revoked by admin" if revoked else f"approval {new_status.value} by admin",
+        approval_id=approval.approval_id,
+        agent_id=approval.agent_id,
+        tool=approval.tool,
+        action_hash=approval.action_hash,
+    )
 
 
 def create_app(
@@ -576,14 +758,19 @@ def create_app(
     app.get("/health")(w.health)
     app.post("/v1/evaluate", response_model=EvaluationResult)(w.evaluate)
     app.get("/v1/approvals", dependencies=admin)(w.list_approvals)
+    app.post("/v1/approvals/decide", dependencies=admin)(w.decide_group)
 
     @app.post("/v1/approvals/{approval_id}/approve", dependencies=admin)
-    def approve(approval_id: str, request: Request) -> JSONResponse:
-        return w.decide(approval_id, approve=True, request=request)
+    def approve(
+        approval_id: str, request: Request, body: SingleDecision | None = None
+    ) -> JSONResponse:
+        return w.decide(approval_id, approve=True, request=request, body=body)
 
     @app.post("/v1/approvals/{approval_id}/deny", dependencies=admin)
-    def deny(approval_id: str, request: Request) -> JSONResponse:
-        return w.decide(approval_id, approve=False, request=request)
+    def deny(
+        approval_id: str, request: Request, body: SingleDecision | None = None
+    ) -> JSONResponse:
+        return w.decide(approval_id, approve=False, request=request, body=body)
 
     return app
 

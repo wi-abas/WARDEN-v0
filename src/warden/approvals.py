@@ -22,7 +22,7 @@ import secrets
 import sqlite3
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from contextlib import closing
 from dataclasses import dataclass, replace
 from enum import StrEnum
@@ -34,6 +34,7 @@ from warden.models import ActionRequest, Decision, EvaluationResult
 
 APPROVAL_TTL_SECONDS = 15 * 60
 MAX_PENDING = 1000
+MAX_GROUP = 100  # most approvals one group decision may name
 
 
 class Status(StrEnum):
@@ -53,18 +54,49 @@ class Approval:
     action_hash: str
     expires_at: float  # seconds on the store's clock
     status: Status = Status.PENDING
+    created_at: float = 0.0  # store's clock; only used to sort lists
 
 
 class DecideError(Exception):
     """Approve/deny failed. `not_found` = unknown or expired; `no_arguments` = can't
-    approve what the human can't see yet; else already decided."""
+    approve what the human can't see yet; `hash_mismatch` = the human looked at a
+    different action than this id's; else already decided."""
 
-    def __init__(self, not_found: bool, no_arguments: bool = False) -> None:
+    def __init__(
+        self, not_found: bool, no_arguments: bool = False, hash_mismatch: bool = False
+    ) -> None:
         super().__init__(
-            "not found" if not_found else "arguments unknown" if no_arguments else "decided"
+            "not found"
+            if not_found
+            else "arguments unknown"
+            if no_arguments
+            else "action_hash mismatch"
+            if hash_mismatch
+            else "decided"
         )
         self.not_found = not_found
         self.no_arguments = no_arguments
+        self.hash_mismatch = hash_mismatch
+
+
+class GroupReason(StrEnum):
+    """Why one id in a group decision was refused."""
+
+    NOT_FOUND = "not found or expired"
+    DECIDED = "already decided"
+    NO_ARGUMENTS = "arguments not available yet (Warden restarted)"
+    DUPLICATE = "listed more than once"
+    MIXED = "different agent or tool than the rest of the group"
+    HASH_MISMATCH = "action_hash doesn't match this approval (list the approvals again)"
+
+
+class GroupDecideError(Exception):
+    """A group decision was refused as a whole: nothing changed. `failed` lists each
+    refused id with its reason (ids only, never arguments)."""
+
+    def __init__(self, failed: list[tuple[str, GroupReason]]) -> None:
+        super().__init__(f"{len(failed)} approvals refused")
+        self.failed = failed
 
 
 _APPROVALS_SCHEMA = """
@@ -74,7 +106,8 @@ CREATE TABLE IF NOT EXISTS approvals (
     tool         TEXT NOT NULL,
     action_hash  TEXT NOT NULL,
     status       TEXT NOT NULL,
-    expires_at   REAL NOT NULL
+    expires_at   REAL NOT NULL,
+    created_at   REAL
 )
 """
 
@@ -91,17 +124,21 @@ class ApprovalDB:
         self.path = path
         with closing(self._connect()) as conn, conn:
             conn.execute(_APPROVALS_SCHEMA)
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(approvals)")}
+            if "created_at" not in columns:  # a database from before group approvals
+                conn.execute("ALTER TABLE approvals ADD COLUMN created_at REAL")
 
     def _connect(self) -> sqlite3.Connection:
         return sqlite3.connect(self.path, timeout=5)
 
-    def load(self, now: float) -> list[Approval]:
-        """Unexpired approvals (expired ones are deleted). Arguments unknown (None)."""
+    def load(self, now: float, ttl: float) -> list[Approval]:
+        """Unexpired approvals (expired ones are deleted). Arguments unknown (None).
+        Rows from before `created_at` existed count as created `ttl` before expiry."""
         with closing(self._connect()) as conn, conn:
             conn.execute("DELETE FROM approvals WHERE expires_at <= ?", (now,))
             rows = conn.execute(
-                "SELECT approval_id, agent_id, tool, action_hash, status, expires_at "
-                "FROM approvals ORDER BY expires_at"
+                "SELECT approval_id, agent_id, tool, action_hash, status, expires_at, "
+                "created_at FROM approvals ORDER BY expires_at"
             ).fetchall()
         return [
             Approval(
@@ -112,24 +149,34 @@ class ApprovalDB:
                 action_hash=r[3],
                 expires_at=r[5],
                 status=Status(r[4]),
+                created_at=r[6] if r[6] is not None else r[5] - ttl,
             )
             for r in rows
         ]
 
     def save(self, approval: Approval) -> None:
+        self.save_many([approval])
+
+    def save_many(self, approvals: Sequence[Approval]) -> None:
+        """Save all of them in ONE transaction: all are written, or none."""
         with closing(self._connect()) as conn, conn:
-            conn.execute(
+            conn.executemany(
                 "INSERT INTO approvals (approval_id, agent_id, tool, action_hash, status, "
-                "expires_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(approval_id) DO UPDATE "
+                "expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(approval_id) DO UPDATE "
                 "SET status = excluded.status, expires_at = excluded.expires_at",
-                (
-                    approval.approval_id,
-                    approval.agent_id,
-                    approval.tool,
-                    approval.action_hash,
-                    approval.status.value,
-                    approval.expires_at,
-                ),
+                [
+                    (
+                        a.approval_id,
+                        a.agent_id,
+                        a.tool,
+                        a.action_hash,
+                        a.status.value,
+                        a.expires_at,
+                        a.created_at,
+                    )
+                    for a in approvals
+                ],
             )
 
     def delete(self, approval_ids: list[str]) -> None:
@@ -141,6 +188,15 @@ class ApprovalDB:
 
 class PendingQuotaExceeded(Exception):
     """This agent already has as many pending approvals as it may have."""
+
+
+def _new_approval_id() -> str:
+    """Unguessable, 32 characters. Never starts with "-", so it can't be mistaken for
+    an option on a command line (`warden approvals approve ID`)."""
+    while True:
+        approval_id = secrets.token_urlsafe(24)
+        if not approval_id.startswith("-"):
+            return approval_id
 
 
 class ApprovalStore:
@@ -166,7 +222,7 @@ class ApprovalStore:
         self._lock = threading.Lock()
         self._items: dict[str, Approval] = {}
         if db is not None:
-            self._items = {a.approval_id: a for a in db.load(self._clock())}
+            self._items = {a.approval_id: a for a in db.load(self._clock(), ttl_seconds)}
 
     def _save(self, approval: Approval) -> None:
         if self._db is not None:
@@ -216,7 +272,7 @@ class ApprovalStore:
                 )
                 if mine >= agent_limit:
                     raise PendingQuotaExceeded
-            approval_id = secrets.token_urlsafe(24)  # unguessable, 32 characters
+            approval_id = _new_approval_id()
             approval = Approval(
                 approval_id=approval_id,
                 agent_id=action.agent_id,
@@ -224,6 +280,7 @@ class ApprovalStore:
                 arguments=action.arguments,
                 action_hash=action_hash,
                 expires_at=now + self._ttl,
+                created_at=now,
             )
             self._save(approval)
             self._items[approval_id] = approval
@@ -242,6 +299,7 @@ class ApprovalStore:
         approval_id: str,
         approve: bool,
         before_commit: Callable[[Approval, Status], None] = lambda a, s: None,
+        expected_hash: str | None = None,
     ) -> Status:
         """Approve or deny a pending approval, exactly once.
 
@@ -249,6 +307,7 @@ class ApprovalStore:
         revokes it (a human changed their mind or clicked by mistake).
         `before_commit` runs (under the lock) before the status changes. If it raises,
         nothing changes: used to make sure every human decision is audited first.
+        With `expected_hash` (the action_hash the human was shown), it must match.
         """
         with self._lock:
             now = self._clock()
@@ -262,6 +321,11 @@ class ApprovalStore:
             if approve and approval.arguments is None:
                 # Restarted: nobody can see what this would approve. Deny still works.
                 raise DecideError(not_found=False, no_arguments=True)
+            # Bytes: compare_digest refuses non-ASCII text (TypeError) instead of saying no.
+            if expected_hash is not None and not secrets.compare_digest(
+                approval.action_hash.encode(), expected_hash.encode()
+            ):
+                raise DecideError(not_found=False, hash_mismatch=True)
             new_status = Status.APPROVED if approve else Status.DENIED
             before_commit(approval, new_status)
             # The agent gets a full window from the moment of approval, not
@@ -271,6 +335,86 @@ class ApprovalStore:
             approval.status = new_status
             approval.expires_at = expires_at
             return new_status
+
+    def pending_groups(self) -> list[tuple[tuple[str, str], list[tuple[Approval, float]]]]:
+        """Pending approvals grouped by (agent_id, tool), groups sorted by that key,
+        items by creation time, then id. A group never mixes agents or tools."""
+        groups: dict[tuple[str, str], list[tuple[Approval, float]]] = {}
+        for approval, seconds_left in self.pending():
+            groups.setdefault((approval.agent_id, approval.tool), []).append(
+                (approval, seconds_left)
+            )
+        for items in groups.values():
+            items.sort(key=lambda item: (item[0].created_at, item[0].approval_id))
+        return sorted(groups.items())
+
+    def decide_group(
+        self,
+        approval_ids: Sequence[str],
+        approve: bool,
+        before_commit: Callable[[list[Approval], Status], None] = lambda a, s: None,
+        expected_hashes: Sequence[str] | None = None,
+    ) -> list[Approval]:
+        """Approve or deny several PENDING approvals of one agent and tool, all or nothing.
+
+        Every id is checked first, under the lock; if any fails, GroupDecideError lists
+        them and nothing changes. `before_commit` (the audit) runs before anything
+        changes; if it raises, nothing changes. Each approval stays an ordinary
+        single-use approval bound to its own action. Returns them, in the given order.
+        `expected_hashes` (same order as the ids): the action_hash the human was shown
+        for each; every one must match.
+        """
+        if not 1 <= len(approval_ids) <= MAX_GROUP:
+            raise ValueError(f"a group decision takes 1 to {MAX_GROUP} ids")
+        if expected_hashes is not None and len(expected_hashes) != len(approval_ids):
+            raise ValueError("one action_hash per id")
+        with self._lock:
+            now = self._clock()
+            self._purge_expired(now)
+            failed: list[tuple[str, GroupReason]] = []
+            found: list[Approval] = []
+            seen: set[str] = set()
+            group: tuple[str, str] | None = None
+            for index, approval_id in enumerate(approval_ids):
+                approval = self._items.get(approval_id)
+                if approval_id in seen:
+                    failed.append((approval_id, GroupReason.DUPLICATE))
+                    continue
+                seen.add(approval_id)
+                if approval is None:
+                    failed.append((approval_id, GroupReason.NOT_FOUND))
+                    continue
+                key = (approval.agent_id, approval.tool)
+                group = group or key
+                if key != group:
+                    failed.append((approval_id, GroupReason.MIXED))
+                elif approval.status is not Status.PENDING:
+                    failed.append((approval_id, GroupReason.DECIDED))
+                elif approve and approval.arguments is None:
+                    failed.append((approval_id, GroupReason.NO_ARGUMENTS))
+                elif expected_hashes is not None and not secrets.compare_digest(
+                    approval.action_hash.encode(), expected_hashes[index].encode()
+                ):
+                    failed.append((approval_id, GroupReason.HASH_MISMATCH))
+                else:
+                    found.append(approval)
+            if failed:
+                raise GroupDecideError(failed)
+            new_status = Status.APPROVED if approve else Status.DENIED
+            before_commit(found, new_status)
+            # Approved: a full window from now, as for single decisions.
+            updated = [
+                replace(
+                    a, status=new_status, expires_at=now + self._ttl if approve else a.expires_at
+                )
+                for a in found
+            ]
+            if self._db is not None:
+                self._db.save_many(updated)
+            for approval, new in zip(found, updated, strict=True):
+                approval.status = new.status
+                approval.expires_at = new.expires_at
+            return found
 
     def use(
         self,

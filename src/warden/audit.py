@@ -82,6 +82,8 @@ class EventKind(StrEnum):
     APPROVAL_APPROVED = "approval_approved"
     APPROVAL_DENIED = "approval_denied"
     APPROVAL_DECIDE_FAILED = "approval_decide_failed"  # unknown, expired or already decided
+    # One human decision on several approvals (each also gets its own event).
+    APPROVAL_GROUP_DECIDED = "approval_group_decided"
     REQUEST_REJECTED = "request_rejected"  # 401, 411, 413, 422, 500
     AUDIT_PURGED = "audit_purged"  # old entries deleted by retention
 
@@ -429,9 +431,14 @@ class SQLiteAuditLog:
         ]
 
     def record_event(self, event: AuditEvent) -> None:
+        self.record_events([event])
+
+    def record_events(self, events: list[AuditEvent]) -> None:
+        """Write several events in ONE transaction: all are recorded, or none."""
         self._maybe_purge()
         with closing(self._write()) as conn, conn:
-            self._insert_event(conn, event)
+            for event in events:
+                self._insert_event(conn, event)
 
     @staticmethod
     def _insert_event(conn: sqlite3.Connection, event: AuditEvent) -> None:
@@ -452,6 +459,16 @@ class SQLiteAuditLog:
             data["kind"] = EventKind(data["kind"])
             events.append(AuditEvent(**data))
         return events
+
+
+def record_events(log: AuditLog, events: list[AuditEvent]) -> None:
+    """All or nothing with SQLiteAuditLog (what `warden serve` uses). Other logs (test
+    doubles) get the events one by one."""
+    if isinstance(log, SQLiteAuditLog):
+        log.record_events(events)
+        return
+    for event in events:
+        log.record_event(event)
 
 
 def _delete_prefix(conn: sqlite3.Connection, table: str, cutoff: str) -> int:
@@ -568,7 +585,7 @@ def _verify_anchors(conn: sqlite3.Connection, anchors: dict[str, str]) -> list[s
     ).fetchone()
     try:
         recorded = json.loads(row[0]) if row is not None else None
-    except ValueError:
+    except (ValueError, RecursionError):
         recorded = None
     if recorded != anchors:
         return ["audit_anchors: doesn't match the last recorded purge (anchors edited?)"]

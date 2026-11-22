@@ -74,7 +74,7 @@ def freeze(arguments: dict[str, Any]) -> dict[str, JsonValue] | None:
     """
     try:
         copy = json.loads(json.dumps(arguments, allow_nan=False))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, RecursionError):  # RecursionError: nested too deeply
         return None
     return cast(dict[str, JsonValue], copy)
 

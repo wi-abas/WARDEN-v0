@@ -39,5 +39,7 @@ jobs:
         run: |
           uv run warden check policies/default.json --strict
           uv run warden check examples/demo-policy.json --strict
+      - name: Policy tests
+        run: uv run warden test examples/policy-tests.json
       - name: Demo
         run: uv run python examples/demo.py

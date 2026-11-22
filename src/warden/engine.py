@@ -110,6 +110,10 @@ def _looks_like_email(value: str) -> bool:
 
 
 _EMAIL_TRICK_CHARS = set("<>,;\"'()[]")
+# Before the "@": routing tricks some mail software still honours. "%" (the "percent
+# hack": user%evil.net@example.com relayed to evil.net), "!" (UUCP bang paths),
+# ":" (group / source-route syntax) and "\\" (quoting).
+_EMAIL_LOCAL_TRICK_CHARS = set("%!:\\")
 
 
 # Percent-escapes that a decoding tool would turn into ".", "/", "\\" or "%" (double
@@ -185,12 +189,20 @@ def _url_host(url: str, condition: Condition) -> str:
 
 
 def _is_plain_email(text: str) -> bool:
-    """Exactly one bare address: no spaces, no display names, no lists, no trailing dot."""
+    """Exactly one bare address: no spaces, no display names, no lists, no trailing dot,
+    and a plain name before the "@" (not empty, no routing tricks, no stray dots)."""
+    if text.count("@") != 1:
+        return False
+    local = text.split("@", 1)[0]
     return (
-        text.count("@") == 1
-        and not any(ch.isspace() for ch in text)
+        not any(ch.isspace() for ch in text)
         and not any(ch in _EMAIL_TRICK_CHARS for ch in text)
         and not text.endswith(".")
+        and local != ""
+        and not any(ch in _EMAIL_LOCAL_TRICK_CHARS for ch in local)
+        and not local.startswith(".")
+        and not local.endswith(".")
+        and ".." not in local
     )
 
 
