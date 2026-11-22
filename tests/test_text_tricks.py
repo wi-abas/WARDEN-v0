@@ -131,8 +131,9 @@ def test_w009_case_sensitive_path_deny_rule(tmp_path: Path) -> None:
     case_sensitive = json.loads(json.dumps(DENY_ETC))
     case_sensitive[1]["when"][0]["ignore_case"] = False
     codes = [w[:4] for w in check_policy(write(tmp_path, case_sensitive)).warnings]
-    assert codes == ["W009"]
-    assert check_policy(write(tmp_path, DENY_ETC)).warnings == []
+    assert codes == ["W001", "W009"]  # W001: deny-list without an argument list
+    codes = [w[:4] for w in check_policy(write(tmp_path, DENY_ETC)).warnings]
+    assert codes == ["W001"]
 
 
 def test_w009_not_raised_when_nothing_looser_exists(tmp_path: Path) -> None:
