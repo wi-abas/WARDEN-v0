@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 from pydantic import ValidationError
@@ -11,14 +12,14 @@ from warden.models import ActionRequest, Decision, Rule
 from warden.policy import load_rules
 
 
-def rule(id: str, effect: str, *when: dict, tool: str = "send_invoice") -> Rule:
+def rule(id: str, effect: str, *when: dict[str, Any], tool: str = "send_invoice") -> Rule:
     # Built from JSON, exactly like the real policy file is loaded.
     return Rule.model_validate_json(
         json.dumps({"id": id, "tool": tool, "effect": effect, "when": list(when)})
     )
 
 
-def cond(arg: str, op: str, value: object) -> dict:
+def cond(arg: str, op: str, value: object) -> dict[str, Any]:
     return {"arg": arg, "op": op, "value": value}
 
 
@@ -81,7 +82,7 @@ def test_missing_amount_falls_to_the_restrictive_rule() -> None:
         (cond("x", "startswith", "/data/"), "/data", False),
     ],
 )
-def test_ops(condition: dict, value: object, holds: bool) -> None:
+def test_ops(condition: dict[str, Any], value: object, holds: bool) -> None:
     rules = [rule("r", "allow", condition)]
     expected = Decision.ALLOW if holds else Decision.DENY
     assert evaluate(request(x=value), rules).decision == expected
@@ -271,7 +272,7 @@ def test_presence_ops_reject_a_value(op: str) -> None:
         {"arg": "x", "op": "eq", "value": 1, "extra": 1},  # unknown field
     ],
 )
-def test_invalid_conditions_are_rejected(bad: dict) -> None:
+def test_invalid_conditions_are_rejected(bad: dict[str, Any]) -> None:
     with pytest.raises(ValidationError):
         rule("r", "allow", bad)
 

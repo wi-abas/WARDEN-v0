@@ -1,5 +1,7 @@
 """The shipped default policy (also what `warden init` writes) behaves as documented."""
 
+from typing import Any
+
 import pytest
 
 from warden.engine import evaluate
@@ -23,7 +25,7 @@ from warden.policy import DEFAULT_POLICY_PATH, load_policy
         ("run_shell", {"cmd": "ls"}, Decision.DENY),
     ],
 )
-def test_default_policy(tool: str, arguments: dict, expected: Decision) -> None:
+def test_default_policy(tool: str, arguments: dict[str, Any], expected: Decision) -> None:
     policy = load_policy(DEFAULT_POLICY_PATH)
     request = ActionRequest.model_validate({"agent_id": "a", "tool": tool, "arguments": arguments})
     assert evaluate(request, policy.rules, policy.tools).decision == expected

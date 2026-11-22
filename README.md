@@ -136,7 +136,7 @@ Each of these is covered by tests in `tests/`.
 uv run pytest                  # tests
 uv run ruff check .            # lint (includes security checks)
 uv run ruff format .           # format
-uv run mypy                    # type check (strict)
+uv run mypy                    # type check (strict, incl. tests)
 ```
 
 | File | Purpose |

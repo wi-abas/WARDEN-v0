@@ -15,7 +15,7 @@ def client() -> TestClient:
     return TestClient(create_app(BASIC_POLICY))
 
 
-def body(tool: str = "read_file", **extra: object) -> dict[str, object]:
+def body(tool: object = "read_file", **extra: object) -> dict[str, object]:
     return {"agent_id": "agent-1", "tool": tool, "arguments": {}, **extra}
 
 

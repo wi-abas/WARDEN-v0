@@ -3,11 +3,13 @@
 import importlib.util
 import threading
 import time
+from collections.abc import Iterator
 from pathlib import Path
 from types import ModuleType
 
 import pytest
 import uvicorn
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from warden.api import create_app
@@ -26,7 +28,7 @@ def load_agent() -> ModuleType:
 
 
 @pytest.fixture
-def server(tmp_path: Path):
+def server(tmp_path: Path) -> Iterator[tuple[FastAPI, str]]:
     app = create_app(
         EXAMPLES / "demo-policy.json",
         audit_log=SQLiteAuditLog(tmp_path / "audit.db"),
@@ -43,7 +45,9 @@ def server(tmp_path: Path):
     thread.join(timeout=5)
 
 
-def test_agent_runs_allowed_blocks_denied_and_waits_for_approval(server) -> None:
+def test_agent_runs_allowed_blocks_denied_and_waits_for_approval(
+    server: tuple[FastAPI, str],
+) -> None:
     app, url = server
     admin = TestClient(app)
 
@@ -72,16 +76,16 @@ def test_agent_runs_allowed_blocks_denied_and_waits_for_approval(server) -> None
 
 def test_unreachable_warden_means_not_run() -> None:
     agent = load_agent()
-    ran = []
+    ran: list[object] = []
     with pytest.raises(agent.NotAllowed, match="unreachable"):
         agent.guarded("read_file", {"path": "/x"}, ran.append, url="http://127.0.0.1:9")
     assert ran == []
 
 
-def test_gives_up_waiting_without_running(server) -> None:
+def test_gives_up_waiting_without_running(server: tuple[FastAPI, str]) -> None:
     _, url = server
     agent = load_agent()
-    ran = []
+    ran: list[object] = []
     with pytest.raises(agent.NotAllowed, match="gave up"):
         agent.guarded(
             "send_invoice",

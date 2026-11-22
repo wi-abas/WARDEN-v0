@@ -4,6 +4,7 @@ import json
 import logging
 import logging.config
 from pathlib import Path
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -12,7 +13,7 @@ from helpers import BASIC_POLICY
 from warden.api import create_app, log_config
 
 
-def health(policy: Path) -> tuple[int, dict]:
+def health(policy: Path) -> tuple[int, dict[str, Any]]:
     response = TestClient(create_app(policy)).get("/health")
     return response.status_code, response.json()
 
@@ -65,7 +66,9 @@ def test_log_config_does_not_change_uvicorns_default() -> None:
     assert "warden" not in uvicorn.config.LOGGING_CONFIG["loggers"]
 
 
-def test_decision_lines_appear_with_the_config(capsys, tmp_path: Path) -> None:
+def test_decision_lines_appear_with_the_config(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
     logging.config.dictConfig(log_config())
     try:
         client = TestClient(create_app(BASIC_POLICY))

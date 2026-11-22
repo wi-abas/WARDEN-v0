@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 from pydantic import ValidationError
@@ -11,7 +12,7 @@ from warden.engine import evaluate
 from warden.models import ActionRequest, Decision, Rule
 
 
-def rule(id: str, effect: str, *when: dict) -> Rule:
+def rule(id: str, effect: str, *when: dict[str, Any]) -> Rule:
     return Rule.model_validate_json(
         json.dumps({"id": id, "tool": "send_email", "effect": effect, "when": list(when)})
     )
@@ -23,7 +24,7 @@ def send(to: object) -> ActionRequest:
     )
 
 
-def ends(value: str, ignore_case: bool = False) -> dict:
+def ends(value: str, ignore_case: bool = False) -> dict[str, Any]:
     return {"arg": "to", "op": "endswith", "value": value, "ignore_case": ignore_case}
 
 
@@ -91,7 +92,7 @@ def test_ignore_case_on_other_text_ops(op: str, value: object, to: str, holds: b
         {"arg": "to", "op": "endswith", "value": "x", "ignore_case": "yes"},
     ],
 )
-def test_invalid_conditions_rejected(condition: dict) -> None:
+def test_invalid_conditions_rejected(condition: dict[str, Any]) -> None:
     with pytest.raises(ValidationError):
         rule("r", "allow", condition)
 

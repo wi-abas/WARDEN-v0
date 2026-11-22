@@ -1,6 +1,7 @@
 import json
 import logging
 from pathlib import Path
+from typing import Any
 
 import pytest
 from helpers import BASIC_POLICY
@@ -16,7 +17,9 @@ def write_policy(tmp_path: Path, content: str) -> Path:
     return path
 
 
-def rule_json(rule_id: str = "allow-read", tool: str = "read_file", effect: str = "allow") -> dict:
+def rule_json(
+    rule_id: str = "allow-read", tool: str = "read_file", effect: str = "allow"
+) -> dict[str, Any]:
     return {"id": rule_id, "tool": tool, "effect": effect}
 
 

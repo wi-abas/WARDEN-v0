@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -9,7 +10,7 @@ from pydantic import ValidationError
 
 from warden.api import create_app
 from warden.engine import evaluate
-from warden.models import ActionRequest, Decision, ToolSpec
+from warden.models import ActionRequest, Decision, EvaluationResult, ToolSpec
 from warden.policy import Policy, load_policy
 
 POLICY = {
@@ -32,7 +33,7 @@ def policy() -> Policy:
     return Policy.model_validate_json(json.dumps(POLICY))
 
 
-def ask(tool: str = "send_email", **arguments: object):
+def ask(tool: str = "send_email", **arguments: object) -> EvaluationResult:
     request = ActionRequest.model_validate({"agent_id": "a", "tool": tool, "arguments": arguments})
     p = policy()
     return evaluate(request, p.rules, p.tools)
@@ -98,7 +99,7 @@ def test_api_uses_the_tool_specs(tmp_path: Path) -> None:
         {"required": ["to"]},  # arguments missing
     ],
 )
-def test_invalid_specs_are_rejected(spec: dict) -> None:
+def test_invalid_specs_are_rejected(spec: dict[str, Any]) -> None:
     with pytest.raises(ValidationError):
         ToolSpec.model_validate_json(json.dumps(spec))
 

@@ -17,7 +17,7 @@ def test_committed_schema_matches_the_code() -> None:
     assert (ROOT / "policy.schema.json").read_text() == policy_schema()
 
 
-def test_schema_command_prints_it(capsys) -> None:
+def test_schema_command_prints_it(capsys: pytest.CaptureFixture[str]) -> None:
     assert main(["schema"]) == 0
     assert json.loads(capsys.readouterr().out)["title"] == "Warden policy"
 

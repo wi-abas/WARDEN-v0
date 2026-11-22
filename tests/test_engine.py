@@ -120,7 +120,7 @@ class ExplodingRules:
 
 
 def test_unexpected_error_means_deny() -> None:
-    result = evaluate(request("read_file"), ExplodingRules())  # type: ignore[arg-type]
+    result = evaluate(request("read_file"), ExplodingRules())
     assert result.decision == DENY
     assert result.reason == "evaluation error"
     assert result.matched_rule is None
@@ -128,13 +128,13 @@ def test_unexpected_error_means_deny() -> None:
 
 def test_error_never_allows_even_for_an_allowed_tool() -> None:
     # read_file is normally allowed; a failure must still produce DENY.
-    result = evaluate(request("read_file"), ExplodingRules())  # type: ignore[arg-type]
+    result = evaluate(request("read_file"), ExplodingRules())
     assert result.decision != ALLOW
 
 
 def test_error_log_does_not_leak_secrets(caplog: pytest.LogCaptureFixture) -> None:
     canary = "sk-live-FAKE-123"  # fake value that must never appear in logs
     with caplog.at_level(logging.DEBUG):
-        evaluate(request("read_file", api_key=canary), ExplodingRules(message=canary))  # type: ignore[arg-type]
+        evaluate(request("read_file", api_key=canary), ExplodingRules(message=canary))
     assert "policy evaluation failed" in caplog.text
     assert canary not in caplog.text

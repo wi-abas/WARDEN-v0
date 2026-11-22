@@ -1,7 +1,9 @@
 """Audit events: human decisions, failed approval attempts and rejected requests."""
 
 import sqlite3
+from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -27,7 +29,7 @@ def client(log: SQLiteAuditLog) -> TestClient:
     return TestClient(app, raise_server_exceptions=False)
 
 
-def email(approval_id: str | None = None, to: str = "boss@example.com") -> dict:
+def email(approval_id: str | None = None, to: str = "boss@example.com") -> dict[str, Any]:
     body = {"agent_id": "agent-1", "tool": "send_email", "arguments": {"to": to}}
     if approval_id:
         body["approval_id"] = approval_id
@@ -35,7 +37,8 @@ def email(approval_id: str | None = None, to: str = "boss@example.com") -> dict:
 
 
 def pending_id(client: TestClient) -> str:
-    return client.post("/v1/evaluate", json=email()).json()["approval_id"]
+    approval_id: str = client.post("/v1/evaluate", json=email()).json()["approval_id"]
+    return approval_id
 
 
 # --- 1. Human decisions are audited --------------------------------------------------
@@ -166,7 +169,7 @@ def test_oversized_request_is_recorded(client: TestClient, log: SQLiteAuditLog) 
 
 
 def test_chunked_request_is_recorded(client: TestClient, log: SQLiteAuditLog) -> None:
-    def chunks():
+    def chunks() -> Iterator[bytes]:
         yield b"{}"
 
     client.post("/v1/evaluate", content=chunks(), headers={"content-type": "application/json"})

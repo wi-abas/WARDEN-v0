@@ -1,6 +1,7 @@
 """Settings: flags beat environment variables beat defaults; bad values stop startup."""
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -54,7 +55,7 @@ def test_zero_retention_means_forever() -> None:
         ({"audit_db": "no/such/folder/a.db"}, "folder does not exist"),
     ],
 )
-def test_bad_values_stop_startup(kwargs: dict, message: str) -> None:
+def test_bad_values_stop_startup(kwargs: dict[str, Any], message: str) -> None:
     with pytest.raises(SettingsError, match=message):
         resolve(**kwargs, env={})
 
@@ -91,7 +92,7 @@ def test_admin_key_has_no_flag() -> None:
 # --- CLI wiring ------------------------------------------------------------------------
 
 
-def test_cli_passes_settings_to_the_server(monkeypatch, tmp_path: Path) -> None:
+def test_cli_passes_settings_to_the_server(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     started: list[Settings] = []
     monkeypatch.setattr(warden.api, "main", started.append)
     monkeypatch.setenv("WARDEN_ADMIN_KEY", KEY)
@@ -102,20 +103,22 @@ def test_cli_passes_settings_to_the_server(monkeypatch, tmp_path: Path) -> None:
     assert started[0].admin_key == KEY
 
 
-def test_no_subcommand_means_serve(monkeypatch) -> None:
+def test_no_subcommand_means_serve(monkeypatch: pytest.MonkeyPatch) -> None:
     started: list[Settings] = []
     monkeypatch.setattr(warden.api, "main", started.append)
     assert main([]) == 0
     assert started == [resolve(env={})]
 
 
-def test_cli_bad_setting_exits_2_without_starting(monkeypatch, capsys) -> None:
+def test_cli_bad_setting_exits_2_without_starting(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     monkeypatch.setattr(warden.api, "main", lambda s: pytest.fail("server started"))
     assert main(["serve", "--port", "99999"]) == 2
     assert "between 1 and 65535" in capsys.readouterr().err
 
 
-def test_version_flag(capsys) -> None:
+def test_version_flag(capsys: pytest.CaptureFixture[str]) -> None:
     import warden
 
     with pytest.raises(SystemExit) as exc:

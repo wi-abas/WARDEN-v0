@@ -3,12 +3,14 @@
 import importlib.util
 from pathlib import Path
 
+import pytest
+
 from warden.check import check_policy
 
 EXAMPLES = Path(__file__).parent.parent / "examples"
 
 
-def test_demo_runs_and_every_step_behaves(capsys) -> None:
+def test_demo_runs_and_every_step_behaves(capsys: pytest.CaptureFixture[str]) -> None:
     spec = importlib.util.spec_from_file_location("demo", EXAMPLES / "demo.py")
     assert spec is not None and spec.loader is not None
     demo = importlib.util.module_from_spec(spec)

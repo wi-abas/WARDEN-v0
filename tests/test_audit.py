@@ -3,20 +3,22 @@
 import sqlite3
 import threading
 from pathlib import Path
+from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 from helpers import BASIC_POLICY
 
 from warden import audit
 from warden.api import create_app
-from warden.audit import AuditEntry, SQLiteAuditLog
+from warden.audit import AuditEntry, AuditEvent, SQLiteAuditLog
 from warden.fingerprint import fingerprint
 from warden.models import ActionRequest, Decision
 
 CANARY = "sk-live-FAKE-123"  # fake secret used to detect leaks
 
 
-def body(tool: str = "send_email", **arguments: object) -> dict:
+def body(tool: str = "send_email", **arguments: object) -> dict[str, Any]:
     return {"agent_id": "agent-1", "tool": tool, "arguments": arguments or {"to": "a@b.c"}}
 
 
@@ -141,8 +143,14 @@ class BrokenLog:
     def recent(self, limit: int = 100) -> list[AuditEntry]:
         return []
 
+    def record_event(self, event: AuditEvent) -> None:
+        raise sqlite3.OperationalError(f"disk full {CANARY}")
 
-def test_audit_failure_denies_even_an_allowed_action(caplog) -> None:
+    def recent_events(self, limit: int = 100) -> list[AuditEvent]:
+        return []
+
+
+def test_audit_failure_denies_even_an_allowed_action(caplog: pytest.LogCaptureFixture) -> None:
     client = TestClient(create_app(BASIC_POLICY, audit_log=BrokenLog()))
     response = client.post("/v1/evaluate", json=body("read_file", path="x"))
     assert response.status_code == 503

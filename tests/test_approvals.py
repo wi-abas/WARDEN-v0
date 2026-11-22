@@ -2,6 +2,7 @@
 
 import threading
 from pathlib import Path
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -44,23 +45,24 @@ def client(store: ApprovalStore, tmp_path: Path) -> TestClient:
     return TestClient(app)
 
 
-def email(to: str = "boss@example.com", approval_id: str | None = None) -> dict:
+def email(to: str = "boss@example.com", approval_id: str | None = None) -> dict[str, Any]:
     body = {"agent_id": "agent-1", "tool": "send_email", "arguments": {"to": to}}
     if approval_id:
         body["approval_id"] = approval_id
     return body
 
 
-def ask(client: TestClient, body: dict) -> dict:
-    return client.post("/v1/evaluate", json=body).json()
+def ask(client: TestClient, body: dict[str, Any]) -> dict[str, Any]:
+    answer: dict[str, Any] = client.post("/v1/evaluate", json=body).json()
+    return answer
 
 
 def approve(client: TestClient, approval_id: str, action: str = "approve") -> int:
     return client.post(f"/v1/approvals/{approval_id}/{action}", headers=ADMIN).status_code
 
 
-def get_approved(client: TestClient, body: dict | None = None) -> str:
-    approval_id = ask(client, body or email())["approval_id"]
+def get_approved(client: TestClient, body: dict[str, Any] | None = None) -> str:
+    approval_id: str = ask(client, body or email())["approval_id"]
     assert approve(client, approval_id) == 200
     return approval_id
 
@@ -133,7 +135,9 @@ def test_replay_an_approval_is_denied(client: TestClient) -> None:
         },
     ],
 )
-def test_modified_action_after_approval_is_denied(client: TestClient, modified: dict) -> None:
+def test_modified_action_after_approval_is_denied(
+    client: TestClient, modified: dict[str, Any]
+) -> None:
     approval_id = get_approved(client)
     assert ask(client, {**modified, "approval_id": approval_id})["decision"] == "deny"
     # The failed attempt did not burn the approval: the real action still works.
@@ -226,7 +230,7 @@ def test_pending_flood_is_capped(client: TestClient) -> None:
 
 
 @pytest.mark.parametrize("headers", [{}, {"X-Warden-Admin-Key": "wrong"}])
-def test_admin_endpoints_need_the_key(client: TestClient, headers: dict) -> None:
+def test_admin_endpoints_need_the_key(client: TestClient, headers: dict[str, Any]) -> None:
     approval_id = ask(client, email())["approval_id"]
     for method, url in [
         ("get", "/v1/approvals"),
@@ -246,7 +250,9 @@ def test_agent_never_receives_the_admin_key(client: TestClient) -> None:
     assert KEY not in response.text
 
 
-def test_generated_admin_key_is_printed_not_logged(capsys, caplog, tmp_path: Path) -> None:
+def test_generated_admin_key_is_printed_not_logged(
+    capsys: pytest.CaptureFixture[str], caplog: pytest.LogCaptureFixture, tmp_path: Path
+) -> None:
     create_app(BASIC_POLICY, audit_log=SQLiteAuditLog(tmp_path / "a.db"))
     printed = capsys.readouterr().err
     key = printed.split("approve actions): ")[1].strip()

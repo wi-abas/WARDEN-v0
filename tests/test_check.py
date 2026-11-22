@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -16,7 +17,7 @@ def write(tmp_path: Path, policy: object) -> Path:
     return path
 
 
-def r(id: str, tool: str, effect: str, *when: dict) -> dict:
+def r(id: str, tool: str, effect: str, *when: dict[str, Any]) -> dict[str, Any]:
     return {"id": id, "tool": tool, "effect": effect, "when": list(when)}
 
 
@@ -117,12 +118,12 @@ def test_w007_condition_on_unlisted_argument(tmp_path: Path) -> None:
 # --- CLI -------------------------------------------------------------------------------
 
 
-def test_cli_clean_policy_exits_0(capsys) -> None:
+def test_cli_clean_policy_exits_0(capsys: pytest.CaptureFixture[str]) -> None:
     assert main(["check", str(DEFAULT_POLICY_PATH)]) == 0
     assert "0 errors, 0 warnings." in capsys.readouterr().out
 
 
-def test_cli_errors_exit_1(tmp_path: Path, capsys) -> None:
+def test_cli_errors_exit_1(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     assert main(["check", str(write(tmp_path, "not json"))]) == 1
     assert "deny everything" in capsys.readouterr().out
 
@@ -133,7 +134,7 @@ def test_cli_warnings_and_strict(tmp_path: Path, flags: list[str], code: int) ->
     assert main(["check", str(path), *flags]) == code
 
 
-def test_check_does_not_start_the_server(tmp_path: Path, monkeypatch) -> None:
+def test_check_does_not_start_the_server(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import warden.api
 
     monkeypatch.setattr(warden.api, "main", lambda: pytest.fail("server started"))

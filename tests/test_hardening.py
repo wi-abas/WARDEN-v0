@@ -2,6 +2,8 @@
 
 import json
 import logging
+from collections.abc import Iterator
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -18,7 +20,7 @@ def client() -> TestClient:
     return TestClient(create_app(BASIC_POLICY), raise_server_exceptions=False)
 
 
-def post_raw(client: TestClient, content: bytes, **headers: str) -> dict[str, object]:
+def post_raw(client: TestClient, content: bytes, **headers: str) -> dict[str, Any]:
     response = client.post(
         "/v1/evaluate",
         content=content,
@@ -52,7 +54,9 @@ def test_lying_content_length_is_refused(client: TestClient) -> None:
 
 
 def test_chunked_body_without_length_is_refused(client: TestClient) -> None:
-    def chunks():  # a generator makes the client send a chunked body with no length
+    def chunks() -> Iterator[
+        bytes
+    ]:  # a generator makes the client send a chunked body with no length
         yield b'{"agent_id": "a", "tool": "read_file"}'
 
     response = client.post(
