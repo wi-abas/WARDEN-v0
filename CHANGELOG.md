@@ -13,6 +13,24 @@
 - README rewritten and split into `docs/`; demo image; benchmark (~1 ms per call).
 - Tests type-checked with strict mypy; CI on Python 3.12 and 3.13 with 98% coverage gate.
 
+### Security fixes (from a full code review)
+- Path and email tricks can no longer dodge rules: `//etc`, `/./etc`, backslashes,
+  `"x@evil.com "`, `"x@evil.com."`, `"Evil <x@evil.com>"`, recipient lists. Harmless names
+  like `notes..txt` are no longer refused. `warden check` W009 flags case-sensitive path rules.
+- Requests not addressed to `127.0.0.1` / `localhost` are refused (blocks DNS rebinding).
+- A human can revoke an approval before the agent uses it.
+- The audit database is created readable by its owner only (0600).
+- Duplicate keys in a policy file are an error instead of silently using the last one.
+- 404 and 405 responses carry `"decision": "deny"` and are recorded.
+- `warden serve` refuses to start with an invalid or empty policy.
+- Approvals get a fresh expiry window when approved; asking again reuses an approved one.
+- Audit retention purges run in the background and retry after a failure.
+- Rule messages can't contain invisible Unicode (bidi overrides, zero-width characters).
+- Recording of rejected requests is capped at 60 per minute.
+- Policy schema moved to a versioned path: `schemas/policy-v1.json`.
+- CI actions pinned to commit SHAs; Dependabot enabled.
+- Docs corrected: programs running as the same OS user can usually read `WARDEN_ADMIN_KEY`.
+
 ## v0.2.0 (2026-11-22)
 
 First release meant for other people to try. Still an early MVP, **not production-secure**:

@@ -128,6 +128,9 @@ Each of these is covered by tests in `tests/`.
 - **The audit log is a plain local file.** Anyone who can edit it can change history.
   Old entries are deleted after 90 days, but a flood of requests within that window
   can still grow it.
+- **Import name clash.** The package installs as `agent-warden` but is imported as `warden`,
+  the same import name as the unrelated `warden` package on PyPI. Don't install both in one
+  environment.
 - **The policy file is trusted.** Whoever can edit it controls every decision.
 
 ## Development
