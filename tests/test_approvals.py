@@ -258,3 +258,18 @@ def test_generated_admin_key_is_printed_not_logged(
     key = printed.split("approve actions): ")[1].strip()
     assert len(key) >= 32
     assert key not in caplog.text
+
+
+def test_approval_gets_a_fresh_window_when_approved(client: TestClient, clock: FakeClock) -> None:
+    approval_id = ask(client, email())["approval_id"]
+    clock.now += 800  # human approves late: 100 s left of the original 900
+    assert approve(client, approval_id) == 200
+    clock.now += 600  # past the original expiry, within the new window
+    assert ask(client, email(approval_id=approval_id))["decision"] == "allow"
+
+
+def test_approved_window_still_expires(client: TestClient, clock: FakeClock) -> None:
+    approval_id = ask(client, email())["approval_id"]
+    approve(client, approval_id)
+    clock.now += 901
+    assert ask(client, email(approval_id=approval_id))["decision"] == "deny"

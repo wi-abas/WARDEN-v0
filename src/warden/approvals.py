@@ -120,7 +120,8 @@ class ApprovalStore:
         nothing changes: used to make sure every human decision is audited first.
         """
         with self._lock:
-            self._purge_expired(self._clock())
+            now = self._clock()
+            self._purge_expired(now)
             approval = self._items.get(approval_id)
             if approval is None:
                 raise DecideError(not_found=True)
@@ -130,6 +131,10 @@ class ApprovalStore:
             new_status = Status.APPROVED if approve else Status.DENIED
             before_commit(approval, new_status)
             approval.status = new_status
+            if new_status is Status.APPROVED:
+                # The agent gets a full window from the moment of approval, not
+                # whatever was left of the window from when it first asked.
+                approval.expires_at = now + self._ttl
             return new_status
 
     def use(self, approval_id: str, action_hash: str) -> Status | None:
