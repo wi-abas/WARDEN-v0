@@ -172,3 +172,13 @@ def test_w011_url_prefix_without_slash_after_host(tmp_path: Path) -> None:
     assert codes(tmp_path, policy("https://api.example.com")) == ["W011"]
     assert codes(tmp_path, policy("https://api.example.com/")) == []
     assert codes(tmp_path, policy("https://api.example.com/v1")) == []
+
+
+def test_w003_not_raised_for_equally_strict_rules(tmp_path: Path) -> None:
+    # An unconditional deny doesn't make a conditional deny "dead": same strictness.
+    cond = {"arg": "a", "op": "eq", "value": "x"}
+    policy = {
+        "tools": {"t": {"arguments": ["a"]}},
+        "rules": [r("always", "t", "deny"), r("sometimes", "t", "deny", cond)],
+    }
+    assert codes(tmp_path, policy) == []
