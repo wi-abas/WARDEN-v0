@@ -12,7 +12,8 @@
   `Authorization: Bearer <token>`; only SHA-256 hashes are stored. Approvals are bound to
   the agent that asked. Optional; nothing changes without `--agents`.
 - **Rate limits and quotas**: optional `limits` section in the policy; per-agent
-  requests per minute (429 deny) and pending approvals. Built-in defaults 600/min and 50.
+  requests per minute (429 deny) and pending approvals. Built-in defaults 1,200/min and 100.
+  `warden limits [set|reset]` shows and changes them without editing JSON.
 - **Persistent approvals**: approval state survives restarts (stored without arguments).
   After a restart an approval can only be approved once the agent has asked again.
 - **Tamper-evident audit log**: hash chain over decisions and events, kept intact by
@@ -22,9 +23,9 @@
 - CI: weekly and per-PR dependency scan (pip-audit), weekly mutation tests.
 
 ### Behaviour changes
-- **Default per-agent limits now apply**: 600 requests per minute and 50 pending
+- **Default per-agent limits now apply**: 1,200 requests per minute and 100 pending
   approvals per agent, even without a `limits` section (429 / deny above them). Raise
-  them in the policy for high-volume agents.
+  them with `warden limits set` for high-volume agents.
 - `agent_id` in `/v1/evaluate` is optional when an agent token is sent.
 
 - Package renamed to **agent-warden** (`pip install agent-warden`); import name and the

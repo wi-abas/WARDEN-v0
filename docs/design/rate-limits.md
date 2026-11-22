@@ -12,12 +12,13 @@ database without bound inside the retention window.
   rules, checked by `warden check` and the schema):
   ```json
   "limits": {
-    "default": { "requests_per_minute": 600, "max_pending_approvals": 50 },
+    "default": { "requests_per_minute": 1200, "max_pending_approvals": 100 },
     "agents": { "billing-agent": { "requests_per_minute": 30, "max_pending_approvals": 5 } }
   }
   ```
-  Per-agent values win, then `default`, then built-in defaults (600 per minute,
-  50 pending). Without a `limits` section the built-in defaults apply.
+  Per-agent values win, then `default`, then built-in defaults (1,200 per minute,
+  100 pending; raised from 600 / 50, which a busy agent could hit).
+  `warden limits` shows and changes them. Without a `limits` section the built-in defaults apply.
 - **Requests per minute**: a token bucket per agent (capacity = the per-minute limit,
   refilled continuously). Deterministic: a monotonic clock, injectable in tests; no
   randomness. Every `/v1/evaluate` call counts, approval polls included. Over the limit:

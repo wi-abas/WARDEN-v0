@@ -83,6 +83,7 @@ Use **uv** for everything. Never call `pip` directly and never edit `uv.lock` by
 | Validate a policy | `uv run warden check FILE --strict` |
 | Regenerate the schema | `uv run warden schema > schemas/policy-v1.json` |
 | Verify the audit chain | `uv run warden audit verify` |
+| Show / change rate limits | `uv run warden limits [set\|reset]` |
 | Mutation tests (slow) | `uv run python scripts/mutation.py --target engine` |
 | Benchmark | `uv run python scripts/benchmark.py` |
 

@@ -2,7 +2,7 @@
 
 The policy file may have a "limits" section:
     "limits": {
-      "default": {"requests_per_minute": 600, "max_pending_approvals": 50},
+      "default": {"requests_per_minute": 1200, "max_pending_approvals": 100},
       "agents": {"billing-agent": {"requests_per_minute": 30}}
     }
 A value set for the agent wins, then "default", then the built-in defaults below.
@@ -18,8 +18,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from warden.models import AGENT_ID_PATTERN
 
-DEFAULT_REQUESTS_PER_MINUTE = 600
-DEFAULT_MAX_PENDING_APPROVALS = 50
+DEFAULT_REQUESTS_PER_MINUTE = 1200
+DEFAULT_MAX_PENDING_APPROVALS = 100
 MAX_TRACKED_AGENTS = 10_000
 
 

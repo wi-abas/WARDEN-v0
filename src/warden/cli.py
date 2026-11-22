@@ -8,6 +8,9 @@ warden init [FILE]     create a starter policy (default policies/default.json)
 warden check FILE      validate a policy file; exit 1 on errors
 warden check --strict  ...also exit 1 on warnings (useful in CI)
 warden schema          print the JSON Schema for policy files
+warden limits [--policy FILE]           show rate limits and approval quotas
+warden limits set [--agent ID] [--requests-per-minute N] [--pending N]
+warden limits reset [--agent ID]        change them in the policy file
 warden agent add ID     create an agent token (printed once; only its hash is stored)
 warden agent list | remove ID     manage the agents file (--agents FILE)
 warden audit verify [--audit-db FILE]   check the audit log's hash chain
@@ -68,6 +71,20 @@ def main(argv: list[str] | None = None) -> int:
     check = commands.add_parser("check", help="validate a policy file")
     check.add_argument("policy", nargs="?", type=Path, default=DEFAULT_POLICY_PATH)
     check.add_argument("--strict", action="store_true", help="exit 1 on warnings too")
+    limits = commands.add_parser("limits", help="show or change rate limits")
+    limits.add_argument(
+        "--policy",
+        type=Path,
+        default=Path(os.environ.get("WARDEN_POLICY") or DEFAULT_POLICY_PATH),
+        help="policy file (env WARDEN_POLICY)",
+    )
+    limits_actions = limits.add_subparsers(dest="action")
+    for name, help_text in [("set", "set limits"), ("reset", "remove limits")]:
+        sub = limits_actions.add_parser(name, help=help_text)
+        sub.add_argument("--agent", help="one agent (default: every agent)")
+        if name == "set":
+            sub.add_argument("--requests-per-minute", type=int, help="1 to 100000")
+            sub.add_argument("--pending", type=int, help="max pending approvals, 0 to 1000")
     proxy = commands.add_parser("proxy", help="run an MCP server behind Warden")
     proxy.add_argument("--config", type=Path, help="proxy config file (JSON)")
     proxy.add_argument("--warden-url", help="default http://127.0.0.1:8000")
@@ -79,6 +96,11 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "proxy":
         return run_proxy(args)
+
+    if args.command == "limits":
+        from warden.limits_cli import run as run_limits
+
+        return run_limits(args)
 
     if args.command == "audit":
         path = args.audit_db or Path(os.environ.get("WARDEN_AUDIT_DB") or DEFAULT_AUDIT_PATH)

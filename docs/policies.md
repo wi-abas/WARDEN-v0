@@ -139,7 +139,7 @@ waiting, so one agent can't flood Warden or crowd out the others:
 
 ```json
 "limits": {
-  "default": { "requests_per_minute": 600, "max_pending_approvals": 50 },
+  "default": { "requests_per_minute": 1200, "max_pending_approvals": 100 },
   "agents": { "billing-agent": { "requests_per_minute": 30, "max_pending_approvals": 5 } }
 }
 ```
@@ -153,6 +153,19 @@ waiting, so one agent can't flood Warden or crowd out the others:
   `"max_pending_approvals": 0` turns every `require_approval` for that agent into `deny`.
 - Without agent tokens (`--agents`), an agent can dodge its limit by using a new
   `agent_id`. Limits reset when Warden restarts.
+
+Change them without editing JSON by hand (restart Warden afterwards):
+
+```sh
+uv run warden limits                                          # show what applies
+uv run warden limits set --requests-per-minute 2000 --pending 200
+uv run warden limits set --agent billing-agent --requests-per-minute 30
+uv run warden limits reset --agent billing-agent              # back to the defaults
+```
+
+`--policy FILE` (or `WARDEN_POLICY`) picks the file. The new file must pass
+`warden check` before it replaces the old one, and keeps its permissions; it's
+rewritten with 2-space indentation.
 
 ## Checking a policy
 

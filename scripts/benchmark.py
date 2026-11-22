@@ -65,7 +65,7 @@ def _start(policy: Path, audit_db: Path) -> tuple[uvicorn.Server, threading.Thre
     return server, thread, server.servers[0].sockets[0].getsockname()[1]
 
 
-# The default per-agent limit (600/minute) would stop a benchmark: lift it here.
+# The default per-agent limit (1,200/minute) would stop a benchmark: lift it here.
 NO_LIMIT = {"default": {"requests_per_minute": 100_000}}
 
 
