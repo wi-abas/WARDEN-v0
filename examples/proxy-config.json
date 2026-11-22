@@ -1,0 +1,10 @@
+{
+  "warden_url": "http://127.0.0.1:8000",
+  "agent_id": "claude-desktop",
+  "tool_prefix": "fs.",
+  "server": {
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-filesystem", "/Users/me/workspace"]
+  },
+  "approval": { "mode": "wait", "timeout_seconds": 120, "poll_seconds": 2 }
+}

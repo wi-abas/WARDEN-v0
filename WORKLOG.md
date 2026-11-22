@@ -24,4 +24,6 @@ coverage, ruff/format/mypy clean.
 
 ## Progress
 
-- [ ] 1. MCP proxy
+- [x] 1. MCP proxy: `bfe5d89` (code + tests), docs next commit. Found and fixed while
+  testing: proxy hung if the server's output broke but the process stayed alive; calls in
+  flight were dropped when the client closed its input (`echo ... | warden proxy`).

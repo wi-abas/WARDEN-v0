@@ -757,3 +757,9 @@ def test_serve_stdio_on_real_streams(tmp_path: Path, monkeypatch: pytest.MonkeyP
     replies = {r["id"]: r for r in map(json.loads, out.getvalue().splitlines())}
     assert replies[1]["result"]["tools"][0]["name"] == "echo"
     assert replies[2]["result"]["isError"] is True
+
+
+def test_example_proxy_config_is_valid() -> None:
+    example = Path(__file__).parent.parent / "examples" / "proxy-config.json"
+    config = load_config(example)
+    assert config.tool_prefix == "fs." and config.approval.mode == "wait"
