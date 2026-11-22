@@ -17,6 +17,14 @@ uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run pyt
 
 All four must pass (CI runs the same).
 
+`tests/test_properties.py` uses [Hypothesis](https://hypothesis.readthedocs.io/) to try
+hundreds of generated inputs per rule (engine, fingerprints, approvals, bypass attempts).
+Before a security-relevant change, run it much harder:
+
+```sh
+HYPOTHESIS_PROFILE=deep uv run pytest tests/test_properties.py   # 5,000 inputs per rule
+```
+
 ## Rules
 
 - **Decisions stay deterministic.** No network, no randomness, no LLMs in the policy engine.
