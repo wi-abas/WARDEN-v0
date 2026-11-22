@@ -74,6 +74,12 @@ The server listens on `http://127.0.0.1:8000` (this machine only). Open
 
 Settings (`--policy`, `--port`, the admin key, ...): see [docs/api.md](docs/api.md#settings).
 
+## Speed
+
+About **1 ms per tool call** over HTTP on an Apple M1, including the audit-log write
+(p99 under 2 ms). The decision itself takes about 5 microseconds. Measure on your machine:
+`uv run python scripts/benchmark.py`.
+
 ## Documentation
 
 - [Writing policies](docs/policies.md): rules, argument conditions, tool argument lists, `warden check`

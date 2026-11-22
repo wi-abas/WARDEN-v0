@@ -46,7 +46,7 @@ testpaths = ["tests"]
 pythonpath = ["src"]
 
 [tool.mypy]
-files = ["src", "examples"]
+files = ["src", "examples", "scripts"]
 strict = true
 plugins = ["pydantic.mypy"]
 
