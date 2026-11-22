@@ -5,7 +5,7 @@
 ### Security fixes (full code review)
 - **Host-name rules**: `endswith`/`eq` with a value like `evil.com` could be dodged with
   `x@evil.com.`, `x@evil.com>` or `evil.com.`; such text is now denied as uncheckable.
-- **Approval display**: a key that looked like an escape (`note\\u200b`) could hide another
+- **Approval display**: a key that looked like an escape (`note\u200b`) could hide another
   argument from the approver. The display is now one-to-one.
 - **No HTTP proxies**: the client (SDK, MCP proxy) and `warden approvals` ignore
   `HTTP_PROXY`, which sent arguments and the admin key to the proxy.
