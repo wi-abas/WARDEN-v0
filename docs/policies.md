@@ -33,6 +33,20 @@ The simplest rules just name a tool:
   response (one line, up to 200 characters), e.g.
   `{ "id": "big-invoice", ..., "message": "Invoices over €500 need finance approval" }`.
 
+### Editor autocomplete
+
+Start a policy with a `$schema` line and editors like VS Code will autocomplete fields and
+underline mistakes as you type (Warden itself ignores this line):
+
+```json
+{
+  "$schema": "https://raw.githubusercontent.com/wi-abas/agent-warden/main/policy.schema.json",
+  "rules": [ ... ]
+}
+```
+
+`warden init` adds it for you. `uv run warden schema` prints the schema.
+
 ## Argument rules
 
 A rule can add `when` conditions. It then matches only if **all** of them hold:

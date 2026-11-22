@@ -19,6 +19,7 @@ from warden.models import TOOL_NAME_PATTERN, Rule, ToolSpec
 logger = logging.getLogger(__name__)
 
 DEFAULT_POLICY_PATH = Path("policies/default.json")
+SCHEMA_URL = "https://raw.githubusercontent.com/wi-abas/agent-warden/main/policy.schema.json"
 MAX_RULES = 1000
 
 
@@ -28,8 +29,16 @@ class Policy(BaseModel):
     "tools" is optional: argument lists per tool (see ToolSpec).
     """
 
-    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+    model_config = ConfigDict(
+        extra="forbid",
+        strict=True,
+        frozen=True,
+        json_schema_extra={"title": "Warden policy"},
+    )
 
+    # Optional link to the JSON Schema, so editors autocomplete and check the file.
+    # Ignored by Warden itself.
+    schema_url: str | None = Field(default=None, alias="$schema", max_length=500)
     tools: dict[Annotated[str, Field(pattern=TOOL_NAME_PATTERN)], ToolSpec] = Field(
         default_factory=dict, max_length=MAX_RULES
     )

@@ -1,0 +1,180 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "Condition": {
+      "additionalProperties": false,
+      "description": "One check on one argument, e.g. {\"arg\": \"amount\", \"op\": \"gt\", \"value\": 500}.",
+      "properties": {
+        "arg": {
+          "pattern": "^[A-Za-z0-9_.\\-]{1,64}$",
+          "title": "Arg",
+          "type": "string"
+        },
+        "op": {
+          "$ref": "#/$defs/Op"
+        },
+        "value": {
+          "$ref": "#/$defs/JsonValue",
+          "default": null
+        },
+        "ignore_case": {
+          "default": false,
+          "title": "Ignore Case",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "arg",
+        "op"
+      ],
+      "title": "Condition",
+      "type": "object"
+    },
+    "Decision": {
+      "description": "The three possible answers Warden can give.",
+      "enum": [
+        "allow",
+        "deny",
+        "require_approval"
+      ],
+      "title": "Decision",
+      "type": "string"
+    },
+    "JsonValue": {},
+    "Op": {
+      "description": "The fixed set of checks a condition can do. No regex, no code.",
+      "enum": [
+        "eq",
+        "neq",
+        "gt",
+        "gte",
+        "lt",
+        "lte",
+        "in",
+        "startswith",
+        "endswith",
+        "exists",
+        "missing"
+      ],
+      "title": "Op",
+      "type": "string"
+    },
+    "Rule": {
+      "additionalProperties": false,
+      "description": "One policy rule: when an agent asks for `tool` (and every `when` condition\nholds), the answer is `effect`.",
+      "properties": {
+        "id": {
+          "pattern": "^[a-z0-9_.\\-]{1,64}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "tool": {
+          "pattern": "^[a-z0-9_.\\-]{1,64}$",
+          "title": "Tool",
+          "type": "string"
+        },
+        "effect": {
+          "$ref": "#/$defs/Decision"
+        },
+        "when": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Condition"
+          },
+          "maxItems": 20,
+          "title": "When",
+          "type": "array"
+        },
+        "message": {
+          "anyOf": [
+            {
+              "pattern": "^[^\\x00-\\x1f\\x7f]{1,200}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Message"
+        }
+      },
+      "required": [
+        "id",
+        "tool",
+        "effect"
+      ],
+      "title": "Rule",
+      "type": "object"
+    },
+    "ToolSpec": {
+      "additionalProperties": false,
+      "description": "Which arguments a tool may receive. Anything else is denied.\n\nCloses the \"new argument nobody checks\" gap: with a spec, an agent can't slip\nin e.g. \"bcc\" that no rule looks at.",
+      "properties": {
+        "arguments": {
+          "items": {
+            "pattern": "^[A-Za-z0-9_.\\-]{1,64}$",
+            "type": "string"
+          },
+          "maxItems": 50,
+          "title": "Arguments",
+          "type": "array"
+        },
+        "required": {
+          "default": [],
+          "items": {
+            "pattern": "^[A-Za-z0-9_.\\-]{1,64}$",
+            "type": "string"
+          },
+          "title": "Required",
+          "type": "array"
+        }
+      },
+      "required": [
+        "arguments"
+      ],
+      "title": "ToolSpec",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "The shape of a policy file: {\"tools\": { ... }, \"rules\": [ ... ]}.\n\n\"tools\" is optional: argument lists per tool (see ToolSpec).",
+  "properties": {
+    "$schema": {
+      "anyOf": [
+        {
+          "maxLength": 500,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "$Schema"
+    },
+    "tools": {
+      "maxProperties": 1000,
+      "patternProperties": {
+        "^[a-z0-9_.\\-]{1,64}$": {
+          "$ref": "#/$defs/ToolSpec"
+        }
+      },
+      "title": "Tools",
+      "type": "object"
+    },
+    "rules": {
+      "items": {
+        "$ref": "#/$defs/Rule"
+      },
+      "maxItems": 1000,
+      "title": "Rules",
+      "type": "array"
+    }
+  },
+  "required": [
+    "rules"
+  ],
+  "title": "Warden policy",
+  "type": "object"
+}

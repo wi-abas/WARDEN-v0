@@ -7,9 +7,11 @@ warden serve           start the server; options: --policy FILE --port N
 warden init [FILE]     create a starter policy (default policies/default.json)
 warden check FILE      validate a policy file; exit 1 on errors
 warden check --strict  ...also exit 1 on warnings (useful in CI)
+warden schema          print the JSON Schema for policy files
 """
 
 import argparse
+import json
 import os
 import sys
 from importlib import resources
@@ -17,7 +19,7 @@ from pathlib import Path
 
 from warden import __version__
 from warden.check import check_policy, format_report
-from warden.policy import DEFAULT_POLICY_PATH
+from warden.policy import DEFAULT_POLICY_PATH, Policy
 from warden.settings import SettingsError, resolve
 
 
@@ -35,10 +37,15 @@ def main(argv: list[str] | None = None) -> int:
     )
     init = commands.add_parser("init", help="create a starter policy file")
     init.add_argument("policy", nargs="?", type=Path, default=DEFAULT_POLICY_PATH)
+    commands.add_parser("schema", help="print the JSON Schema for policy files")
     check = commands.add_parser("check", help="validate a policy file")
     check.add_argument("policy", nargs="?", type=Path, default=DEFAULT_POLICY_PATH)
     check.add_argument("--strict", action="store_true", help="exit 1 on warnings too")
     args = parser.parse_args(argv)
+
+    if args.command == "schema":
+        print(policy_schema(), end="")
+        return 0
 
     if args.command == "init":
         return init_policy(args.policy)
@@ -78,6 +85,12 @@ def init_policy(path: Path) -> int:
     print(f"  2. uv run warden check {path}")
     print("  3. uv run warden")
     return 0
+
+
+def policy_schema() -> str:
+    schema = Policy.model_json_schema(by_alias=True)
+    schema = {"$schema": "https://json-schema.org/draft/2020-12/schema", **schema}
+    return json.dumps(schema, indent=2, ensure_ascii=False) + "\n"
 
 
 def starter_policy() -> str:
