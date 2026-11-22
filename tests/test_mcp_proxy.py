@@ -458,7 +458,8 @@ def test_protocol_basics_pass_and_server_requests_round_trip(tmp_path: Path) -> 
         await asyncio.sleep(0.1)
         assert s.server_saw()[-1] == {"jsonrpc": "2.0", "id": "srv-1", "result": {"roots": []}}
 
-    run_session(make_config(tmp_path), FakeWarden(), script)
+    # Server -> client requests are refused unless listed (tests/test_mcp_proxy_hardening.py).
+    run_session(make_config(tmp_path, allow_server_requests=["roots/list"]), FakeWarden(), script)
 
 
 def test_oversized_and_blank_lines(tmp_path: Path) -> None:

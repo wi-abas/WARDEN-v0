@@ -3,7 +3,9 @@
 - initialize / tools/list / ping: canned answers
 - tools/call "echo": returns the name and arguments it received, as JSON text
 - tools/call "exit": exits with code 3; "big": one 5000-byte line; "partial": no newline
-- tools/call "ask_client": first sends the client a request (roots/list)
+- tools/call "ask_client": first sends the client a request (arguments "method", default
+  roots/list, and "id", default "srv-1"), e.g. sampling/createMessage
+- tools/call "server_says": first writes each text in arguments "lines" as a raw line
 Every received line is appended to the file named by FAKE_MCP_LOG.
 """
 
@@ -43,8 +45,14 @@ for line in sys.stdin:
             sys.stdout.write('{"jsonrpc": "2.0", "id": 1, "result": {}}')
             sys.stdout.flush()
             sys.exit(0)
+        arguments = message["params"].get("arguments") or {}
         if name == "ask_client":
-            send({"jsonrpc": "2.0", "id": "srv-1", "method": "roots/list"})
+            method = arguments.get("method", "roots/list")
+            send({"jsonrpc": "2.0", "id": arguments.get("id", "srv-1"), "method": method})
+        if name == "server_says":
+            for raw in arguments["lines"]:
+                sys.stdout.write(raw + "\n")
+            sys.stdout.flush()
         text = json.dumps({"name": name, "arguments": message["params"].get("arguments")})
         send(
             {

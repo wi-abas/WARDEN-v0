@@ -11,7 +11,11 @@ newline-delimited JSON-RPC messages both ways. Every `tools/call` is checked wit
 
 Other client requests pass only if their method is on the pass-through list. Messages
 with repeated JSON keys, JSON-RPC batches and invalid JSON are refused, never forwarded.
-See docs/design/mcp-proxy.md for the threat model.
+
+Server -> client: responses and notifications pass. Requests (sampling, roots,
+elicitation, ...) are answered by the proxy with an error unless the config's
+"allow_server_requests" lists them; malformed messages are dropped.
+See docs/design/mcp-proxy.md and docs/design/proxy-hardening.md for the threat model.
 
 stdout is the MCP channel, so everything human-readable goes to stderr.
 """
@@ -63,6 +67,16 @@ META_KEY_PATTERN = r"^[A-Za-z][A-Za-z0-9._/-]{0,63}$"  # ASCII only: no look-ali
 MAX_META_TEXT = 256
 MAX_META_INT = 2**53 - 1  # the largest whole number every JSON parser reads exactly
 
+# Requests the server may send the client, e.g. "roots/list". None by default.
+SERVER_METHOD_PATTERN = r"^[a-z][A-Za-z0-9_]*(/[a-z][A-Za-z0-9_]*)*$"
+# Client capabilities removed from "initialize" unless the matching request is allowed,
+# so well-behaved servers don't try (the requests are refused either way).
+CAPABILITY_METHODS = {
+    "sampling": "sampling/createMessage",
+    "elicitation": "elicitation/create",
+    "roots": "roots/list",
+}
+
 # JSON-RPC error codes
 PARSE_ERROR = -32700
 INVALID_REQUEST = -32600
@@ -110,6 +124,11 @@ class ProxyConfig(BaseModel):
     allow_methods: tuple[str, ...] = ()
     # Keys a tools/call's "_meta" may hold. Anything else refuses the whole call.
     allow_meta_keys: tuple[Annotated[str, Field(pattern=META_KEY_PATTERN)], ...] = DEFAULT_META_KEYS
+    # Requests the server may send the client (sampling, roots, elicitation, ...).
+    # Anything not listed is answered by the proxy with an error, never forwarded.
+    allow_server_requests: tuple[
+        Annotated[str, Field(pattern=SERVER_METHOD_PATTERN, max_length=64)], ...
+    ] = ()
     warden_timeout_seconds: float = Field(default=5, gt=0, le=60)
 
     @field_validator("warden_url")
@@ -212,7 +231,9 @@ class McpProxy:
         self.read_client = read_client
         self.write_client = write_client
         self.allowed_methods = PASS_THROUGH | set(config.allow_methods)
+        self.allowed_server_requests = frozenset(config.allow_server_requests)
         self._calls: dict[str, asyncio.Task[None]] = {}  # in-flight tool calls by id
+        self._held: set[str] = set()  # ids of tool calls not (yet) sent to the server
         self._server_in: asyncio.StreamWriter | None = None
 
     # --- Session ----------------------------------------------------------------------
@@ -253,7 +274,6 @@ class McpProxy:
         return process.returncode if process.returncode is not None else 1
 
     async def _relay_server(self, stdout: asyncio.StreamReader) -> None:
-        """Server -> client: forwarded unchanged (the server is the tool itself)."""
         while True:
             try:
                 line = await stdout.readline()
@@ -263,7 +283,37 @@ class McpProxy:
             if not line:
                 return
             if line.strip():
-                self.write_client(line if line.endswith(b"\n") else line + b"\n")
+                await self._handle_server(line)
+
+    async def _handle_server(self, line: bytes) -> None:
+        """Server -> client. Responses and notifications pass (the server is the tool
+        itself and is trusted for what it says). Requests pass only if allowed: a server
+        must not get an LLM call, the user's file roots or the user's input unchecked.
+        Whatever passes is re-encoded from the parsed object, like client -> server."""
+        try:
+            message = parse_message(line)
+        except _Refused as refused:
+            logger.warning("dropped a message from the MCP server (%s)", refused.message)
+            return
+        kind = _server_message_kind(message)
+        if kind is None:
+            logger.warning("dropped a malformed message from the MCP server")
+        elif kind == "response" and json.dumps(message["id"]) in self._held:
+            # The proxy hasn't sent that call yet (still checking or waiting for a
+            # human): the server can't have answered it.
+            logger.warning("dropped a server response to a call Warden hasn't forwarded")
+        elif kind != "request" or message["method"] in self.allowed_server_requests:
+            self._reply(message)
+        elif message["method"] == "ping":
+            await self._forward({"jsonrpc": "2.0", "id": message["id"], "result": {}})
+        else:
+            logger.warning(
+                "refused server request %s (not in allow_server_requests)",
+                _safe_name(message["method"]),
+            )
+            await self._forward(
+                rpc_error(message["id"], METHOD_NOT_FOUND, "request refused by Warden proxy")
+            )
 
     async def _relay_client(self) -> None:
         while True:
@@ -319,6 +369,10 @@ class McpProxy:
             return
         if method == "tools/call":
             self._start_call(request_id, message)
+        elif method == "initialize":
+            await self._forward(
+                _without_refused_capabilities(message, self.allowed_server_requests)
+            )
         elif method in self.allowed_methods:
             await self._forward(message)
         else:
@@ -337,7 +391,13 @@ class McpProxy:
             return
         task = asyncio.create_task(self._tool_call(request_id, message))
         self._calls[key] = task
-        task.add_done_callback(lambda _: self._calls.pop(key, None))
+        self._held.add(key)
+
+        def done(_: object) -> None:
+            self._calls.pop(key, None)
+            self._held.discard(key)
+
+        task.add_done_callback(done)
 
     def _cancel(self, params: object) -> None:
         """The client gave up on a request: stop waiting for its approval."""
@@ -377,6 +437,7 @@ class McpProxy:
         if answer.allowed:
             # Forward the SAME parsed object Warden checked, re-encoded: never the raw
             # bytes, so the server can't read anything Warden didn't see.
+            self._held.discard(json.dumps(request_id))
             await self._forward(message)
         else:
             self._reply(tool_error(request_id, f"Blocked by Warden: {answer.reason}"))
@@ -454,6 +515,38 @@ def _meta_problem(meta: object, allowed_keys: tuple[str, ...]) -> str | None:
         else:
             return "values must be text or whole numbers"
     return None
+
+
+def _server_message_kind(message: object) -> Literal["response", "notification", "request"] | None:
+    """Exactly one JSON-RPC shape, or None. Strict, so that a request can't pass as a
+    response or notification (e.g. a message with both "method" and "result")."""
+    if not isinstance(message, dict) or message.get("jsonrpc") != "2.0":
+        return None
+    if "method" not in message:
+        return "response" if _is_response(message) and _valid_id(message["id"]) else None
+    if not isinstance(message["method"], str) or not isinstance(message.get("params", {}), dict):
+        return None
+    keys = set(message)
+    if keys <= {"jsonrpc", "method", "params"}:
+        # Like client -> server: only "notifications/..." (a sloppy client might act on a
+        # "sampling/createMessage" without an id).
+        return "notification" if message["method"].startswith("notifications/") else None
+    if keys <= {"jsonrpc", "id", "method", "params"} and message["id"] is not None:
+        return "request" if _valid_id(message["id"]) else None
+    return None
+
+
+def _without_refused_capabilities(message: dict[str, Any], allowed: frozenset[str]) -> Any:
+    """The client's initialize, minus capabilities for server requests the proxy refuses."""
+    params = message.get("params")
+    if not isinstance(params, dict) or not isinstance(params.get("capabilities"), dict):
+        return message
+    capabilities = {
+        name: value
+        for name, value in params["capabilities"].items()
+        if name not in CAPABILITY_METHODS or CAPABILITY_METHODS[name] in allowed
+    }
+    return {**message, "params": {**params, "capabilities": capabilities}}
 
 
 def _is_response(message: dict[str, Any]) -> bool:
