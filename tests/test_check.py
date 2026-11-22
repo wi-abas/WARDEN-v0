@@ -149,3 +149,16 @@ def test_w004_not_raised_when_only_ignore_case_differs(tmp_path: Path) -> None:
         "rules": [r("a", "t", "deny", a), r("b", "t", "deny", b)],
     }
     assert codes(tmp_path, policy) == []
+
+
+@pytest.mark.parametrize("op", ["neq", "missing"])
+def test_w010_allow_everything_except(tmp_path: Path, op: str) -> None:
+    cond = {"arg": "to", "op": op, **({"value": "x"} if op == "neq" else {})}
+    policy = {"tools": {"t": {"arguments": ["to"]}}, "rules": [r("a", "t", "allow", cond)]}
+    assert codes(tmp_path, policy) == ["W010"]
+
+
+def test_w010_not_raised_for_deny_rules(tmp_path: Path) -> None:
+    cond = {"arg": "to", "op": "missing"}
+    policy = {"tools": {"t": {"arguments": ["to"]}}, "rules": [r("a", "t", "deny", cond)]}
+    assert codes(tmp_path, policy) == []

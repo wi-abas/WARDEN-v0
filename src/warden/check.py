@@ -15,6 +15,8 @@ Warnings: the policy loads, but probably doesn't do what you meant:
 - W009  a deny / require_approval rule compares a path case-sensitively, so on
         case-insensitive filesystems (macOS, Windows) "/ETC/passwd" slips past
         a rule for "/etc/". Add "ignore_case": true.
+- W010  an "allow" rule uses neq or missing, i.e. "allow everything except X":
+        a deny-list in disguise. Every value nobody thought of is allowed.
 - W008  an email-domain check ("...@example.com") is case-sensitive, so
         "x@EXAMPLE.com" slips past it. Add "ignore_case": true.
 
@@ -124,6 +126,12 @@ def _warnings(policy: Policy) -> list[str]:
                 out.append(
                     f'W009: rule "{rule.id}" compares a path case-sensitively; on macOS and '
                     f'Windows "/ETC/..." is the same file as "/etc/...". Add "ignore_case": true.'
+                )
+            if rule.effect is Decision.ALLOW and c.op in {Op.NEQ, Op.MISSING}:
+                out.append(
+                    f'W010: rule "{rule.id}" allows everything except one value ({c.op.value} '
+                    f'on "{c.arg}"); anything nobody thought of is allowed. Prefer listing '
+                    f"what is allowed (eq, in, startswith, endswith)."
                 )
             if spec is not None and c.arg not in spec.arguments:
                 out.append(

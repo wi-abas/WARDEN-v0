@@ -120,5 +120,6 @@ do what you meant:
 | W006 | A tool has an argument list but no rules: it's always denied |
 | W007 | A condition checks an argument that isn't in the tool's argument list (typo?) |
 | W008 | An email address is compared case-sensitively (`x@EVIL.com` would slip past) |
+| W010 | An `allow` rule uses `neq` or `missing` ("allow everything except X"), a deny-list in disguise |
 
 Exit code `1` on errors; with `--strict`, also on warnings (useful in CI).
