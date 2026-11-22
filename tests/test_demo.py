@@ -24,3 +24,14 @@ def test_demo_runs_and_every_step_behaves(capsys: pytest.CaptureFixture[str]) ->
 def test_demo_policy_passes_warden_check() -> None:
     report = check_policy(EXAMPLES / "demo-policy.json")
     assert report.errors == [] and report.warnings == []
+
+
+import pytest  # noqa: E402
+
+import warden.api  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def restore_default_hosts(monkeypatch: pytest.MonkeyPatch) -> None:
+    # conftest allows "testserver"; examples must work with the real defaults.
+    monkeypatch.setattr(warden.api, "ALLOWED_HOSTS", ("127.0.0.1", "localhost", "::1"))

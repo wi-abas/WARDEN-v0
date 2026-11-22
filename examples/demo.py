@@ -56,7 +56,9 @@ def run() -> bool:
     admin_key = secrets.token_urlsafe(32)
     with tempfile.TemporaryDirectory() as tmp:
         audit = SQLiteAuditLog(Path(tmp) / "audit.db")
-        client = TestClient(create_app(POLICY, audit_log=audit, admin_key=admin_key))
+        app = create_app(POLICY, audit_log=audit, admin_key=admin_key)
+        # Address requests to 127.0.0.1: Warden refuses any other Host (DNS rebinding).
+        client = TestClient(app, base_url="http://127.0.0.1")
         d = Demo(client, admin_key)
 
         print("\n1. Simple rules\n")
