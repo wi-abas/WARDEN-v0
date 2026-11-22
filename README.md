@@ -37,6 +37,8 @@ Three ways, from least to most work on your side.
 
 Put Warden between your MCP client (Claude Desktop, Cursor, Claude Code) and any stdio
 MCP server. Every `tools/call` is checked; denied calls never reach the server.
+Requests the server sends back (LLM sampling, file roots, questions to the user) are
+refused unless you allow them in the config.
 
 ```json
 {

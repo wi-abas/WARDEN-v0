@@ -6,5 +6,6 @@
     "command": "npx",
     "args": ["-y", "@modelcontextprotocol/server-filesystem", "/Users/me/workspace"]
   },
-  "approval": { "mode": "wait", "timeout_seconds": 120, "poll_seconds": 2 }
+  "approval": { "mode": "wait", "timeout_seconds": 120, "poll_seconds": 2 },
+  "allow_server_requests": ["roots/list"]
 }

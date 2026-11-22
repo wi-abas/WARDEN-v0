@@ -74,7 +74,7 @@ def test_proxy_session_survives_a_deep_message(tmp_path: Path) -> None:
     async def script(s: Session) -> None:
         s.send_raw(DEEP_LIST.encode() + b"\n")
         refused = await s.recv()
-        assert refused["error"]["message"] == "invalid JSON"
+        assert refused["error"]["message"] == "message nested too deeply (refused by Warden)"
         # The session is still alive: the next call is checked and forwarded.
         reply = await s.roundtrip(call("echo", {"x": 1}))
         assert echoed(reply) == {"name": "echo", "arguments": {"x": 1}}
