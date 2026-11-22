@@ -763,3 +763,20 @@ def test_example_proxy_config_is_valid() -> None:
     example = Path(__file__).parent.parent / "examples" / "proxy-config.json"
     config = load_config(example)
     assert config.tool_prefix == "fs." and config.approval.mode == "wait"
+
+
+def test_unchecked_fields_in_tool_call_params_are_refused(tmp_path: Path) -> None:
+    warden = FakeWarden()
+
+    async def script(s: Session) -> None:
+        message = call("echo", {"path": "/ok"})
+        message["params"]["argumentsOverride"] = {"path": "/etc/passwd"}
+        reply = await s.roundtrip(message)
+        assert reply["error"] == {"code": -32602, "message": "unexpected field in tools/call"}
+        meta = call("echo", {"a": 1}, request_id=2)
+        meta["params"]["_meta"] = {"progressToken": "t1"}
+        assert echoed(await s.roundtrip(meta))["arguments"] == {"a": 1}
+
+    session, _ = run_session(make_config(tmp_path), warden, script)
+    assert len(calls_seen(session)) == 1
+    assert warden.asked == [("echo", {"a": 1}, None)]

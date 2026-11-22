@@ -54,6 +54,10 @@ PASS_THROUGH = frozenset(
     }
 )
 
+# The fields a tools/call may carry. "_meta" is protocol metadata (e.g. a progress
+# token) and is forwarded unchecked; anything else is refused.
+TOOL_CALL_PARAMS = frozenset({"name", "arguments", "_meta"})
+
 # JSON-RPC error codes
 PARSE_ERROR = -32700
 INVALID_REQUEST = -32600
@@ -326,6 +330,11 @@ class McpProxy:
         params = message.get("params")
         if not isinstance(params, dict) or not isinstance(params.get("name"), str):
             self._reply(rpc_error(request_id, INVALID_PARAMS, "tools/call needs a tool name"))
+            return
+        if not set(params) <= TOOL_CALL_PARAMS:
+            # A server might read an extra field (e.g. "argumentsOverride") that Warden
+            # never checked. Refuse instead of forwarding it.
+            self._reply(rpc_error(request_id, INVALID_PARAMS, "unexpected field in tools/call"))
             return
         arguments = params.get("arguments", {})
         if not isinstance(arguments, dict):
