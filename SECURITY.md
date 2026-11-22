@@ -54,7 +54,10 @@ Assuming the agent runtime calls Warden and obeys the answer:
 - **Things the rules don't express.** Text checks see text, not meaning:
   `endswith "@mycompany.com"` can't tell two recipients in one string apart, and
   conditions only look at top-level arguments.
-- **Denial of service.** Request size is limited, but nothing rate-limits requests.
+- **Denial of service.** Request size is limited and recording of rejected requests is
+  capped at 60 per minute (the rest are counted in one summary line), but requests
+  themselves aren't rate limited: any local program can fill the approval queue (1,000
+  pending) or keep Warden busy.
 
 ### Trust boundaries
 

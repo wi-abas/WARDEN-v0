@@ -24,8 +24,10 @@ import logging.config
 import re
 import secrets
 import sys
+import threading
+import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -50,6 +52,7 @@ logger = logging.getLogger(__name__)
 
 HOST = "127.0.0.1"
 MAX_BODY_BYTES = 64 * 1024  # 64 KB is far more than any real tool call needs
+REJECTIONS_PER_MINUTE = 60
 
 
 def _deny_response(status_code: int, reason: str) -> JSONResponse:
@@ -144,6 +147,14 @@ class _Warden:
     audit_log: AuditLog
     approvals: ApprovalStore
     admin_key: str
+    # Rejected requests are recorded at most this many per minute, so a flood of bad
+    # requests can't fill the disk. The rest are counted and summarised in one event.
+    rejections_per_minute: int = REJECTIONS_PER_MINUTE
+    clock: Callable[[], float] = time.monotonic
+    _limit_lock: threading.Lock = field(default_factory=threading.Lock)
+    _window_start: float = -1e18
+    _window_count: int = 0
+    _suppressed: int = 0
 
     # --- Access control and rejected requests ------------------------------------------
 
@@ -155,6 +166,8 @@ class _Warden:
 
     def record_rejection(self, scope: Scope, status: int, reason: str) -> None:
         """Audit a refused request: method and URL path only, never the body."""
+        if not self._within_rejection_limit():
+            return
         self._record_event_safely(
             AuditEvent.now(
                 EventKind.REQUEST_REJECTED,
@@ -164,6 +177,29 @@ class _Warden:
                 path=str(scope.get("path", "")),
             )
         )
+
+    def _within_rejection_limit(self) -> bool:
+        """True if this rejection may be recorded. Writes a summary when a new minute
+        starts after some were suppressed."""
+        with self._limit_lock:
+            now = self.clock()
+            suppressed = 0
+            if now - self._window_start >= 60:
+                suppressed, self._suppressed = self._suppressed, 0
+                self._window_start, self._window_count = now, 0
+            allowed = self._window_count < self.rejections_per_minute
+            if allowed:
+                self._window_count += 1
+            else:
+                self._suppressed += 1
+        if suppressed:
+            self._record_event_safely(
+                AuditEvent.now(
+                    EventKind.REQUEST_REJECTED,
+                    f"{suppressed} more rejected requests not recorded (rate limit)",
+                )
+            )
+        return allowed
 
     def reject(self, request: Request, status: int, reason: str) -> JSONResponse:
         self.record_rejection(request.scope, status, reason)
@@ -293,6 +329,7 @@ def create_app(
     )
 
     app = FastAPI(title="Warden", version=__version__)
+    app.state.warden = w  # for tests and debugging
     app.add_middleware(BodySizeLimit, on_reject=w.record_rejection)
     # Added last, so it runs first: refuse foreign Host headers before anything else.
     app.add_middleware(HostCheck, allowed=ALLOWED_HOSTS, on_reject=w.record_rejection)
