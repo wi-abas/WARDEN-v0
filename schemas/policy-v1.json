@@ -41,6 +41,65 @@
       "type": "string"
     },
     "JsonValue": {},
+    "LimitSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "requests_per_minute": {
+          "anyOf": [
+            {
+              "maximum": 100000,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Requests Per Minute"
+        },
+        "max_pending_approvals": {
+          "anyOf": [
+            {
+              "maximum": 1000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Pending Approvals"
+        }
+      },
+      "title": "LimitSpec",
+      "type": "object"
+    },
+    "Limits": {
+      "additionalProperties": false,
+      "properties": {
+        "default": {
+          "$ref": "#/$defs/LimitSpec",
+          "default": {
+            "requests_per_minute": null,
+            "max_pending_approvals": null
+          }
+        },
+        "agents": {
+          "maxProperties": 1000,
+          "patternProperties": {
+            "^[A-Za-z0-9_.\\-]{1,128}$": {
+              "$ref": "#/$defs/LimitSpec"
+            }
+          },
+          "title": "Agents",
+          "type": "object"
+        }
+      },
+      "title": "Limits",
+      "type": "object"
+    },
     "Op": {
       "description": "The fixed set of checks a condition can do. No regex, no code.",
       "enum": [
@@ -139,7 +198,7 @@
     }
   },
   "additionalProperties": false,
-  "description": "The shape of a policy file: {\"tools\": { ... }, \"rules\": [ ... ]}.\n\n\"tools\" is optional: argument lists per tool (see ToolSpec).",
+  "description": "The shape of a policy file: {\"tools\": { ... }, \"rules\": [ ... ], \"limits\": { ... }}.\n\n\"tools\" is optional: argument lists per tool (see ToolSpec).\n\"limits\" is optional: per-agent rate limits and approval quotas (see Limits).",
   "properties": {
     "$schema": {
       "anyOf": [
@@ -171,6 +230,16 @@
       "maxItems": 1000,
       "title": "Rules",
       "type": "array"
+    },
+    "limits": {
+      "$ref": "#/$defs/Limits",
+      "default": {
+        "default": {
+          "requests_per_minute": null,
+          "max_pending_approvals": null
+        },
+        "agents": {}
+      }
     }
   },
   "required": [

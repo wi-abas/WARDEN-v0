@@ -111,6 +111,28 @@ rule runs, so an agent can't slip in an argument no rule checks (like `bcc`):
 - A name in `required` that's missing → deny (`"missing required argument 'to'"`).
 - Tools without an entry work as before. Names only for now, not types.
 
+## Rate limits and approval quotas
+
+Optional. Each agent gets a request budget and a cap on how many approvals it may have
+waiting, so one agent can't flood Warden or crowd out the others:
+
+```json
+"limits": {
+  "default": { "requests_per_minute": 600, "max_pending_approvals": 50 },
+  "agents": { "billing-agent": { "requests_per_minute": 30, "max_pending_approvals": 5 } }
+}
+```
+
+- An agent's own value wins, then `default`, then the built-in defaults (the values above).
+- Over the request budget: HTTP 429, `"decision": "deny"`, with a `Retry-After` header.
+  The budget refills continuously (a burst of up to the per-minute value is allowed).
+  Approval polls count too.
+- Over the approval quota: `deny`, "too many pending approvals for this agent". Asking
+  again for the same action reuses its approval and doesn't count twice.
+  `"max_pending_approvals": 0` turns every `require_approval` for that agent into `deny`.
+- Without agent tokens (`--agents`), an agent can dodge its limit by using a new
+  `agent_id`. Limits reset when Warden restarts.
+
 ## Checking a policy
 
 ```sh

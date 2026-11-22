@@ -15,6 +15,7 @@ from typing import Annotated, Self
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
+from warden.limits import Limits
 from warden.models import TOOL_NAME_PATTERN, Rule, ToolSpec
 
 logger = logging.getLogger(__name__)
@@ -25,9 +26,10 @@ MAX_RULES = 1000
 
 
 class Policy(BaseModel):
-    """The shape of a policy file: {"tools": { ... }, "rules": [ ... ]}.
+    """The shape of a policy file: {"tools": { ... }, "rules": [ ... ], "limits": { ... }}.
 
     "tools" is optional: argument lists per tool (see ToolSpec).
+    "limits" is optional: per-agent rate limits and approval quotas (see Limits).
     """
 
     model_config = ConfigDict(
@@ -44,6 +46,8 @@ class Policy(BaseModel):
         default_factory=dict, max_length=MAX_RULES
     )
     rules: tuple[Rule, ...] = Field(max_length=MAX_RULES)
+    # Optional per-agent rate limits and approval quotas (see limits.py).
+    limits: Limits = Limits()
 
     @model_validator(mode="after")
     def rule_ids_are_unique(self) -> Self:

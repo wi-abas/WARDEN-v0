@@ -23,6 +23,7 @@ import copy
 import json
 import logging
 import logging.config
+import math
 import re
 import secrets
 import sqlite3
@@ -50,6 +51,7 @@ from warden.agents import AgentRegistry, AgentsError, load_agents
 from warden.approvals import Approval, ApprovalStore, DecideError, Status, apply_approval
 from warden.audit import AuditEntry, AuditEvent, AuditLog, EventKind, SQLiteAuditLog
 from warden.engine import evaluate
+from warden.limits import RateLimiter
 from warden.models import (
     APPROVAL_ID_PATTERN,
     ActionRequest,
@@ -241,6 +243,12 @@ class _AdminKeyError(Exception):
     pass
 
 
+class _RateLimited(Exception):
+    def __init__(self, retry_after: float) -> None:
+        super().__init__("rate limit exceeded")
+        self.retry_after = retry_after
+
+
 class _AgentTokenError(Exception):
     """No valid agent token (401), or a body agent_id that contradicts it (403)."""
 
@@ -260,6 +268,7 @@ class _Warden:
     admin_key: str
     # None = no agent tokens: agent_id is self-declared (the old behaviour).
     agents: AgentRegistry | None = None
+    limiter: RateLimiter | None = None  # None = built from the policy's limits
     # Rejected requests are recorded at most this many per minute, so a flood of bad
     # requests can't fill the disk. The rest are counted and summarised in one event.
     rejections_per_minute: int = REJECTIONS_PER_MINUTE
@@ -274,6 +283,10 @@ class _Warden:
     _window_start: float = -1e18
     _window_count: int = 0
     _suppressed: int = 0
+
+    def __post_init__(self) -> None:
+        if self.limiter is None:
+            self.limiter = RateLimiter(self.policy.limits)
 
     # --- Access control and rejected requests ------------------------------------------
 
@@ -382,8 +395,11 @@ class _Warden:
         self, body: EvaluateRequest, authorization: str | None = Header(default=None)
     ) -> EvaluationResult | JSONResponse:
         action = self.identify(body, authorization)
+        if self.limiter is not None and (wait := self.limiter.acquire(action.agent_id)):
+            raise _RateLimited(wait)
         decision = evaluate(action, self.policy.rules, self.policy.tools)
-        result = apply_approval(action, decision, self.approvals)
+        quota = self.policy.limits.max_pending_approvals(action.agent_id)
+        result = apply_approval(action, decision, self.approvals, agent_limit=quota)
         try:
             self.audit_log.record(AuditEntry.from_decision(action, result))
         except Exception as exc:
@@ -518,6 +534,12 @@ def create_app(
     @app.exception_handler(_AdminKeyError)
     async def bad_admin_key(request: Request, exc: _AdminKeyError) -> JSONResponse:
         return w.reject(request, 401, "admin key missing or wrong")
+
+    @app.exception_handler(_RateLimited)
+    async def rate_limited(request: Request, exc: _RateLimited) -> JSONResponse:
+        response = w.reject(request, 429, "rate limit exceeded")
+        response.headers["Retry-After"] = str(max(1, math.ceil(exc.retry_after)))
+        return response
 
     @app.exception_handler(_AgentTokenError)
     async def bad_agent_token(request: Request, exc: _AgentTokenError) -> JSONResponse:

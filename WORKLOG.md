@@ -33,6 +33,13 @@ coverage, ruff/format/mypy clean.
   `--agents`, the token decides `agent_id` and a mismatching body `agent_id` is a 403.
 - **Proxy token from `WARDEN_AGENT_TOKEN` env only**, never the proxy config file.
 
+- **Limits live in the policy file** (`limits` section, optional, schema stays v1 and
+  backwards compatible): limits are trusted config like rules. Built-in defaults apply
+  without it: 600 requests/minute and 50 pending approvals per agent (previously only a
+  global 1,000 pending). Token bucket, injectable monotonic clock. 429 + Retry-After,
+  recorded through the capped rejection log. Pending quota checked under the store lock.
+  Note: SDK/proxy polling counts against the limit (2 s polls = 30/min per waiting call).
+
 ## Blocked / needs Wissam
 
 (none yet)
@@ -44,3 +51,4 @@ coverage, ruff/format/mypy clean.
   flight were dropped when the client closed its input (`echo ... | warden proxy`).
 - [x] 2. Python SDK (`warden.sdk`): guard, run_guarded(_async), freeze, ApprovalPending.
 - [x] 3. Per-agent tokens (`warden agent add/list/remove`, `--agents`, Bearer auth).
+- [x] 4. Per-agent rate limits and pending-approval quotas (`limits` in the policy).

@@ -56,6 +56,10 @@ class DecideError(Exception):
         self.not_found = not_found
 
 
+class PendingQuotaExceeded(Exception):
+    """This agent already has as many pending approvals as it may have."""
+
+
 class ApprovalStore:
     """Thread-safe, in-memory approvals. Every method takes the lock."""
 
@@ -76,8 +80,13 @@ class ApprovalStore:
         for key in [k for k, a in self._items.items() if a.expires_at <= now]:
             del self._items[key]
 
-    def request(self, action: ActionRequest, action_hash: str) -> str | None:
-        """Create (or reuse) a pending approval. None = too many pending."""
+    def request(
+        self, action: ActionRequest, action_hash: str, agent_limit: int | None = None
+    ) -> str | None:
+        """Create (or reuse) a pending approval. None = too many pending overall.
+
+        Raises PendingQuotaExceeded if the agent already has `agent_limit` pending
+        (checked under the lock, so racing requests can't overshoot)."""
         with self._lock:
             now = self._clock()
             self._purge_expired(now)
@@ -89,6 +98,13 @@ class ApprovalStore:
             pending = sum(a.status is Status.PENDING for a in self._items.values())
             if pending >= self._max_pending:
                 return None
+            if agent_limit is not None:
+                mine = sum(
+                    a.status is Status.PENDING and a.agent_id == action.agent_id
+                    for a in self._items.values()
+                )
+                if mine >= agent_limit:
+                    raise PendingQuotaExceeded
             approval_id = secrets.token_urlsafe(24)  # unguessable, 32 characters
             self._items[approval_id] = Approval(
                 approval_id=approval_id,
@@ -177,7 +193,10 @@ class ApprovalStore:
 
 
 def apply_approval(
-    action: ActionRequest, result: EvaluationResult, store: ApprovalStore
+    action: ActionRequest,
+    result: EvaluationResult,
+    store: ApprovalStore,
+    agent_limit: int | None = None,
 ) -> EvaluationResult:
     """Turn the engine's decision into the final answer, using approvals.
 
@@ -187,7 +206,15 @@ def apply_approval(
         return result
 
     if action.approval_id is None:
-        approval_id = store.request(action, result.action_hash)
+        try:
+            approval_id = store.request(action, result.action_hash, agent_limit)
+        except PendingQuotaExceeded:
+            return EvaluationResult(
+                decision=Decision.DENY,
+                reason="too many pending approvals for this agent",
+                matched_rule=result.matched_rule,
+                action_hash=result.action_hash,
+            )
         if approval_id is None:
             return EvaluationResult(
                 decision=Decision.DENY,
