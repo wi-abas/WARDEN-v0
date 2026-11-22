@@ -1,5 +1,5 @@
-"""Conditions on nested arguments ("headers.to" / ["headers", "to"]): same strictness
-as top-level arguments, and never looser than before."""
+"""Conditions on nested arguments (["headers", "to"]): same strictness as top-level
+arguments. A dot in a plain name is just part of the name, as it always was."""
 
 import json
 from pathlib import Path
@@ -31,7 +31,12 @@ ALLOW_COLLEAGUES: dict[str, Any] = {
     "tool": "send",
     "effect": "allow",
     "when": [
-        {"arg": "headers.to", "op": "endswith", "value": "@mycompany.com", "ignore_case": True}
+        {
+            "arg": ["headers", "to"],
+            "op": "endswith",
+            "value": "@mycompany.com",
+            "ignore_case": True,
+        }
     ],
 }
 BLOCK_EVIL: dict[str, Any] = {
@@ -45,7 +50,7 @@ BLOCK_EVIL: dict[str, Any] = {
 POLICY = rules(ALLOW_COLLEAGUES, BLOCK_EVIL)
 
 
-def test_dotted_and_list_forms_reach_the_same_value() -> None:
+def test_list_form_reaches_the_nested_value() -> None:
     assert decide(POLICY, {"headers": {"to": "bob@mycompany.com"}})[0] is Decision.ALLOW
     assert decide(POLICY, {"headers": {"to": "x@EVIL.net"}})[0] is Decision.DENY
     assert decide(POLICY, {"headers": {"to": "x@other.org"}}) == (
@@ -54,7 +59,8 @@ def test_dotted_and_list_forms_reach_the_same_value() -> None:
     )
     a = Condition.model_validate_json('{"arg": "headers.to", "op": "exists"}')
     b = Condition.model_validate_json('{"arg": ["headers", "to"], "op": "exists"}')
-    assert a.path == b.path == ("headers", "to") and a.label == b.label == "headers.to"
+    assert a.path == ("headers.to",) and b.path == ("headers", "to")
+    assert b.label == "headers.to"
 
 
 def test_deep_paths() -> None:
@@ -63,7 +69,7 @@ def test_deep_paths() -> None:
             "id": "deep",
             "tool": "send",
             "effect": "allow",
-            "when": [{"arg": "a.b.c.d", "op": "eq", "value": 1}],
+            "when": [{"arg": ["a", "b", "c", "d"], "op": "eq", "value": 1}],
         }
     )
     assert decide(policy, {"a": {"b": {"c": {"d": 1}}}})[0] is Decision.ALLOW
@@ -115,7 +121,7 @@ def test_exists_and_missing_on_nested_values() -> None:
             "id": "no-bcc",
             "tool": "send",
             "effect": "deny",
-            "when": [{"arg": "headers.bcc", "op": "exists"}],
+            "when": [{"arg": ["headers", "bcc"], "op": "exists"}],
         },
         {
             "id": "needs-subject",
@@ -131,7 +137,7 @@ def test_exists_and_missing_on_nested_values() -> None:
     assert decide(policy, {"headers": "bcc"})[0] is Decision.DENY
 
 
-def test_list_form_reaches_a_key_with_a_dot() -> None:
+def test_one_item_list_is_the_same_as_a_plain_name() -> None:
     policy = rules(
         {
             "id": "literal",
@@ -144,9 +150,9 @@ def test_list_form_reaches_a_key_with_a_dot() -> None:
     assert decide(policy, {"file": {"name": "a.txt"}})[0] is Decision.DENY
 
 
-def test_old_policies_with_dotted_names_fail_closed() -> None:
-    """Before nested paths, "file.path" meant a top-level key named "file.path". Under
-    the new meaning, such a policy may deny more, but never allow more."""
+def test_dotted_names_are_literal_argument_names() -> None:
+    """A dot in a plain name is part of the name, so old policies keep their meaning:
+    "file.path" is the argument called "file.path", never file -> path."""
     policy = rules(
         {
             "id": "allow-ws",
@@ -161,23 +167,26 @@ def test_old_policies_with_dotted_names_fail_closed() -> None:
             "when": [{"arg": "file.path", "op": "startswith", "value": "/etc/"}],
         },
     )
-    for value in ["/workspace/a", "/etc/passwd"]:
-        assert decide(policy, {"file.path": value})[0] is Decision.DENY
+    assert decide(policy, {"file.path": "/workspace/a"})[0] is Decision.ALLOW
+    assert decide(policy, {"file.path": "/etc/passwd"})[0] is Decision.DENY
+    # The nested shape is a different argument: "file.path" is missing, so the deny
+    # rule applies and the allow rule doesn't.
+    assert decide(policy, {"file": {"path": "/workspace/a"}}) == (
+        Decision.DENY,
+        "matched rule 'deny-etc'",
+    )
 
 
 @pytest.mark.parametrize(
     "arg",
     [
-        "a..b",
-        ".a",
-        "a.",
         "",
         [],
         [""],
         ["a", ""],
         ["a", 1],
         ["bad name"],
-        "a.b.c.d.e.f.g.h.i",
+        "bad name",
         ["x"] * 9,
     ],
 )
@@ -227,18 +236,21 @@ def test_check_uses_the_first_part_for_argument_lists(tmp_path: Path) -> None:
     assert not any(
         w.startswith("W007") for w in check(tmp_path, {"tools": spec, "rules": [ALLOW_COLLEAGUES]})
     )
-    typo = {**ALLOW_COLLEAGUES, "when": [{"arg": "header.to", "op": "exists"}]}
+    typo = {**ALLOW_COLLEAGUES, "when": [{"arg": ["header", "to"], "op": "exists"}]}
     assert any(
         w.startswith("W007") and '"header"' in w
         for w in check(tmp_path, {"tools": spec, "rules": [typo]})
     )
 
 
-def test_check_sees_both_forms_as_duplicates(tmp_path: Path) -> None:
+def test_check_tells_a_dotted_name_from_a_nested_path(tmp_path: Path) -> None:
     other = {
         **ALLOW_COLLEAGUES,
         "id": "colleagues-2",
-        "when": [{**ALLOW_COLLEAGUES["when"][0], "arg": ["headers", "to"]}],
+        "when": [{**ALLOW_COLLEAGUES["when"][0], "arg": "headers.to"}],
     }
     warnings = check(tmp_path, {"rules": [ALLOW_COLLEAGUES, other]})
+    assert not any(w.startswith("W004") for w in warnings)
+    same = {**ALLOW_COLLEAGUES, "id": "colleagues-3"}
+    warnings = check(tmp_path, {"rules": [ALLOW_COLLEAGUES, same]})
     assert any(w.startswith("W004") for w in warnings)

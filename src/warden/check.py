@@ -21,7 +21,7 @@ Warnings: the policy loads, but probably doesn't do what you meant:
         also matches "https://api.example.com.evil.net/...".
 - W012  a deny / require_approval rule compares a URL as text. "http://...",
         "https://evil.net:443/" or "https://evil.net./" slip past; use host_in.
-- W013  a rule looks inside an object ("headers.to") and its effect is deny /
+- W013  a rule looks inside an object (["headers", "to"]) and its effect is deny /
         require_approval, but argument lists only cover top-level names, so an
         unexpected key inside the object ("headers.bcc") isn't checked.
 - W008  an email-domain check ("...@example.com") is case-sensitive, so

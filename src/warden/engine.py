@@ -5,7 +5,7 @@ Security properties (each one is tested in tests/test_engine.py):
 - Tool specs: if the policy lists a tool's arguments, any other argument, or a
   missing required one, is denied before any rule runs.
 - Argument conditions ("when"): a rule matches only if ALL its conditions hold.
-  A condition may look inside objects ("headers.to"), with the same strictness.
+  A condition may look inside objects (["headers", "to"]), with the same strictness.
 - Never a looser answer because something is missing or odd:
   - A MISSING argument counts as "condition holds" for deny / require_approval
     rules (they apply) and as "doesn't hold" for allow rules (they don't).
@@ -217,7 +217,7 @@ def _same(actual: JsonValue, expected: JsonValue, condition: Condition) -> bool:
 
 
 def _lookup(condition: Condition, arguments: dict[str, JsonValue]) -> JsonValue:
-    """Follow the condition's path ("headers.to") into the arguments.
+    """Follow the condition's path (["headers", "to"]) into the arguments.
 
     A missing key anywhere on the path: _MissingArgument (same rules as a missing
     top-level argument). Something on the path that isn't an object (a text, a number,

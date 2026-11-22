@@ -17,9 +17,8 @@
   After a restart an approval can only be approved once the agent has asked again.
 - **Tamper-evident audit log**: hash chain over decisions and events, kept intact by
   retention; `warden audit verify` reports the first broken row.
-- **Nested argument conditions**: `"arg": "headers.to"` or `["headers", "to"]`.
-  `warden check` W013. Note: an old rule whose argument name contained a dot now means a
-  nested path; such rules can only become stricter.
+- **Nested argument conditions**: `"arg": ["headers", "to"]`. A plain name with a dot
+  (`"file.name"`) still means the top-level argument of that name. `warden check` W013.
 - CI: weekly and per-PR dependency scan (pip-audit), weekly mutation tests.
 
 ### Behaviour changes
@@ -27,7 +26,6 @@
   approvals per agent, even without a `limits` section (429 / deny above them). Raise
   them in the policy for high-volume agents.
 - `agent_id` in `/v1/evaluate` is optional when an agent token is sent.
-- Rule arguments containing a dot are read as nested paths (stricter only, see above).
 
 - Package renamed to **agent-warden** (`pip install agent-warden`); import name and the
   `warden` command are unchanged. Repository renamed to `wi-abas/agent-warden`.

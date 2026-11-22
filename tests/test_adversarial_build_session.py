@@ -233,7 +233,7 @@ NESTED = parse_policy(
                     "effect": "deny",
                     "when": [
                         {
-                            "arg": "msg.headers.to",
+                            "arg": ["msg", "headers", "to"],
                             "op": "endswith",
                             "value": "@evil.net",
                             "ignore_case": True,

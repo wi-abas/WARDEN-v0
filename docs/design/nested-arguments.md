@@ -7,8 +7,8 @@ Conditions only saw top-level arguments. Tools that take objects
 
 ## Approach
 
-- `arg` accepts a dotted path (`"headers.to"`) or a list of keys (`["headers", "to"]`).
-  Up to 8 levels; every part must match the argument-name pattern.
+- `arg` accepts a list of keys (`["headers", "to"]`). Up to 8 levels; every part must
+  match the argument-name pattern. A plain string is always one top-level name.
 - Lookup (`engine._lookup`) follows the path: a missing key anywhere is "missing" (deny
   rules apply, allow rules don't); a non-object on the path (text, number, list) makes
   the argument uncheckable and **denies the whole request**. Lists are never searched.
@@ -18,10 +18,12 @@ Conditions only saw top-level arguments. Tools that take objects
 
 ## Compatibility
 
-Argument names could already contain dots, so `"file.name"` used to mean a top-level key.
-It now means `file` → `name`. For such old rules the path is missing in requests that
-use the literal key, which can only make the answer stricter (tested). The list form
-`["file.name"]` reaches the literal key.
+Argument names could already contain dots, so `"file.name"` means the top-level
+argument called `file.name`, and keeps meaning that. A dotted string as a path was
+considered and rejected: it would change what old rules mean, and reading a dot both
+ways would let an agent send a literal `a.b` key and a nested `a` → `b` side by side,
+so Warden and the tool could look at different values. Only the list form looks inside
+objects, so every rule has exactly one meaning.
 
 ## What it doesn't cover
 

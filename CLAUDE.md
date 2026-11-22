@@ -15,7 +15,7 @@ It is an early MVP and **not production-secure**. Never claim otherwise.
 ## What exists
 
 - **Engine** (`engine.py`): rules with `when` conditions (incl. nested paths like
-  `headers.to`), tool argument lists, path/URL/email/Unicode trick checks, default deny,
+  `["headers", "to"]`), tool argument lists, path/URL/email/Unicode trick checks, default deny,
   most restrictive wins, fail closed.
 - **HTTP API** (`api.py`, FastAPI, `127.0.0.1` only): `/v1/evaluate`, admin approval
   endpoints (`X-Warden-Admin-Key`), host check, body size limit, duplicate-key refusal.

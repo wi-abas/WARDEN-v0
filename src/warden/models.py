@@ -147,8 +147,9 @@ ArgName = Annotated[str, Field(pattern=ARG_NAME_PATTERN)]
 class Condition(BaseModel):
     """One check on one argument, e.g. {"arg": "amount", "op": "gt", "value": 500}.
 
-    `arg` may point inside an object: "headers.to", or ["headers", "to"] (the list form
-    also reaches a key that itself contains a dot, e.g. ["file.name"]).
+    `arg` is a top-level argument name ("to"; a dot is just part of the name, so
+    "file.name" means the argument called "file.name"), or a list of keys that points
+    inside an object: ["headers", "to"].
     """
 
     model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
@@ -163,18 +164,17 @@ class Condition(BaseModel):
     @field_validator("arg")
     @classmethod
     def path_has_a_shape(cls, value: str | tuple[str, ...]) -> str | tuple[str, ...]:
-        parts = value.split(".") if isinstance(value, str) else value
-        if not 1 <= len(parts) <= MAX_ARG_DEPTH or any(part == "" for part in parts):
+        if isinstance(value, tuple) and not 1 <= len(value) <= MAX_ARG_DEPTH:
             raise ValueError(
-                f"'arg' must be a name, a dotted path like \"headers.to\" or a list of 1 "
-                f"to {MAX_ARG_DEPTH} names (no empty parts)"
+                f"'arg' must be a name, or a list of 1 to {MAX_ARG_DEPTH} names like "
+                f'["headers", "to"]'
             )
         return value
 
     @property
     def path(self) -> tuple[str, ...]:
         """The keys to follow from the top-level arguments, e.g. ("headers", "to")."""
-        return tuple(self.arg.split(".")) if isinstance(self.arg, str) else self.arg
+        return (self.arg,) if isinstance(self.arg, str) else self.arg
 
     @property
     def label(self) -> str:
