@@ -288,10 +288,17 @@ uv run mypy                    # type check (strict)
 
 ## Roadmap
 
-1. ~~Argument rules~~ (done)
-2. ~~SQLite audit log~~ (done)
-3. ~~Approval workflow bound to `action_hash`, single-use and expiring~~ (done)
-4. Authentication, Python SDK, MCP integration
+Done in v0.2.0: argument rules, tool argument lists, audit log with retention, human
+approvals, `warden check`, settings, demo, CI. See [CHANGELOG.md](CHANGELOG.md).
+
+Next, shaped by feedback from early users:
+
+1. Python SDK (`@warden.guard`) and an MCP proxy, so existing agents can use Warden in minutes
+2. Argument types in tool argument lists
+3. Agent authentication and persistent approvals
+4. Approvals from Slack, per-person accounts, tamper-evident audit log
+
+**Trying Warden? Please open an issue with what worked and what didn't.**
 
 ## Security and contributing
 

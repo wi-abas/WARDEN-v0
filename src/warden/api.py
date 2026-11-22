@@ -36,7 +36,7 @@ from fastapi.responses import JSONResponse
 from pydantic import JsonValue
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from warden import audit
+from warden import __version__, audit
 from warden.approvals import Approval, ApprovalStore, DecideError, Status, apply_approval
 from warden.audit import AuditEntry, AuditEvent, AuditLog, EventKind, SQLiteAuditLog
 from warden.engine import evaluate
@@ -142,7 +142,7 @@ def create_app(
         record_rejection(request.scope, status, reason)
         return _deny_response(status, reason)
 
-    app = FastAPI(title="Warden", version="0.1.0")
+    app = FastAPI(title="Warden", version=__version__)
     app.add_middleware(BodySizeLimit, on_reject=record_rejection)
 
     @app.exception_handler(RequestValidationError)

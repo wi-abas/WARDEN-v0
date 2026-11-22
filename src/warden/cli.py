@@ -11,6 +11,7 @@ import os
 import sys
 from pathlib import Path
 
+from warden import __version__
 from warden.check import check_policy, format_report
 from warden.policy import DEFAULT_POLICY_PATH
 from warden.settings import SettingsError, resolve
@@ -18,6 +19,7 @@ from warden.settings import SettingsError, resolve
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="warden", description=__doc__.splitlines()[0])
+    parser.add_argument("--version", action="version", version=f"warden {__version__}")
     commands = parser.add_subparsers(dest="command")
     serve_parser = commands.add_parser("serve", help="start the server")
     serve_parser.add_argument("--policy", help="policy file (env WARDEN_POLICY)")

@@ -113,3 +113,13 @@ def test_cli_bad_setting_exits_2_without_starting(monkeypatch, capsys) -> None:
     monkeypatch.setattr(warden.api, "main", lambda s: pytest.fail("server started"))
     assert main(["serve", "--port", "99999"]) == 2
     assert "between 1 and 65535" in capsys.readouterr().err
+
+
+def test_version_flag(capsys) -> None:
+    import warden
+
+    with pytest.raises(SystemExit) as exc:
+        main(["--version"])
+    assert exc.value.code == 0
+    assert capsys.readouterr().out.strip() == f"warden {warden.__version__}"
+    assert warden.__version__ == "0.2.0"
