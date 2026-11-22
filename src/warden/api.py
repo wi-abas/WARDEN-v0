@@ -94,6 +94,43 @@ class BodySizeLimit:
         await _deny_response(status, reason)(scope, receive, send)
 
 
+# Host names a request may be addressed to. Anything else is refused, which stops
+# "DNS rebinding": a malicious web page pointing its own domain at 127.0.0.1 to
+# talk to Warden from your browser.
+ALLOWED_HOSTS: tuple[str, ...] = ("127.0.0.1", "localhost", "::1")
+
+
+def _host_name(raw: bytes) -> str:
+    """'127.0.0.1:8000' -> '127.0.0.1', '[::1]:8000' -> '::1'."""
+    host = raw.decode("latin-1").strip().lower()
+    if host.startswith("["):
+        return host[1 : host.find("]")] if "]" in host else ""
+    return host.rsplit(":", 1)[0] if host.count(":") == 1 else host
+
+
+class HostCheck:
+    """Refuses requests whose Host header isn't one of `allowed`."""
+
+    def __init__(
+        self,
+        app: ASGIApp,
+        allowed: tuple[str, ...] = ALLOWED_HOSTS,
+        on_reject: Callable[[Scope, int, str], None] = lambda scope, status, reason: None,
+    ) -> None:
+        self.app = app
+        self.allowed = allowed
+        self.on_reject = on_reject
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http":
+            host = dict(scope["headers"]).get(b"host", b"")
+            if _host_name(host) not in self.allowed:
+                self.on_reject(scope, 400, "host not allowed")
+                await _deny_response(400, "host not allowed")(scope, receive, send)
+                return
+        await self.app(scope, receive, send)
+
+
 class _AdminKeyError(Exception):
     pass
 
@@ -254,6 +291,8 @@ def create_app(
 
     app = FastAPI(title="Warden", version=__version__)
     app.add_middleware(BodySizeLimit, on_reject=w.record_rejection)
+    # Added last, so it runs first: refuse foreign Host headers before anything else.
+    app.add_middleware(HostCheck, allowed=ALLOWED_HOSTS, on_reject=w.record_rejection)
 
     @app.exception_handler(RequestValidationError)
     async def invalid_request(request: Request, exc: RequestValidationError) -> JSONResponse:
