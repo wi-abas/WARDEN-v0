@@ -332,3 +332,18 @@ def test_host_in_list_of_exactly_the_maximum_is_accepted() -> None:
     rule("r", "deny", cond("url", "host_in", hosts))
     with pytest.raises(ValidationError):
         rule("r", "deny", cond("url", "host_in", [*hosts, "h100.example.com"]))
+
+
+def test_in_with_mixed_types_matches_only_the_same_type() -> None:
+    assert evaluate(request(x="x"), [rule("r", "allow", cond("x", "in", ["x", 3]))]).decision == (
+        Decision.ALLOW
+    )
+    # true is not 1, even when the list also contains another true/false value
+    assert evaluate(
+        request(x=True), [rule("r", "allow", cond("x", "in", [1, False]))]
+    ).decision == (Decision.DENY)
+
+
+def test_plain_text_rules_do_not_get_path_checks() -> None:
+    rules = [rule("r", "allow", cond("subject", "startswith", "Re:"))]
+    assert evaluate(request(subject="Re: 100%20 off, ./notes"), rules).decision == Decision.ALLOW

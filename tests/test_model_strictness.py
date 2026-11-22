@@ -17,6 +17,7 @@ from warden.models import (
     Condition,
     Decision,
     EvaluationResult,
+    Op,
     Rule,
     ToolSpec,
 )
@@ -91,3 +92,24 @@ def test_settings_are_frozen() -> None:
     settings = Settings(policy=Path("p.json"))
     with pytest.raises(dataclasses.FrozenInstanceError):
         settings.port = 1  # type: ignore[misc]
+
+
+# Pydantic's loose mode turns bytes into text and accepts "yes" for true, so these
+# values tell strict and loose mode apart (JSON input can't carry bytes).
+PY_CASES: list[tuple[type[BaseModel], dict[str, Any], str, Any]] = [
+    (ActionRequest, {"agent_id": "a", "tool": "t", "arguments": {}}, "tool", b"t"),
+    (Condition, {"arg": "a", "op": Op.EQ, "value": "x"}, "arg", b"a"),
+    (Rule, {"id": "r", "tool": "t", "effect": Decision.ALLOW}, "id", b"r"),
+    (ToolSpec, {"arguments": ("a",)}, "arguments", ("a", b"b")),
+    (EvaluationResult, {"decision": Decision.DENY, "reason": "x"}, "reason", b"x"),
+    (Policy, {"rules": ()}, "rules", [b"x"]),
+]
+
+
+@pytest.mark.parametrize(("model", "valid", "field", "lax_value"), PY_CASES)
+def test_models_refuse_values_only_loose_mode_would_convert(
+    model: type[BaseModel], valid: dict[str, Any], field: str, lax_value: Any
+) -> None:
+    model.model_validate(valid)
+    with pytest.raises(ValidationError):
+        model.model_validate({**valid, field: lax_value})
