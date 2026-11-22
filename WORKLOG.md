@@ -18,6 +18,14 @@ coverage, ruff/format/mypy clean.
 - No MCP SDK dependency: stdio MCP is newline-delimited JSON-RPC; the proxy only needs
   to parse and relay it.
 
+- **SDK freezes through JSON** (not `copy.deepcopy`): JSON is what Warden checks, so
+  the frozen copy is checked and executed byte-for-byte the same. Non-JSON values
+  (objects, sets, NaN, and therefore `self` on methods) are refused. Defaults are applied
+  so Warden sees the full effective call. `*args` / positional-only parameters are
+  refused at decoration time.
+- **SDK default on `require_approval`: raise `ApprovalPending` at once** (no hidden
+  blocking); `wait_for_approval=seconds` opts into polling.
+
 ## Blocked / needs Wissam
 
 (none yet)
@@ -27,3 +35,4 @@ coverage, ruff/format/mypy clean.
 - [x] 1. MCP proxy: `bfe5d89` (code + tests), docs next commit. Found and fixed while
   testing: proxy hung if the server's output broke but the process stayed alive; calls in
   flight were dropped when the client closed its input (`echo ... | warden proxy`).
+- [x] 2. Python SDK (`warden.sdk`): guard, run_guarded(_async), freeze, ApprovalPending.
