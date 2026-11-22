@@ -258,10 +258,12 @@ class _Warden:
             if new_status is Status.APPROVED
             else EventKind.APPROVAL_DENIED
         )
+        # approval.status is still the OLD status here.
+        revoked = approval.status is Status.APPROVED
         self.audit_log.record_event(
             AuditEvent.now(
                 kind,
-                f"approval {new_status.value} by admin",
+                "approval revoked by admin" if revoked else f"approval {new_status.value} by admin",
                 approval_id=approval.approval_id,
                 agent_id=approval.agent_id,
                 tool=approval.tool,

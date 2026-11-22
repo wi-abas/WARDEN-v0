@@ -114,6 +114,8 @@ class ApprovalStore:
     ) -> Status:
         """Approve or deny a pending approval, exactly once.
 
+        An APPROVED approval that hasn't been used yet can still be denied: that
+        revokes it (a human changed their mind or clicked by mistake).
         `before_commit` runs (under the lock) before the status changes. If it raises,
         nothing changes: used to make sure every human decision is audited first.
         """
@@ -122,7 +124,8 @@ class ApprovalStore:
             approval = self._items.get(approval_id)
             if approval is None:
                 raise DecideError(not_found=True)
-            if approval.status is not Status.PENDING:
+            revoking = approval.status is Status.APPROVED and not approve
+            if approval.status is not Status.PENDING and not revoking:
                 raise DecideError(not_found=False)
             new_status = Status.APPROVED if approve else Status.DENIED
             before_commit(approval, new_status)

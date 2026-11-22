@@ -42,7 +42,9 @@ curl -s -X POST http://127.0.0.1:8000/v1/evaluate \
 
 An approval works **once**, only for the **exact action** that was approved (same agent,
 tool and arguments, checked via `action_hash`), and **expires after 15 minutes**. It can
-never turn a `deny` into `allow`. Each approval can be decided only once. Approvals are kept
+never turn a `deny` into `allow`. Each approval can be decided only once, with one
+exception: an approved approval the agent hasn't used yet can still be **revoked** with
+`/deny`. Approvals are kept
 in memory only (arguments never touch disk), so restarting Warden clears them.
 
 ## Audit log
