@@ -12,7 +12,7 @@ uv run pytest
 ## Before opening a pull request
 
 ```sh
-uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run pytest
+uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run pytest --cov
 ```
 
 All four must pass (CI runs the same).

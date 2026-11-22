@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+- Package renamed to **agent-warden** (`pip install agent-warden`); import name and the
+  `warden` command are unchanged. Repository renamed to `wi-abas/agent-warden`.
+- `warden init` creates a starter policy; `warden schema` prints a JSON Schema so editors
+  autocomplete policy files (`"$schema"` key).
+- New default policy showing argument lists, path and email-domain conditions and messages.
+- Retrying with a pending `approval_id` now answers `require_approval` ("waiting for a
+  human to approve") instead of `deny`; a human "no" says "denied by a human".
+- `examples/agent.py`: an agent loop guarded by Warden, waiting for approvals.
+- README rewritten and split into `docs/`; demo image; benchmark (~1 ms per call).
+- Tests type-checked with strict mypy; CI on Python 3.12 and 3.13 with 98% coverage gate.
+
 ## v0.2.0 (2026-11-22)
 
 First release meant for other people to try. Still an early MVP, **not production-secure**:
