@@ -44,7 +44,15 @@ import uvicorn.config
 from fastapi import Depends, FastAPI, Header, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, StringConstraints, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
@@ -248,14 +256,29 @@ def _display_safe(value: JsonValue, warnings: list[str]) -> JsonValue:
     return value
 
 
+ActionHash = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
+
+
+class SingleDecision(BaseModel):
+    """Optional body of POST /v1/approvals/{id}/approve|deny: the action_hash the human
+    was shown. When sent, it must match the approval (proof they looked at it)."""
+
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+
+    action_hash: ActionHash
+
+
 class GroupDecision(BaseModel):
-    """Body of POST /v1/approvals/decide: the exact approvals the human decides."""
+    """Body of POST /v1/approvals/decide: the exact approvals the human decides, and,
+    to approve, the action_hash shown for each (same order): you can't approve a group
+    you haven't listed."""
 
     model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
 
     ids: list[Annotated[str, StringConstraints(pattern=APPROVAL_ID_PATTERN)]] = Field(
         min_length=1, max_length=MAX_GROUP
     )
+    action_hashes: list[ActionHash] | None = Field(default=None, max_length=MAX_GROUP)
     approve: bool
 
     @field_validator("ids")
@@ -264,6 +287,14 @@ class GroupDecision(BaseModel):
         if len(set(ids)) != len(ids):
             raise ValueError("an id is listed more than once")
         return ids
+
+    @model_validator(mode="after")
+    def hashes_fit(self) -> "GroupDecision":
+        if self.approve and self.action_hashes is None:
+            raise ValueError("approving needs action_hashes")
+        if self.action_hashes is not None and len(self.action_hashes) != len(self.ids):
+            raise ValueError("one action_hash per id")
+        return self
 
 
 class StartupError(Exception):
@@ -464,7 +495,13 @@ class _Warden:
             ]
         }
 
-    def decide(self, approval_id: str, approve: bool, request: Request) -> JSONResponse:
+    def decide(
+        self,
+        approval_id: str,
+        approve: bool,
+        request: Request,
+        body: SingleDecision | None = None,
+    ) -> JSONResponse:
         audited = False
 
         def audit_first(approval: Approval, new_status: Status) -> None:
@@ -473,7 +510,12 @@ class _Warden:
             audited = True
 
         try:
-            status = self.approvals.decide(approval_id, approve, before_commit=audit_first)
+            status = self.approvals.decide(
+                approval_id,
+                approve,
+                before_commit=audit_first,
+                expected_hash=body.action_hash if body is not None else None,
+            )
         except DecideError as exc:
             code = 404 if exc.not_found else 409
             reason = (
@@ -482,6 +524,8 @@ class _Warden:
                 else "arguments not available yet (Warden restarted): approve after the "
                 "agent asks again"
                 if exc.no_arguments
+                else "action_hash doesn't match this approval (list the approvals again)"
+                if exc.hash_mismatch
                 else "approval already decided"
             )
             self._record_event_safely(
@@ -534,7 +578,12 @@ class _Warden:
             audited = True
 
         try:
-            decided = self.approvals.decide_group(body.ids, body.approve, before_commit=audit_first)
+            decided = self.approvals.decide_group(
+                body.ids,
+                body.approve,
+                before_commit=audit_first,
+                expected_hashes=body.action_hashes,
+            )
         except GroupDecideError as exc:
             if self._within_rejection_limit():  # a flood of bad calls can't fill the disk
                 self._emit(
@@ -712,12 +761,16 @@ def create_app(
     app.post("/v1/approvals/decide", dependencies=admin)(w.decide_group)
 
     @app.post("/v1/approvals/{approval_id}/approve", dependencies=admin)
-    def approve(approval_id: str, request: Request) -> JSONResponse:
-        return w.decide(approval_id, approve=True, request=request)
+    def approve(
+        approval_id: str, request: Request, body: SingleDecision | None = None
+    ) -> JSONResponse:
+        return w.decide(approval_id, approve=True, request=request, body=body)
 
     @app.post("/v1/approvals/{approval_id}/deny", dependencies=admin)
-    def deny(approval_id: str, request: Request) -> JSONResponse:
-        return w.decide(approval_id, approve=False, request=request)
+    def deny(
+        approval_id: str, request: Request, body: SingleDecision | None = None
+    ) -> JSONResponse:
+        return w.decide(approval_id, approve=False, request=request, body=body)
 
     return app
 

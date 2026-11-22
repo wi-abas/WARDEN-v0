@@ -59,14 +59,24 @@ class Approval:
 
 class DecideError(Exception):
     """Approve/deny failed. `not_found` = unknown or expired; `no_arguments` = can't
-    approve what the human can't see yet; else already decided."""
+    approve what the human can't see yet; `hash_mismatch` = the human looked at a
+    different action than this id's; else already decided."""
 
-    def __init__(self, not_found: bool, no_arguments: bool = False) -> None:
+    def __init__(
+        self, not_found: bool, no_arguments: bool = False, hash_mismatch: bool = False
+    ) -> None:
         super().__init__(
-            "not found" if not_found else "arguments unknown" if no_arguments else "decided"
+            "not found"
+            if not_found
+            else "arguments unknown"
+            if no_arguments
+            else "action_hash mismatch"
+            if hash_mismatch
+            else "decided"
         )
         self.not_found = not_found
         self.no_arguments = no_arguments
+        self.hash_mismatch = hash_mismatch
 
 
 class GroupReason(StrEnum):
@@ -77,6 +87,7 @@ class GroupReason(StrEnum):
     NO_ARGUMENTS = "arguments not available yet (Warden restarted)"
     DUPLICATE = "listed more than once"
     MIXED = "different agent or tool than the rest of the group"
+    HASH_MISMATCH = "action_hash doesn't match this approval (list the approvals again)"
 
 
 class GroupDecideError(Exception):
@@ -288,6 +299,7 @@ class ApprovalStore:
         approval_id: str,
         approve: bool,
         before_commit: Callable[[Approval, Status], None] = lambda a, s: None,
+        expected_hash: str | None = None,
     ) -> Status:
         """Approve or deny a pending approval, exactly once.
 
@@ -295,6 +307,7 @@ class ApprovalStore:
         revokes it (a human changed their mind or clicked by mistake).
         `before_commit` runs (under the lock) before the status changes. If it raises,
         nothing changes: used to make sure every human decision is audited first.
+        With `expected_hash` (the action_hash the human was shown), it must match.
         """
         with self._lock:
             now = self._clock()
@@ -308,6 +321,11 @@ class ApprovalStore:
             if approve and approval.arguments is None:
                 # Restarted: nobody can see what this would approve. Deny still works.
                 raise DecideError(not_found=False, no_arguments=True)
+            # Bytes: compare_digest refuses non-ASCII text (TypeError) instead of saying no.
+            if expected_hash is not None and not secrets.compare_digest(
+                approval.action_hash.encode(), expected_hash.encode()
+            ):
+                raise DecideError(not_found=False, hash_mismatch=True)
             new_status = Status.APPROVED if approve else Status.DENIED
             before_commit(approval, new_status)
             # The agent gets a full window from the moment of approval, not
@@ -335,6 +353,7 @@ class ApprovalStore:
         approval_ids: Sequence[str],
         approve: bool,
         before_commit: Callable[[list[Approval], Status], None] = lambda a, s: None,
+        expected_hashes: Sequence[str] | None = None,
     ) -> list[Approval]:
         """Approve or deny several PENDING approvals of one agent and tool, all or nothing.
 
@@ -342,9 +361,13 @@ class ApprovalStore:
         them and nothing changes. `before_commit` (the audit) runs before anything
         changes; if it raises, nothing changes. Each approval stays an ordinary
         single-use approval bound to its own action. Returns them, in the given order.
+        `expected_hashes` (same order as the ids): the action_hash the human was shown
+        for each; every one must match.
         """
         if not 1 <= len(approval_ids) <= MAX_GROUP:
             raise ValueError(f"a group decision takes 1 to {MAX_GROUP} ids")
+        if expected_hashes is not None and len(expected_hashes) != len(approval_ids):
+            raise ValueError("one action_hash per id")
         with self._lock:
             now = self._clock()
             self._purge_expired(now)
@@ -352,7 +375,7 @@ class ApprovalStore:
             found: list[Approval] = []
             seen: set[str] = set()
             group: tuple[str, str] | None = None
-            for approval_id in approval_ids:
+            for index, approval_id in enumerate(approval_ids):
                 approval = self._items.get(approval_id)
                 if approval_id in seen:
                     failed.append((approval_id, GroupReason.DUPLICATE))
@@ -369,6 +392,10 @@ class ApprovalStore:
                     failed.append((approval_id, GroupReason.DECIDED))
                 elif approve and approval.arguments is None:
                     failed.append((approval_id, GroupReason.NO_ARGUMENTS))
+                elif expected_hashes is not None and not secrets.compare_digest(
+                    approval.action_hash.encode(), expected_hashes[index].encode()
+                ):
+                    failed.append((approval_id, GroupReason.HASH_MISMATCH))
                 else:
                     found.append(approval)
             if failed:

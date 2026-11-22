@@ -54,7 +54,8 @@ Assuming the agent runtime calls Warden and obeys the answer:
 - **Checked ≠ executed**: the SDK and the MCP proxy run a tool with exactly the object
   that was checked; the proxy refuses duplicate JSON keys, batches and unknown methods.
 - **Bulk-approval tricks** (group approvals): a group decision names every approval by
-  id (no filters, so nothing that arrived later is swept in), never mixes agents or
+  id (no filters, so nothing that arrived later is swept in) together with the
+  `action_hash` the human was shown, never mixes agents or
   tools, is all or nothing under one lock, and is audited before it takes effect. The
   CLI shows every action in full, escaped, before asking.
 - **Approval loss or replay across restarts**: approval state is persisted (without

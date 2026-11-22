@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi.testclient import TestClient
-from helpers import BASIC_POLICY
+from helpers import BASIC_POLICY, shown_hashes
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
@@ -75,7 +75,11 @@ def test_group_and_single_decisions_stay_consistent(steps: list[tuple[Any, ...]]
                 if chosen:
                     response = client.post(
                         "/v1/approvals/decide",
-                        json={"ids": chosen, "approve": step[2]},
+                        json={
+                            "ids": chosen,
+                            "action_hashes": shown_hashes(store, chosen),
+                            "approve": step[2],
+                        },
                         headers=ADMIN,
                     )
                     assert response.status_code in {200, 409}

@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-from helpers import BASIC_POLICY, live_server
+from helpers import BASIC_POLICY, live_server, shown_hashes
 
 from warden import approvals_cli
 from warden.api import create_app
@@ -64,7 +64,8 @@ def test_racing_overlapping_groups_over_http(tmp_path: Path) -> None:
 
         def group(name: str, members: list[int], approve: bool) -> None:
             barrier.wait()
-            body = {"ids": [ids[m] for m in members], "approve": approve}
+            chosen = [ids[m] for m in members]
+            body = {"ids": chosen, "action_hashes": shown_hashes(store, chosen), "approve": approve}
             results[name] = post(url, "/v1/approvals/decide", body, ADMIN)[0]
 
         def retry(n: int) -> None:
@@ -153,9 +154,8 @@ def test_storage_failure_after_audit_is_recorded(
         raise sqlite3.OperationalError("database is locked")
 
     monkeypatch.setattr(db, "save_many", locked)
-    response = client.post(
-        "/v1/approvals/decide", json={"ids": ids, "approve": True}, headers=ADMIN
-    )
+    body = {"ids": ids, "action_hashes": shown_hashes(store, ids), "approve": True}
+    response = client.post("/v1/approvals/decide", json=body, headers=ADMIN)
     assert response.status_code == 503
     assert all(store._items[i].status is Status.PENDING for i in ids)
     for i in ids:
@@ -177,9 +177,12 @@ def test_audit_failure_records_no_not_applied_event(tmp_path: Path) -> None:
     store = ApprovalStore(ttl_seconds=900)
     client = TestClient(create_app(BASIC_POLICY, audit_log=log, approvals=store, admin_key=KEY))
     [approval_id] = [client.post("/v1/evaluate", json=email(0)).json()["approval_id"]]
-    response = client.post(
-        "/v1/approvals/decide", json={"ids": [approval_id], "approve": True}, headers=ADMIN
-    )
+    body = {
+        "ids": [approval_id],
+        "action_hashes": shown_hashes(store, [approval_id]),
+        "approve": True,
+    }
+    response = client.post("/v1/approvals/decide", json=body, headers=ADMIN)
     assert response.status_code == 503
     assert not log.recent_events()  # the not-applied event goes through record_events too
 
@@ -229,7 +232,7 @@ def test_query_filters_are_not_a_thing(tmp_path: Path) -> None:
     ids = [client.post("/v1/evaluate", json=email(n)).json()["approval_id"] for n in range(3)]
     response = client.post(
         "/v1/approvals/decide?agent_id=a&all=true",
-        json={"ids": ids[:1], "approve": True},
+        json={"ids": ids[:1], "action_hashes": shown_hashes(store, ids[:1]), "approve": True},
         headers=ADMIN,
     )
     assert response.json()["count"] == 1

@@ -228,7 +228,10 @@ def _decide(
     if not yes and not _confirm(f"{verb} these {len(ids)} actions?", stdin, out):
         print("Nothing changed.", file=out)
         return 1
-    status, data = _call(url, key, "POST", "/v1/approvals/decide", {"ids": ids, "approve": approve})
+    # The hashes of what was just shown: Warden refuses the decision if any differs.
+    hashes = [item.get("action_hash") for item in chosen]
+    body = {"ids": ids, "action_hashes": hashes, "approve": approve}
+    status, data = _call(url, key, "POST", "/v1/approvals/decide", body)
     if status == 200 and isinstance(data, dict):
         done = "Approved" if approve else "Rejected"
         print(f"{done} {_text(data.get('count'))} actions.", file=out)

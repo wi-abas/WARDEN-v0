@@ -35,7 +35,8 @@ curl -s -X POST http://127.0.0.1:8000/v1/evaluate \
    the terminal at startup (a new one every start):
    ```sh
    curl -s http://127.0.0.1:8000/v1/approvals -H 'X-Warden-Admin-Key: <key>'
-   curl -s -X POST http://127.0.0.1:8000/v1/approvals/<approval_id>/approve -H 'X-Warden-Admin-Key: <key>'
+   curl -s -X POST http://127.0.0.1:8000/v1/approvals/<approval_id>/approve -H 'X-Warden-Admin-Key: <key>' \
+     -H 'content-type: application/json' -d '{"action_hash": "<action_hash from the list>"}'
    ```
 3. The agent sends the **exact same action** again, plus `"approval_id": "<approval_id>"`.
    While the human hasn't decided, the answer stays `require_approval` ("waiting for a human
@@ -47,6 +48,10 @@ tool and arguments, checked via `action_hash`), and **expires after 15 minutes**
 never turn a `deny` into `allow`. Each approval can be decided only once, with one
 exception: an approved approval the agent hasn't used yet can still be **revoked** with
 `/deny`.
+
+The body `{"action_hash": "..."}` on `/approve` and `/deny` is optional: when sent, it
+must be the approval's `action_hash` (409 otherwise), which proves you listed it first.
+Send it; a later version may require it.
 
 In `GET /v1/approvals`, hidden or look-alike characters in arguments (zero-width spaces,
 right-to-left overrides, full-width letters) are shown as visible `\uXXXX` escapes and
@@ -85,7 +90,8 @@ curl -s 'http://127.0.0.1:8000/v1/approvals?group=true' -H 'X-Warden-Admin-Key: 
 
 ```sh
 curl -s -X POST http://127.0.0.1:8000/v1/approvals/decide -H 'X-Warden-Admin-Key: <key>' \
-  -H 'content-type: application/json' -d '{"ids": ["Qd3...", "Zk8..."], "approve": true}'
+  -H 'content-type: application/json' \
+  -d '{"ids": ["Qd3...", "Zk8..."], "action_hashes": ["9f2...", "41c..."], "approve": true}'
 ```
 ```json
 {"status": "approved", "count": 2, "results": [
@@ -93,6 +99,11 @@ curl -s -X POST http://127.0.0.1:8000/v1/approvals/decide -H 'X-Warden-Admin-Key
 ```
 
 Rules:
+- **Approve what you saw**: approving needs `action_hashes`, the `action_hash` the list
+  showed for each id, in the same order (422 without them). A hash that doesn't match its
+  id refuses the whole group (409, "list the approvals again"), so ids copied from an
+  agent's message or an old list can't be approved without listing. Rejecting doesn't
+  need them (checked if sent). The CLI sends them for you.
 - **Exact ids only**, 1 to 100, no repeats (else 422). There is no "approve everything
   from agent X": an approval that arrives after you looked is never included.
 - **One agent and one tool** per decision. A group never mixes them.

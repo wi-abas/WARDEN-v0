@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-from helpers import BASIC_POLICY
+from helpers import BASIC_POLICY, shown_hashes
 
 from warden.api import create_app
 from warden.approvals import ApprovalDB, ApprovalStore, Status
@@ -48,7 +48,9 @@ def queue(client: TestClient, n: int, agent: str = "agent-1") -> list[str]:
 
 
 def decide(client: TestClient, ids: list[str], approve: bool = True) -> Any:
-    return client.post("/v1/approvals/decide", json={"ids": ids, "approve": approve}, headers=ADMIN)
+    store = client.app.state.warden.approvals  # type: ignore[attr-defined]
+    body = {"ids": ids, "action_hashes": shown_hashes(store, ids), "approve": approve}
+    return client.post("/v1/approvals/decide", json=body, headers=ADMIN)
 
 
 def events(log: SQLiteAuditLog, kind: EventKind) -> list[AuditEvent]:

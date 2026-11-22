@@ -40,6 +40,16 @@ without making it easier to approve something they didn't see.
 
 ## Decisions (where the brief left room)
 
+- **Approve what you saw** (added after the first version, a deviation from the
+  brief's body `{"ids", "approve"}`): approving a group also needs `action_hashes`, the
+  hash the list showed for each id, in order. Any mismatch refuses the whole group.
+  It means an id alone (pasted from an agent's chat message, say) isn't enough: you must
+  have listed the approvals. Rejecting doesn't need them, since saying no blind is safe.
+  For single `/approve` the hash is **optional** (checked when sent), because requiring
+  it would break existing clients and the MCP proxy's approval hint. **Decision for
+  Wissam:** make it required for single approvals too (a breaking change, best in the
+  next minor release, together with updating the proxy hint).
+
 - **Only pending approvals** can be decided in a group. A single `/deny` can still
   revoke an approved-but-unused approval; a group reject that includes one fails with
   "already decided". Revoking is a deliberate, one-at-a-time act.
