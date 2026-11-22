@@ -90,7 +90,7 @@ TARGETS: dict[str, list[str]] = {
     "audit_checkpoint": ["test_audit_checkpoint.py", "test_audit_checkpoint_edges.py"],
     "mcp_proxy": ["test_mcp_proxy.py", "test_mcp_proxy_hardening.py"],
     "approvals_cli": ["test_approvals_cli.py", "test_approvals_flood.py"],
-    "policy_tests": ["test_policy_tests.py"],
+    "policy_tests": ["test_policy_tests.py", "test_policy_tests_edges.py"],
 }
 
 _SWAPS: dict[type[ast.cmpop], type[ast.cmpop]] = {
