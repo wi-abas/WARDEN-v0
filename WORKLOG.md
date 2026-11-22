@@ -59,6 +59,12 @@ coverage, ruff/format/mypy clean.
   (tested). List form `["a.b"]` reaches a literal dotted key. A non-object on the path
   denies the whole request; lists are never searched; max depth 8. New warning W013.
 
+- **Mutation tester written in-repo** (`scripts/mutation.py`, stdlib AST) instead of
+  adding mutmut: no new dependency, deterministic, tested. The weekly job's minimum
+  score is set from a measured baseline.
+- **pip-audit run locally on 2026-11-22: no known vulnerabilities** in the locked
+  dependencies (closes the "Info" item of the overnight audit).
+
 ## Blocked / needs Wissam
 
 (none yet)
@@ -74,3 +80,5 @@ coverage, ruff/format/mypy clean.
 - [x] 5. Persistent approvals (state in SQLite, arguments never on disk).
 - [x] 6. Tamper-evident audit log + `warden audit verify`.
 - [x] 7. Conditions on nested arguments (+ W013, schema, docs).
+- [~] 8. CI hardening: dependency scan (`125f65f`); mutation workflow after baseline.
+- [x] 9. CLAUDE.md rewritten for the current project.
