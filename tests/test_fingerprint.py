@@ -1,11 +1,11 @@
 import pytest
 from fastapi.testclient import TestClient
+from helpers import BASIC_POLICY
 
 from warden.api import create_app
 from warden.engine import evaluate
 from warden.fingerprint import fingerprint
 from warden.models import ActionRequest, Decision, Rule
-from warden.policy import DEFAULT_POLICY_PATH
 
 
 def action(
@@ -81,7 +81,7 @@ def test_no_match_deny_still_carries_the_fingerprint() -> None:
 
 
 def test_api_response_includes_the_fingerprint() -> None:
-    client = TestClient(create_app(DEFAULT_POLICY_PATH))
+    client = TestClient(create_app(BASIC_POLICY))
     request = action(tool="send_email", to="a@b.c")
     response = client.post("/v1/evaluate", json=request.model_dump())
     assert response.json()["action_hash"] == fingerprint(request)

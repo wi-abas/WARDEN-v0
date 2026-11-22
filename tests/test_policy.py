@@ -3,10 +3,11 @@ import logging
 from pathlib import Path
 
 import pytest
+from helpers import BASIC_POLICY
 
 from warden.engine import evaluate
 from warden.models import ActionRequest, Decision
-from warden.policy import DEFAULT_POLICY_PATH, MAX_RULES, load_rules
+from warden.policy import MAX_RULES, load_rules
 
 
 def write_policy(tmp_path: Path, content: str) -> Path:
@@ -42,7 +43,7 @@ def test_empty_rule_list_is_valid_and_denies_everything(tmp_path: Path) -> None:
 
 
 def test_shipped_default_policy_loads() -> None:
-    rules = load_rules(DEFAULT_POLICY_PATH)
+    rules = load_rules(BASIC_POLICY)
     assert {rule.id for rule in rules} == {"allow-read", "approve-send", "block-delete"}
 
 

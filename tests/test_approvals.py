@@ -5,11 +5,11 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from helpers import BASIC_POLICY
 
 from warden.api import create_app
 from warden.approvals import ApprovalStore
 from warden.audit import SQLiteAuditLog
-from warden.policy import DEFAULT_POLICY_PATH
 
 KEY = "test-admin-key-0123456789"
 ADMIN = {"X-Warden-Admin-Key": KEY}
@@ -36,7 +36,7 @@ def store(clock: FakeClock) -> ApprovalStore:
 @pytest.fixture
 def client(store: ApprovalStore, tmp_path: Path) -> TestClient:
     app = create_app(
-        DEFAULT_POLICY_PATH,
+        BASIC_POLICY,
         audit_log=SQLiteAuditLog(tmp_path / "audit.db"),
         approvals=store,
         admin_key=KEY,
@@ -247,7 +247,7 @@ def test_agent_never_receives_the_admin_key(client: TestClient) -> None:
 
 
 def test_generated_admin_key_is_printed_not_logged(capsys, caplog, tmp_path: Path) -> None:
-    create_app(DEFAULT_POLICY_PATH, audit_log=SQLiteAuditLog(tmp_path / "a.db"))
+    create_app(BASIC_POLICY, audit_log=SQLiteAuditLog(tmp_path / "a.db"))
     printed = capsys.readouterr().err
     key = printed.split("approve actions): ")[1].strip()
     assert len(key) >= 32

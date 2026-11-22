@@ -30,7 +30,7 @@ def codes(tmp_path: Path, policy: object) -> list[str]:
 def test_default_policy_is_clean() -> None:
     report = check_policy(DEFAULT_POLICY_PATH)
     assert report.errors == [] and report.warnings == []
-    assert report.rules == 3
+    assert report.rules == 4
 
 
 def test_missing_file_is_an_error(tmp_path: Path) -> None:

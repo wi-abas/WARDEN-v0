@@ -5,13 +5,13 @@ import threading
 from pathlib import Path
 
 from fastapi.testclient import TestClient
+from helpers import BASIC_POLICY
 
 from warden import audit
 from warden.api import create_app
 from warden.audit import AuditEntry, SQLiteAuditLog
 from warden.fingerprint import fingerprint
 from warden.models import ActionRequest, Decision
-from warden.policy import DEFAULT_POLICY_PATH
 
 CANARY = "sk-live-FAKE-123"  # fake secret used to detect leaks
 
@@ -22,7 +22,7 @@ def body(tool: str = "send_email", **arguments: object) -> dict:
 
 def make(tmp_path: Path) -> tuple[TestClient, SQLiteAuditLog]:
     log = SQLiteAuditLog(tmp_path / "audit.db")
-    return TestClient(create_app(DEFAULT_POLICY_PATH, audit_log=log)), log
+    return TestClient(create_app(BASIC_POLICY, audit_log=log)), log
 
 
 # --- Recording -----------------------------------------------------------------------
@@ -82,7 +82,7 @@ def test_log_survives_restart(tmp_path: Path) -> None:
 
 def test_default_app_writes_to_the_default_path(tmp_path: Path) -> None:
     # conftest.py points DEFAULT_AUDIT_PATH at a temp file.
-    TestClient(create_app(DEFAULT_POLICY_PATH)).post("/v1/evaluate", json=body())
+    TestClient(create_app(BASIC_POLICY)).post("/v1/evaluate", json=body())
     assert len(SQLiteAuditLog(audit.DEFAULT_AUDIT_PATH).recent()) == 1
 
 
@@ -143,7 +143,7 @@ class BrokenLog:
 
 
 def test_audit_failure_denies_even_an_allowed_action(caplog) -> None:
-    client = TestClient(create_app(DEFAULT_POLICY_PATH, audit_log=BrokenLog()))
+    client = TestClient(create_app(BASIC_POLICY, audit_log=BrokenLog()))
     response = client.post("/v1/evaluate", json=body("read_file", path="x"))
     assert response.status_code == 503
     assert response.json()["decision"] == "deny"
@@ -173,7 +173,7 @@ def test_old_database_is_upgraded_and_keeps_history(tmp_path: Path) -> None:
         )
     # Retention off: this test is about the upgrade, and the old row is > 90 days old.
     log = SQLiteAuditLog(path, retention_days=None)
-    client = TestClient(create_app(DEFAULT_POLICY_PATH, audit_log=log))
+    client = TestClient(create_app(BASIC_POLICY, audit_log=log))
     response = client.post("/v1/evaluate", json=body("read_file", path="x"))
     assert response.json()["decision"] == "allow"
     entries = log.recent()

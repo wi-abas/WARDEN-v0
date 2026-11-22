@@ -96,14 +96,14 @@ instead of falling back to a default. The host is always `127.0.0.1`.
 ```sh
 curl -s -X POST http://127.0.0.1:8000/v1/evaluate \
   -H 'content-type: application/json' \
-  -d '{"agent_id": "agent-1", "tool": "send_email", "arguments": {"to": "a@b.c"}}'
+  -d '{"agent_id": "agent-1", "tool": "write_file", "arguments": {"path": "/workspace/a.txt", "content": "hi"}}'
 ```
 
 ```json
 {
   "decision": "require_approval",
-  "reason": "matched rule 'approve-send'",
-  "matched_rule": "approve-send",
+  "reason": "Writing files needs a human to approve",
+  "matched_rule": "write-workspace",
   "action_hash": "…64 hex characters…",
   "approval_id": "…32 characters…"
 }
@@ -111,7 +111,7 @@ curl -s -X POST http://127.0.0.1:8000/v1/evaluate \
 
 | Endpoint | Purpose |
 |---|---|
-| `GET /health` | `{"status": "ok", "rules_loaded": 3}`, or HTTP 503 `"degraded"` when no rules loaded (broken or empty policy file: everything is denied). |
+| `GET /health` | `{"status": "ok", "rules_loaded": 4}`, or HTTP 503 `"degraded"` when no rules loaded (broken or empty policy file: everything is denied). |
 | `POST /v1/evaluate` | Send an action, get a decision. |
 | `GET /v1/approvals` | Admin: list pending approvals, with their arguments. |
 | `POST /v1/approvals/{id}/approve` | Admin: approve one (once). |
@@ -138,13 +138,23 @@ in memory only (arguments never touch disk), so restarting Warden clears them.
 
 ## Writing a policy
 
-Rules live in `policies/default.json`:
+Rules live in `policies/default.json` (`warden init` creates it). The default:
+
+| Tool | Decision |
+|---|---|
+| `read_file` | allow under `/workspace/`, otherwise deny |
+| `write_file` | human approval under `/workspace/`, otherwise deny |
+| `delete_file` | always deny |
+| `send_email` | allow to `@example.com` addresses, otherwise deny |
+| anything else | deny |
+
+The simplest rules just name a tool:
 
 ```json
 {
   "rules": [
-    { "id": "allow-read",   "tool": "read_file",   "effect": "allow" },
-    { "id": "approve-send", "tool": "send_email",  "effect": "require_approval" },
+    { "id": "allow-read", "tool": "read_file", "effect": "allow" },
+    { "id": "approve-send", "tool": "send_email", "effect": "require_approval" },
     { "id": "block-delete", "tool": "delete_file", "effect": "deny" }
   ]
 }

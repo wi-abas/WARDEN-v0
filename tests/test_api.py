@@ -2,17 +2,17 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from helpers import BASIC_POLICY
 
 import warden.api
 from warden.api import create_app
-from warden.policy import DEFAULT_POLICY_PATH
 
 CANARY = "sk-live-FAKE-123"  # fake value that must never be echoed back
 
 
 @pytest.fixture
 def client() -> TestClient:
-    return TestClient(create_app(DEFAULT_POLICY_PATH))
+    return TestClient(create_app(BASIC_POLICY))
 
 
 def body(tool: str = "read_file", **extra: object) -> dict[str, object]:
@@ -119,7 +119,7 @@ def test_crash_returns_deny_without_leaking(
         raise RuntimeError(CANARY)
 
     monkeypatch.setattr(warden.api, "evaluate", broken_evaluate)
-    client = TestClient(create_app(DEFAULT_POLICY_PATH), raise_server_exceptions=False)
+    client = TestClient(create_app(BASIC_POLICY), raise_server_exceptions=False)
 
     response = client.post("/v1/evaluate", json=body("read_file", arguments={"k": CANARY}))
 

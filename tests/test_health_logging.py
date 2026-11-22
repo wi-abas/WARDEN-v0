@@ -7,9 +7,9 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from helpers import BASIC_POLICY
 
 from warden.api import create_app, log_config
-from warden.policy import DEFAULT_POLICY_PATH
 
 
 def health(policy: Path) -> tuple[int, dict]:
@@ -39,7 +39,7 @@ def test_missing_policy_file_means_degraded(tmp_path: Path) -> None:
 
 
 def test_good_policy_is_ok() -> None:
-    assert health(DEFAULT_POLICY_PATH) == (200, {"status": "ok", "rules_loaded": 3})
+    assert health(BASIC_POLICY) == (200, {"status": "ok", "rules_loaded": 3})
 
 
 def test_degraded_health_does_not_leak_the_policy_path(tmp_path: Path) -> None:
@@ -68,7 +68,7 @@ def test_log_config_does_not_change_uvicorns_default() -> None:
 def test_decision_lines_appear_with_the_config(capsys, tmp_path: Path) -> None:
     logging.config.dictConfig(log_config())
     try:
-        client = TestClient(create_app(DEFAULT_POLICY_PATH))
+        client = TestClient(create_app(BASIC_POLICY))
         capsys.readouterr()  # drop the admin key line
         client.post(
             "/v1/evaluate",

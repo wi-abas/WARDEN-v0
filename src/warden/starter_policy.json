@@ -1,7 +1,35 @@
 {
+  "tools": {
+    "read_file": { "arguments": ["path"], "required": ["path"] },
+    "write_file": { "arguments": ["path", "content"], "required": ["path", "content"] },
+    "delete_file": { "arguments": ["path"], "required": ["path"] },
+    "send_email": { "arguments": ["to", "subject", "body"], "required": ["to"] }
+  },
   "rules": [
-    { "id": "allow-read",   "tool": "read_file",   "effect": "allow" },
-    { "id": "approve-send", "tool": "send_email",  "effect": "require_approval" },
-    { "id": "block-delete", "tool": "delete_file", "effect": "deny" }
+    {
+      "id": "read-workspace",
+      "tool": "read_file",
+      "effect": "allow",
+      "when": [{ "arg": "path", "op": "startswith", "value": "/workspace/" }]
+    },
+    {
+      "id": "write-workspace",
+      "tool": "write_file",
+      "effect": "require_approval",
+      "when": [{ "arg": "path", "op": "startswith", "value": "/workspace/" }],
+      "message": "Writing files needs a human to approve"
+    },
+    {
+      "id": "no-deleting",
+      "tool": "delete_file",
+      "effect": "deny",
+      "message": "Agents may never delete files"
+    },
+    {
+      "id": "email-colleagues",
+      "tool": "send_email",
+      "effect": "allow",
+      "when": [{ "arg": "to", "op": "endswith", "value": "@example.com", "ignore_case": true }]
+    }
   ]
 }

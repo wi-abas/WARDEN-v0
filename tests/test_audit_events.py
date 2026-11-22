@@ -5,11 +5,11 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from helpers import BASIC_POLICY
 
 from warden.api import MAX_BODY_BYTES, create_app
 from warden.approvals import ApprovalStore
 from warden.audit import AuditEvent, EventKind, SQLiteAuditLog
-from warden.policy import DEFAULT_POLICY_PATH
 
 KEY = "test-admin-key-0123456789"
 ADMIN = {"X-Warden-Admin-Key": KEY}
@@ -23,7 +23,7 @@ def log(tmp_path: Path) -> SQLiteAuditLog:
 
 @pytest.fixture
 def client(log: SQLiteAuditLog) -> TestClient:
-    app = create_app(DEFAULT_POLICY_PATH, audit_log=log, admin_key=KEY)
+    app = create_app(BASIC_POLICY, audit_log=log, admin_key=KEY)
     return TestClient(app, raise_server_exceptions=False)
 
 
@@ -69,7 +69,7 @@ class EventsBroken(SQLiteAuditLog):
 def test_unrecorded_approval_does_not_happen(tmp_path: Path) -> None:
     store = ApprovalStore()
     app = create_app(
-        DEFAULT_POLICY_PATH,
+        BASIC_POLICY,
         audit_log=EventsBroken(tmp_path / "audit.db"),
         approvals=store,
         admin_key=KEY,
@@ -190,7 +190,7 @@ def test_events_still_recorded_when_decision_writes_fail(tmp_path: Path) -> None
             raise RuntimeError("boom")
 
     log = Exploding(tmp_path / "audit.db")
-    client = TestClient(create_app(DEFAULT_POLICY_PATH, audit_log=log, admin_key=KEY))
+    client = TestClient(create_app(BASIC_POLICY, audit_log=log, admin_key=KEY))
     # A failed decision write is handled (503), so check the event log stayed usable.
     assert client.post("/v1/evaluate", json=email()).status_code == 503
     client.get("/v1/approvals")  # 401
@@ -199,7 +199,7 @@ def test_events_still_recorded_when_decision_writes_fail(tmp_path: Path) -> None
 
 def test_rejection_still_denied_when_event_log_is_broken(tmp_path: Path) -> None:
     client = TestClient(
-        create_app(DEFAULT_POLICY_PATH, audit_log=EventsBroken(tmp_path / "a.db"), admin_key=KEY)
+        create_app(BASIC_POLICY, audit_log=EventsBroken(tmp_path / "a.db"), admin_key=KEY)
     )
     response = client.get("/v1/approvals")
     assert response.status_code == 401

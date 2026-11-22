@@ -5,17 +5,17 @@ import logging
 
 import pytest
 from fastapi.testclient import TestClient
+from helpers import BASIC_POLICY
 
 import warden.api
 from warden.api import MAX_BODY_BYTES, create_app
-from warden.policy import DEFAULT_POLICY_PATH
 
 CANARY = "sk-live-FAKE-123"  # fake value that must never appear in logs or responses
 
 
 @pytest.fixture
 def client() -> TestClient:
-    return TestClient(create_app(DEFAULT_POLICY_PATH), raise_server_exceptions=False)
+    return TestClient(create_app(BASIC_POLICY), raise_server_exceptions=False)
 
 
 def post_raw(client: TestClient, content: bytes, **headers: str) -> dict[str, object]:
@@ -104,7 +104,7 @@ def test_crash_does_not_log_secrets(
         raise RuntimeError(CANARY)
 
     monkeypatch.setattr(warden.api, "evaluate", broken_evaluate)
-    client = TestClient(create_app(DEFAULT_POLICY_PATH), raise_server_exceptions=False)
+    client = TestClient(create_app(BASIC_POLICY), raise_server_exceptions=False)
     with caplog.at_level(logging.DEBUG):
         response = client.post("/v1/evaluate", json=secret_request("read_file"))
     assert response.status_code == 500
