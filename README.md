@@ -290,6 +290,11 @@ uv run ruff format .           # format
 3. ~~Approval workflow bound to `action_hash`, single-use and expiring~~ (done)
 4. Authentication, Python SDK, MCP integration
 
+## Security and contributing
+
+See [SECURITY.md](SECURITY.md) for the threat model (what Warden does and doesn't protect
+against) and how to report a vulnerability, and [CONTRIBUTING.md](CONTRIBUTING.md) to help.
+
 ## License
 
 [MIT](LICENSE)
