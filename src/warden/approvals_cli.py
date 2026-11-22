@@ -38,7 +38,9 @@ from warden.models import AGENT_ID_PATTERN, APPROVAL_ID_PATTERN, TOOL_NAME_PATTE
 # 100 approvals (the most one decision fetches) of the largest request Warden accepts,
 # every character escaped, stay under this.
 MAX_RESPONSE_BYTES = 32 * 1024 * 1024
-TIMEOUT_SECONDS = 10
+TIMEOUT_SECONDS = 10  # mutation-ok: timeout
+# One byte more than allowed, to tell "too large" from "exactly the limit".
+_READ_LIMIT = MAX_RESPONSE_BYTES + 1  # mutation-ok: reading 2 more changes nothing
 
 
 class _Unreachable(Exception):
@@ -64,10 +66,10 @@ def _call(url: str, key: str, method: str, path: str, body: Any = None) -> tuple
     )
     try:
         with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:  # noqa: S310
-            status, raw = response.status, response.read(MAX_RESPONSE_BYTES + 1)
+            status, raw = response.status, response.read(_READ_LIMIT)
     except urllib.error.HTTPError as error:
         with error:
-            status, raw = error.code, error.read(MAX_RESPONSE_BYTES + 1)
+            status, raw = error.code, error.read(_READ_LIMIT)
     except (urllib.error.URLError, OSError) as exc:
         raise _Unreachable(f"can't reach Warden at {url} ({type(exc).__name__})") from None
     if len(raw) > MAX_RESPONSE_BYTES:
@@ -144,7 +146,7 @@ def _pending(
 
 
 def _confirm(question: str, stdin: TextIO, out: TextIO) -> bool:
-    print(f"{question} [y/N] ", end="", file=out, flush=True)
+    print(f"{question} [y/N] ", end="", file=out, flush=True)  # mutation-ok: flush
     answer = stdin.readline()  # "" at end of input: no
     return answer.strip().lower() in {"y", "yes"}
 
@@ -238,7 +240,7 @@ def _decide(
     # named ids are fetched, so a flood of other approvals can't block this.
     pending = {
         item.get("approval_id"): item
-        for item in _pending(url, key, group=False, ids=ids)
+        for item in _pending(url, key, group=False, ids=ids)  # mutation-ok: same items
         if isinstance(item, dict)
     }
     missing = [i for i in ids if i not in pending]
