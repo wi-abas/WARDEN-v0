@@ -1,5 +1,6 @@
 """Approval workflow: the happy path, and every way to abuse it."""
 
+import sqlite3
 import threading
 from pathlib import Path
 from typing import Any
@@ -10,7 +11,8 @@ from helpers import BASIC_POLICY
 
 from warden.api import create_app
 from warden.approvals import ApprovalStore
-from warden.audit import SQLiteAuditLog
+from warden.audit import AuditEntry, SQLiteAuditLog
+from warden.models import ActionRequest
 
 KEY = "test-admin-key-0123456789"
 ADMIN = {"X-Warden-Admin-Key": KEY}
@@ -287,3 +289,32 @@ def test_after_use_a_new_request_starts_a_new_approval(client: TestClient) -> No
     approval_id = get_approved(client)
     ask(client, email(approval_id=approval_id))  # used
     assert ask(client, email())["approval_id"] != approval_id
+
+
+def test_failed_audit_write_does_not_burn_the_approval(tmp_path: Path) -> None:
+    class FlakyLog(SQLiteAuditLog):
+        broken = False
+
+        def record(self, entry: AuditEntry) -> None:
+            if self.broken:
+                raise sqlite3.OperationalError("disk full")
+            super().record(entry)
+
+    log = FlakyLog(tmp_path / "audit.db")
+    client = TestClient(create_app(BASIC_POLICY, audit_log=log, admin_key=KEY))
+    approval_id = get_approved(client)
+    log.broken = True
+    first = client.post("/v1/evaluate", json=email(approval_id=approval_id))
+    assert (first.status_code, first.json()["decision"]) == (503, "deny")
+    log.broken = False
+    assert ask(client, email(approval_id=approval_id))["decision"] == "allow"
+    assert ask(client, email(approval_id=approval_id))["decision"] == "deny"  # now spent
+
+
+def test_restore_only_touches_used_approvals(store: ApprovalStore) -> None:
+    request = ActionRequest.model_validate({"agent_id": "a", "tool": "t", "arguments": {}})
+    approval_id = store.request(request, "a" * 64)
+    assert approval_id is not None
+    store.restore(approval_id)  # pending: unchanged
+    assert not store.consume(approval_id, "a" * 64)
+    store.restore("unknown-id-0123456789")  # unknown: no error

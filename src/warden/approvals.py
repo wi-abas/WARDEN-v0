@@ -159,6 +159,14 @@ class ApprovalStore:
                 approval.status = Status.USED
             return status
 
+    def restore(self, approval_id: str) -> None:
+        """Undo a use: the allow it produced was never delivered (e.g. the audit write
+        failed and the agent got deny instead), so the approval isn't spent."""
+        with self._lock:
+            approval = self._items.get(approval_id)
+            if approval is not None and approval.status is Status.USED:
+                approval.status = Status.APPROVED
+
     def consume(self, approval_id: str, action_hash: str) -> bool:
         """Use an approval. True only once, only for the exact approved action."""
         return self.use(approval_id, action_hash) is Status.APPROVED

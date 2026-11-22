@@ -235,6 +235,9 @@ class _Warden:
             self.audit_log.record(AuditEntry.from_decision(action, result))
         except Exception as exc:
             logger.error("audit log write failed, denying: %s", type(exc).__name__)
+            if result.decision is Decision.ALLOW and result.approval_id is not None:
+                # The approval was used for an allow the agent will never get.
+                self.approvals.restore(result.approval_id)
             return _deny_response(503, "audit log unavailable")
         # Safe to log: tool names and rule ids are pattern-checked. Never log arguments.
         logger.info(
