@@ -127,6 +127,11 @@ rejected requests (wrong admin key, bad input, oversized body, errors), with met
 path but never the body or query string. Failed approval retries keep the `approval_id`
 that was tried, so misuse is visible.
 
+**Retention:** entries older than 90 days are deleted at startup and then once a day.
+Each deletion is itself recorded as an `audit_purged` event ("deleted 120 decisions and
+4 events older than 90 days"), so gaps in the history are explained. Retention can be
+turned off with `SQLiteAuditLog(retention_days=None)` (a startup setting is coming).
+
 ```sh
 sqlite3 warden-audit.db "SELECT timestamp, tool, decision FROM decisions ORDER BY id DESC LIMIT 10"
 sqlite3 warden-audit.db "SELECT timestamp, kind, http_status, reason FROM events ORDER BY id DESC LIMIT 10"
@@ -167,7 +172,8 @@ Each of these is covered by tests in `tests/`.
   read your terminal output can approve. There's no record of *who* approved.
 - **Approvals are lost on restart** (in memory only).
 - **The audit log is a plain local file.** Anyone who can edit it can change history.
-  Nothing limits its size yet.
+  Old entries are deleted after 90 days, but a flood of requests within that window
+  can still grow it.
 - **The policy file is trusted.** Whoever can edit it controls every decision.
 
 ## Development

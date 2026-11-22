@@ -171,9 +171,11 @@ def test_old_database_is_upgraded_and_keeps_history(tmp_path: Path) -> None:
             "INSERT INTO decisions (timestamp, agent_id, tool, decision, reason)"
             " VALUES ('2026-01-01T00:00:00+00:00', 'old', 'read_file', 'allow', 'old row')"
         )
-    client = TestClient(create_app(DEFAULT_POLICY_PATH, audit_log=SQLiteAuditLog(path)))
+    # Retention off: this test is about the upgrade, and the old row is > 90 days old.
+    log = SQLiteAuditLog(path, retention_days=None)
+    client = TestClient(create_app(DEFAULT_POLICY_PATH, audit_log=log))
     response = client.post("/v1/evaluate", json=body("read_file", path="x"))
     assert response.json()["decision"] == "allow"
-    entries = SQLiteAuditLog(path).recent()
+    entries = log.recent()
     assert [e.agent_id for e in entries] == ["agent-1", "old"]
     assert entries[1].approval_id is None

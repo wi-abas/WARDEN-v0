@@ -14,9 +14,12 @@ here can later be swapped (e.g. for Postgres or a hosted service) without
 touching the engine or the API.
 """
 
+import logging
 import sqlite3
+import threading
+from collections.abc import Callable
 from contextlib import closing
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
 from typing import Protocol
@@ -25,7 +28,11 @@ from pydantic import BaseModel, ConfigDict
 
 from warden.models import ActionRequest, Decision, EvaluationResult
 
+logger = logging.getLogger(__name__)
+
 DEFAULT_AUDIT_PATH = Path("warden-audit.db")
+DEFAULT_RETENTION_DAYS = 90  # None = keep everything forever
+PURGE_INTERVAL = timedelta(days=1)
 
 
 class AuditEntry(BaseModel):
@@ -63,6 +70,7 @@ class EventKind(StrEnum):
     APPROVAL_DENIED = "approval_denied"
     APPROVAL_DECIDE_FAILED = "approval_decide_failed"  # unknown, expired or already decided
     REQUEST_REJECTED = "request_rejected"  # 401, 411, 413, 422, 500
+    AUDIT_PURGED = "audit_purged"  # old entries deleted by retention
 
 
 MAX_PATH_CHARS = 200
@@ -158,8 +166,23 @@ class SQLiteAuditLog:
     requests on several threads at once.
     """
 
-    def __init__(self, path: Path = DEFAULT_AUDIT_PATH) -> None:
+    def __init__(
+        self,
+        path: Path = DEFAULT_AUDIT_PATH,
+        retention_days: int | None = DEFAULT_RETENTION_DAYS,
+        clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+    ) -> None:
+        if retention_days is not None and (
+            not isinstance(retention_days, int)
+            or isinstance(retention_days, bool)
+            or retention_days < 1
+        ):
+            raise ValueError("retention_days must be a whole number of days >= 1, or None")
         self.path = path
+        self.retention_days = retention_days
+        self._clock = clock
+        self._purge_lock = threading.Lock()
+        self._last_purge: datetime | None = None
         with closing(self._connect()) as conn, conn:
             conn.executescript(_SCHEMA)
             existing = {row[1] for row in conn.execute("PRAGMA table_info(decisions)")}
@@ -167,11 +190,53 @@ class SQLiteAuditLog:
                 if name not in existing:
                     # Names come from the constant above, never from user input.
                     conn.execute(f"ALTER TABLE decisions ADD COLUMN {name} {sql_type}")
+        self._maybe_purge()  # first purge at startup
 
     def _connect(self) -> sqlite3.Connection:
         return sqlite3.connect(self.path, timeout=5)
 
+    def _maybe_purge(self) -> None:
+        """Purge at most once per PURGE_INTERVAL. Never makes a write fail."""
+        if self.retention_days is None:
+            return
+        now = self._clock()
+        with self._purge_lock:
+            if self._last_purge is not None and now - self._last_purge < PURGE_INTERVAL:
+                return
+            self._last_purge = now
+        try:
+            self.purge_older_than(self.retention_days)
+        except Exception as exc:
+            logger.error("audit retention purge failed: %s", type(exc).__name__)
+
+    def purge_older_than(self, days: int) -> int:
+        """Delete entries older than `days` from both tables. Returns how many.
+
+        The deletion and an AUDIT_PURGED event explaining it are written in one
+        transaction: history never disappears without a record saying why.
+        """
+        now = self._clock()
+        cutoff = (now - timedelta(days=days)).isoformat()
+        with closing(self._connect()) as conn, conn:
+            # ISO timestamps in UTC sort correctly as text, so "<" means "older".
+            decisions = conn.execute(
+                "DELETE FROM decisions WHERE timestamp < ?", (cutoff,)
+            ).rowcount
+            events = conn.execute("DELETE FROM events WHERE timestamp < ?", (cutoff,)).rowcount
+            if decisions + events:
+                self._insert_event(
+                    conn,
+                    AuditEvent(
+                        timestamp=now.isoformat(),
+                        kind=EventKind.AUDIT_PURGED,
+                        reason=f"deleted {decisions} decisions and {events} events "
+                        f"older than {days} days",
+                    ),
+                )
+        return decisions + events
+
     def record(self, entry: AuditEntry) -> None:
+        self._maybe_purge()
         # "?" placeholders: values are never pasted into the SQL text (no SQL injection).
         with closing(self._connect()) as conn, conn:
             conn.execute(
@@ -210,13 +275,19 @@ class SQLiteAuditLog:
         ]
 
     def record_event(self, event: AuditEvent) -> None:
+        self._maybe_purge()
+        with closing(self._connect()) as conn, conn:
+            self._insert_event(conn, event)
+
+    @staticmethod
+    def _insert_event(conn: sqlite3.Connection, event: AuditEvent) -> None:
         values = [getattr(event, name) for name in _EVENT_FIELDS]
         values[1] = event.kind.value
-        with closing(self._connect()) as conn, conn:
-            conn.execute(
-                f"INSERT INTO events ({_EVENT_COLUMNS}) VALUES ({', '.join('?' * len(values))})",  # noqa: S608
-                values,
-            )
+        placeholders = ", ".join("?" * len(values))
+        conn.execute(
+            f"INSERT INTO events ({_EVENT_COLUMNS}) VALUES ({placeholders})",  # noqa: S608
+            values,
+        )
 
     def recent_events(self, limit: int = 100) -> list[AuditEvent]:
         """Newest first."""
