@@ -31,7 +31,7 @@ jobs:
       - name: Types
         run: uv run mypy
       - name: Tests
-        run: uv run pytest
+        run: uv run pytest --cov
       - name: Policies pass warden check
         run: |
           uv run warden check policies/default.json --strict

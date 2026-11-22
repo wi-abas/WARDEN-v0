@@ -47,6 +47,7 @@ dev = [
     "httpx2>=2.16.2",
     "mypy>=2.4.1",
     "pytest>=9.2.0",
+    "pytest-cov>=7.1.0",
     "ruff>=0.17.6",
 ]
 
@@ -76,3 +77,13 @@ plugins = ["pydantic.mypy"]
 module-name = "warden"
 source-exclude = ["**/.DS_Store", "**/__pycache__"]
 wheel-exclude = ["**/.DS_Store", "**/__pycache__"]
+
+[tool.coverage.run]
+source = ["warden"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+# CI fails if coverage drops below this.
+fail_under = 98
