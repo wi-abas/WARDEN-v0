@@ -35,6 +35,7 @@ from fastapi import Depends, FastAPI, Header, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import JsonValue
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from warden import __version__, audit
@@ -300,6 +301,13 @@ def create_app(
     async def invalid_request(request: Request, exc: RequestValidationError) -> JSONResponse:
         # FastAPI's default 422 echoes the input back, which may contain secrets.
         return w.reject(request, 422, "invalid request")
+
+    @app.exception_handler(StarletteHTTPException)
+    async def http_error(request: Request, exc: StarletteHTTPException) -> JSONResponse:
+        # e.g. 404 unknown URL, 405 wrong method: answer with a deny body like every
+        # other error, and record it (repeated 404s can mean someone is probing).
+        reasons = {404: "not found", 405: "method not allowed"}
+        return w.reject(request, exc.status_code, reasons.get(exc.status_code, "refused"))
 
     @app.exception_handler(_AdminKeyError)
     async def bad_admin_key(request: Request, exc: _AdminKeyError) -> JSONResponse:
