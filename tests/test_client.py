@@ -168,3 +168,12 @@ def test_rate_limited_answer_carries_retry_after(
     answer = WardenClient(url).evaluate("read_file", {})
     assert answer.decision is Decision.DENY and not answer.allowed
     assert answer.retry_after == expected
+
+
+@pytest.mark.parametrize("var", ["http_proxy", "HTTP_PROXY", "all_proxy"])
+def test_proxy_settings_are_ignored(url: str, var: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    # A proxy would receive the tool arguments and could answer "allow" itself.
+    monkeypatch.setenv(var, "http://127.0.0.1:9")  # nothing listens there
+    monkeypatch.delenv("no_proxy", raising=False)
+    monkeypatch.delenv("NO_PROXY", raising=False)
+    assert WardenClient(url, "agent-1").evaluate("read_file", {"path": "/a"}).allowed

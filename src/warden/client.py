@@ -28,6 +28,17 @@ LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
 MAX_RESPONSE_BYTES = 64 * 1024
 
 
+# Never through a proxy: urllib follows HTTP_PROXY / http_proxy even for 127.0.0.1, which
+# would send tool arguments (and the admin key, for `warden approvals`) to the proxy and
+# make us trust ITS answer. An empty ProxyHandler turns proxies off for this opener.
+_LOCAL_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
+def open_local(request: urllib.request.Request, timeout: float) -> Any:
+    """urlopen() for Warden's own local URL, ignoring every proxy setting."""
+    return _LOCAL_OPENER.open(request, timeout=timeout)
+
+
 class ClientConfigError(ValueError):
     """The client was set up wrongly (e.g. a URL that isn't on this machine)."""
 
@@ -145,7 +156,7 @@ class WardenClient:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:  # noqa: S310
+            with open_local(request, timeout=self.timeout) as response:
                 raw = response.read(MAX_RESPONSE_BYTES + 1)
         except urllib.error.HTTPError as error:
             # Warden's error bodies say "deny" too; keep its reason if it gave one.
