@@ -160,6 +160,27 @@ sqlite3 warden-audit.db "SELECT timestamp, tool, decision FROM decisions ORDER B
 sqlite3 warden-audit.db "SELECT timestamp, kind, http_status, reason FROM events ORDER BY id DESC LIMIT 10"
 ```
 
+## Checking a policy
+
+```sh
+uv run warden check policies/default.json
+```
+
+Validates the file without starting the server, and warns about rules that probably don't
+do what you meant:
+
+| Code | Warning |
+|---|---|
+| W001 | A tool has "deny when..." rules but no argument list, so unexpected arguments aren't checked |
+| W002 | No rules at all: everything is denied |
+| W003 | A rule can never apply, because a stricter unconditional rule always wins |
+| W004 | A rule duplicates another |
+| W005 | A path prefix without a trailing `/` (`"/data"` also matches `"/database"`) |
+| W006 | A tool has an argument list but no rules: it's always denied |
+| W007 | A condition checks an argument that isn't in the tool's argument list (typo?) |
+
+Exit code `1` on errors; with `--strict`, also on warnings (useful in CI).
+
 ## Rule for clients: fail closed
 
 **Run the tool only if the response says `"decision": "allow"`.** Anything else means don't:
@@ -216,6 +237,8 @@ uv run ruff format .           # format
 | `src/warden/audit.py` | Audit log (SQLite) |
 | `src/warden/approvals.py` | Human approvals |
 | `src/warden/api.py` | HTTP API |
+| `src/warden/cli.py` | The `warden` command (`serve`, `check`) |
+| `src/warden/check.py` | Policy checks and warnings |
 
 ## Roadmap
 

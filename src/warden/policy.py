@@ -47,6 +47,17 @@ class Policy(BaseModel):
 EMPTY_POLICY = Policy(rules=())
 
 
+def describe_errors(exc: ValidationError) -> list[str]:
+    """Where each problem is, e.g. "rules.2.when.0.op: Input should be ...".
+
+    Never echoes the file's contents (include_input=False).
+    """
+    return [
+        f"{'.'.join(str(part) for part in error['loc']) or 'file'}: {error['msg']}"
+        for error in exc.errors(include_input=False)
+    ]
+
+
 def load_rules(path: Path = DEFAULT_POLICY_PATH) -> tuple[Rule, ...]:
     """Just the rules of the policy file (empty on any problem)."""
     return load_policy(path).rules
@@ -58,11 +69,7 @@ def load_policy(path: Path = DEFAULT_POLICY_PATH) -> Policy:
         raw = path.read_text(encoding="utf-8")
         return Policy.model_validate_json(raw)
     except ValidationError as exc:
-        # Say where the problem is, without echoing the file's contents.
-        problems = "; ".join(
-            f"{'.'.join(str(part) for part in error['loc']) or 'file'}: {error['msg']}"
-            for error in exc.errors(include_input=False)
-        )
+        problems = "; ".join(describe_errors(exc))
         logger.error("invalid policy file %s, denying everything: %s", path, problems)
     except Exception as exc:
         logger.error(
