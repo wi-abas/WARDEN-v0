@@ -276,3 +276,16 @@ def test_cli_verify_missing_or_unreadable(
     bad.write_text("not a database at all, just text " * 100)
     assert cli.main(["audit", "verify", "--audit-db", str(bad)]) == 2
     assert "can't read" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("name", ["audit#1.db", "audit?mode=rw.db", "audit%20x.db", "a b.db"])
+def test_verify_opens_exactly_the_given_file(tmp_path: Path, name: str) -> None:
+    # A decoy with the name a naive URI would open instead ("audit" for "audit#1.db").
+    decoy = tmp_path / name.split("#")[0].split("?")[0]
+    if decoy.name != name:
+        filled(decoy, 1)
+    path = tmp_path / name
+    filled(path, 2)
+    sql(path, "UPDATE decisions SET reason = 'edited' WHERE id = 1")
+    report = verify_chain(path)
+    assert not report.ok and report.problems[0].startswith("decisions row id 1")

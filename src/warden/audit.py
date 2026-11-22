@@ -508,7 +508,9 @@ class ChainReport(BaseModel):
 
 def verify_chain(path: Path) -> ChainReport:
     """Recompute every hash. Reports the FIRST broken row of each table. Read-only."""
-    uri = f"file:{path}?mode=ro"
+    # as_uri() percent-encodes "?", "#" and "%": pasting the raw path into the URI
+    # would make SQLite open a DIFFERENT file (e.g. "audit#1.db" -> "audit").
+    uri = f"{path.resolve().as_uri()}?mode=ro"
     checked: dict[str, int] = {}
     unchained: dict[str, int] = {}
     heads: dict[str, str] = {}
