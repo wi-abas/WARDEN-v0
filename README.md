@@ -49,6 +49,8 @@ uv run warden serve     # starts Warden on http://127.0.0.1:8000
 (With pip, drop the `uv run`.) Once released on PyPI the package will be called
 `agent-warden`; the import name stays `warden`.
 
+To stay on one version, add the tag: `"agent-warden @ git+https://github.com/wi-abas/agent-warden@v0.4.0"`.
+
 ## Use it from your agent
 
 Three ways, from least to most work on your side.
@@ -186,7 +188,8 @@ uv run warden approvals list --max-age 5      # only those asked for in the last
 
 Approving ids from separate agent runs (asked more than 2 minutes apart) gets a warning;
 with `--yes` it is refused unless you add `--across-runs`. Over HTTP, `/approve` needs
-the `action_hash` from the list (since v0.4; see docs/api.md).
+the `action_hash` from the list (see docs/api.md). A rejected action stays refused for
+15 minutes; `warden approvals list --rejected` and `warden approvals lift ID` manage that.
 
 Settings (`--policy`, `--port`, the admin key, ...): see [docs/api.md](https://github.com/wi-abas/agent-warden/blob/main/docs/api.md#settings).
 
@@ -204,7 +207,7 @@ directly. Measure on your machine: `uv run python scripts/benchmark.py`.
 
 ## Documentation
 
-- [Writing policies](https://github.com/wi-abas/agent-warden/blob/main/docs/policies.md): rules, argument conditions (incl. nested), tool argument lists, common patterns, rate limits, `warden check`
+- [Writing policies](https://github.com/wi-abas/agent-warden/blob/main/docs/policies.md): rules, argument conditions (incl. nested), `otherwise`, per-agent rules, tool argument lists, common patterns, rate limits, `warden check`
 - [API and operations](https://github.com/wi-abas/agent-warden/blob/main/docs/api.md): endpoints, agent tokens, approvals, audit log, settings
 - [MCP proxy](https://github.com/wi-abas/agent-warden/blob/main/docs/mcp-proxy.md): `warden proxy` for Claude Desktop, Cursor, Claude Code
 - [Design notes](https://github.com/wi-abas/agent-warden/tree/main/docs/design): how each feature works and what it doesn't cover
@@ -231,7 +234,13 @@ Each of these is covered by tests in `tests/`.
   The log is a hash chain: `warden audit verify` finds the first edited or deleted row.
 - Approvals are single-use, expire, are bound to the exact action and the agent that
   asked, and can't be replayed (also across restarts), modified, double-decided, used by
-  two requests at once, or approved without seeing the arguments.
+  two requests at once, or approved without seeing the arguments. Approving needs the
+  `action_hash` you were shown.
+- A rejected action stays refused for the same agent for 15 minutes (configurable), so
+  an agent can't keep asking until someone clicks yes.
+- Per-agent rules: a rule can apply to some agents only (needs agent tokens).
+- URL rules (`host_in`) accept only `http`/`https` by default and refuse bad ports, so
+  `ftp://` or `file://` to an allowed host is denied.
 - Every result carries an `action_hash`: a SHA-256 fingerprint of the exact action
   (agent, tool, arguments). Approvals are bound to it.
 - Optional agent tokens: the agent id comes from a secret, not from the request.
@@ -318,6 +327,10 @@ approvals, `warden check`, settings, demo, CI. See [CHANGELOG.md](https://github
 Done in v0.3.0 (alpha): MCP proxy, Python SDK, agent tokens, rate limits, persistent
 approvals, group approvals (`warden approvals`), tamper-evident audit log with
 checkpoints, policy tests (`warden test`), nested argument conditions.
+
+Done in v0.4.0 (alpha): per-agent rules, sticky rejections, `otherwise` and `contains`
+in rules, `host_in` limited to http/https with port checks, approvals need the
+`action_hash` you were shown and warn about separate runs.
 
 Next, shaped by feedback from early users:
 
