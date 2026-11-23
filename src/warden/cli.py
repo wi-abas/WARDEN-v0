@@ -19,6 +19,7 @@ warden audit verify [--audit-db FILE] [--expect FILE]   check the audit log's ha
 warden audit head [--audit-db FILE]     print a checkpoint to keep elsewhere
 warden approvals list [--group] [--agent A] [--tool T]  pending approvals, in full
 warden approvals approve|reject ID [ID ...] [--yes]
+warden approvals list --rejected / lift ID [--yes]   standing rejections / lift one
                        decide exactly these, all or nothing (needs WARDEN_ADMIN_KEY)
 warden proxy --config FILE
 warden proxy [--agent-id ID] [--warden-url URL] [--tool-prefix P] -- COMMAND [ARGS...]
@@ -73,9 +74,12 @@ def main(argv: list[str] | None = None) -> int:
         "--audit-db", type=Path, help="default WARDEN_AUDIT_DB or warden-audit.db"
     )
     approvals = commands.add_parser("approvals", help="review and decide pending approvals")
-    approvals.add_argument("action", choices=["list", "approve", "reject"])
+    approvals.add_argument("action", choices=["list", "approve", "reject", "lift"])
     approvals.add_argument("ids", nargs="*", metavar="ID", help="approval ids")
     approvals.add_argument("--group", action="store_true", help="list: group by agent and tool")
+    approvals.add_argument(
+        "--rejected", action="store_true", help="list: rejections that still stand"
+    )
     approvals.add_argument("--agent", help="list: only this agent's approvals")
     approvals.add_argument("--tool", help="list: only this tool's approvals")
     approvals.add_argument("--yes", action="store_true", help="don't ask (for scripts)")

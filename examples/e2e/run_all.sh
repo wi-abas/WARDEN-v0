@@ -131,6 +131,11 @@ check "CLI: list pending approvals" w approvals list --group
 check "CLI: approve the delete" w approvals approve $(pending good-agent delete_file) --yes
 check "CLI: reject the email" w approvals reject $(pending good-agent send_email) --yes
 step good_agent.py retry
+header "3b2. sticky rejection: the human lifts it, the agent may ask again"
+rejected() { "$PY" "$HERE/e2e_common.py" rejected "$@"; }
+check "CLI: list standing rejections" w approvals list --rejected
+check "CLI: lift the email rejection" w approvals lift $(rejected good-agent send_email) --yes
+step good_agent.py ask_again
 header "3c. group decisions are all or nothing"
 deletes=($(pending good-agent delete_file))
 emails=($(pending good-agent send_email))

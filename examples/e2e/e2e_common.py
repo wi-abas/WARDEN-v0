@@ -8,8 +8,8 @@ run_all.sh starts a real Warden server and sets these environment variables:
 Every check prints one line, "PASS  name" or "FAIL  name"; run_all.sh counts them.
 A script that crashes is counted as a failure by run_all.sh.
 
-Also a tiny command for run_all.sh: `python e2e_common.py pending AGENT [TOOL]` prints the
-ids of that agent's pending approvals.
+Also tiny commands for run_all.sh: `python e2e_common.py pending|rejected AGENT [TOOL]`
+prints the ids of that agent's pending approvals (or standing rejections).
 """
 
 import http.client
@@ -103,6 +103,12 @@ def pending(agent: str, tool: str | None = None) -> list[dict[str, Any]]:
     return items if status == 200 and isinstance(items, list) else []
 
 
+def rejected(agent: str, tool: str | None = None) -> list[dict[str, Any]]:
+    query = {"status": "rejected", "agent_id": agent, **({"tool": tool} if tool else {})}
+    status, items, _ = admin("GET", "/v1/approvals?" + urllib.parse.urlencode(query))
+    return items if status == 200 and isinstance(items, list) else []
+
+
 def wait_for_pending(
     agent: str, tool: str, match: dict[str, Any], timeout: float = 10.0
 ) -> dict[str, Any] | None:
@@ -128,8 +134,9 @@ def decide(item: dict[str, Any] | None, approve: bool) -> int:
 
 
 if __name__ == "__main__":
-    if len(sys.argv) in (3, 4) and sys.argv[1] == "pending":
+    if len(sys.argv) in (3, 4) and sys.argv[1] in ("pending", "rejected"):
         tool = sys.argv[3] if len(sys.argv) == 4 else None
-        print(" ".join(item["approval_id"] for item in pending(sys.argv[2], tool)))
+        lister = pending if sys.argv[1] == "pending" else rejected
+        print(" ".join(item["approval_id"] for item in lister(sys.argv[2], tool)))
     else:
-        sys.exit("usage: e2e_common.py pending AGENT [TOOL]")
+        sys.exit("usage: e2e_common.py pending|rejected AGENT [TOOL]")

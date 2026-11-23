@@ -12,6 +12,8 @@ Admin only (header "X-Warden-Admin-Key", printed in the terminal at startup):
 - GET  /v1/approvals?group=true       -> the same, grouped by (agent_id, tool)
 - POST /v1/approvals/decide           -> approve or deny several by id, all or nothing
 - GET  /v1/approvals?ids=A,B&agent_id=X&tool=Y -> only those (narrows the view only)
+- GET  /v1/approvals?status=rejected  -> rejections that still stand (no arguments)
+- POST /v1/approvals/{id}/lift        -> lift a rejection: the agent may ask again
 
 Every decision is written to the audit log before it is returned. If the
 audit log can't be written, the answer is deny (503): no unrecorded allows.
@@ -38,7 +40,7 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 import uvicorn
 import uvicorn.config
@@ -391,6 +393,8 @@ class _Warden:
     def __post_init__(self) -> None:
         if self.limiter is None:
             self.limiter = RateLimiter(self.policy.limits)
+        # How long a human "no" sticks, per agent, from the policy's limits.
+        self.approvals.rejection_window = self.policy.limits.rejection_window_seconds
 
     # --- Access control and rejected requests ------------------------------------------
 
@@ -523,17 +527,21 @@ class _Warden:
 
     def list_approvals(
         self,
+        request: Request,
         group: bool = False,
+        status: Literal["pending", "rejected"] = "pending",
         ids: Annotated[str | None, Query(pattern=IDS_QUERY_PATTERN)] = None,
         agent_id: Annotated[str | None, Query(pattern=AGENT_ID_PATTERN)] = None,
         tool: Annotated[str | None, Query(pattern=TOOL_NAME_PATTERN)] = None,
-    ) -> JsonValue:
+    ) -> JsonValue | JSONResponse:
         """Pending approvals, every one in full. With group=true: grouped by
         (agent_id, tool), never just a count (see docs/design/group-approvals.md).
 
         `ids` (comma-separated, at most 100), `agent_id` and `tool` only narrow what is
         SHOWN, so a reviewer can still see and decide a few approvals while an agent
         floods the queue. Decisions still take exact ids; unknown ids are just absent.
+
+        status=rejected: the rejections that still stand (no arguments: none are kept).
         """
         wanted = set(ids.split(",")) if ids else None
 
@@ -544,6 +552,14 @@ class _Warden:
                 and (tool is None or a.tool == tool)
             )
 
+        if status == "rejected":
+            if group:
+                return self.reject(request, 422, "group is only for pending approvals")
+            return [
+                _rejection_item(a, left, since)
+                for a, left, since in self.approvals.rejections()
+                if shown(a)
+            ]
         if not group:
             return [_approval_item(a, left) for a, left in self.approvals.pending() if shown(a)]
         groups: list[JsonValue] = []
@@ -627,6 +643,63 @@ class _Warden:
             )
         logger.info("approval %s", status)  # never log the id or arguments
         return JSONResponse(content={"approval_id": approval_id, "status": status.value})
+
+    def lift(self, approval_id: str, request: Request) -> JSONResponse:
+        """Lift a rejection, audited BEFORE it takes effect: if the audit write fails,
+        the rejection stays. Lifting only lets the agent ask again; what it asks for is
+        an ordinary pending approval that a human must approve after seeing it."""
+        audited = False
+
+        def audit_first(approval: Approval) -> None:
+            nonlocal audited
+            self.audit_log.record_event(
+                AuditEvent.now(
+                    EventKind.APPROVAL_REJECTION_LIFTED,
+                    "rejection lifted by admin",
+                    approval_id=approval.approval_id,
+                    agent_id=approval.agent_id,
+                    tool=approval.tool,
+                    action_hash=approval.action_hash,
+                )
+            )
+            audited = True
+
+        try:
+            self.approvals.lift(approval_id, before_commit=audit_first)
+        except DecideError as exc:
+            code = 404 if exc.not_found else 409
+            reason = "rejection not found" if exc.not_found else "not a rejection (nothing to lift)"
+            self._record_event_safely(
+                AuditEvent.now(
+                    EventKind.APPROVAL_DECIDE_FAILED,
+                    reason,
+                    http_status=code,
+                    method=request.method,
+                    path=request.url.path,
+                    approval_id=approval_id
+                    if re.fullmatch(APPROVAL_ID_PATTERN, approval_id)
+                    else None,
+                )
+            )
+            return JSONResponse(status_code=code, content={"error": reason})
+        except Exception as exc:
+            logger.error("rejection not lifted, audit or save failed: %s", type(exc).__name__)
+            if audited:
+                self._record_event_safely(
+                    AuditEvent.now(
+                        EventKind.APPROVAL_DECIDE_FAILED,
+                        "lift NOT applied (approval storage failed), the rejection stands",
+                        http_status=503,
+                        method=request.method,
+                        path=request.url.path,
+                        approval_id=approval_id,  # known: the store found it
+                    )
+                )
+            return JSONResponse(
+                status_code=503, content={"error": "audit log unavailable, nothing changed"}
+            )
+        logger.info("rejection lifted")  # never log the id or arguments
+        return JSONResponse(content={"approval_id": approval_id, "status": "lifted"})
 
     def _audit_human_decision(self, approval: Approval, new_status: Status) -> None:
         """Runs BEFORE the approval changes. If this write fails, decide() raises and
@@ -740,6 +813,19 @@ def _approval_item(a: Approval, seconds_left: float) -> dict[str, JsonValue]:
     }
 
 
+def _rejection_item(a: Approval, seconds_left: float, since: float) -> dict[str, JsonValue]:
+    """One standing rejection. No arguments: they are never kept for rejections."""
+    rejected_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - since))
+    return {
+        "approval_id": a.approval_id,
+        "agent_id": a.agent_id,
+        "tool": a.tool,
+        "action_hash": a.action_hash,
+        "rejected_at": rejected_at,
+        "expires_in_seconds": int(seconds_left),
+    }
+
+
 def _decision_event(approval: Approval, new_status: Status) -> AuditEvent:
     """The audit event for one human decision. approval.status is still the OLD one."""
     kind = (
@@ -830,7 +916,7 @@ def create_app(
     admin = [Depends(w.require_admin)]
     app.get("/health")(w.health)
     app.post("/v1/evaluate", response_model=EvaluationResult)(w.evaluate)
-    app.get("/v1/approvals", dependencies=admin)(w.list_approvals)
+    app.get("/v1/approvals", dependencies=admin, response_model=None)(w.list_approvals)
     app.post("/v1/approvals/decide", dependencies=admin)(w.decide_group)
 
     @app.post("/v1/approvals/{approval_id}/approve", dependencies=admin)
@@ -844,6 +930,10 @@ def create_app(
         approval_id: str, request: Request, body: SingleDecision | None = None
     ) -> JSONResponse:
         return w.decide(approval_id, approve=False, request=request, body=body)
+
+    @app.post("/v1/approvals/{approval_id}/lift", dependencies=admin)
+    def lift(approval_id: str, request: Request) -> JSONResponse:
+        return w.lift(approval_id, request=request)
 
     return app
 

@@ -45,5 +45,10 @@ if __name__ == "__main__":
         again = "pending"
     except NotAllowed as error:
         again = f"blocked: {error.answer.reason}"
-    check("sdk: retry after a rejection asks again (doesn't run)", again == "pending", again)
+    # Sticky rejection: the same action is refused for the rejection window.
+    check(
+        "sdk: retry after a rejection is refused (sticky, doesn't run)",
+        again.startswith("blocked: rejected by a human; this exact action is refused until"),
+        again,
+    )
     check("sdk: only the approved call ran", RAN == ["/workspace/sdk-ok.txt"], RAN)
