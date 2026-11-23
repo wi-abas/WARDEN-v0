@@ -247,6 +247,8 @@ Each of these is covered by tests in `tests/`.
 - **Warden is a checkpoint, not a sandbox.** An agent can skip asking. The MCP proxy and
   the SDK enforce the answer only for calls that go through them.
 - **Nested conditions don't search lists**, and argument lists only cover top-level names.
+- **Argument lists check names, not types.** An argument's type is only checked when a
+  rule's condition compares it.
 - **Text checks see text.** Paths and emails are checked for common tricks (`//`, `/./`,
   `/../`, backslashes; spaces, display names, recipient lists, trailing dots), but Warden
   doesn't resolve symlinks or URL-decode. Prefer "allow only..." rules for paths and emails.

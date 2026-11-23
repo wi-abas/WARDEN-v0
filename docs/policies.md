@@ -134,7 +134,11 @@ rule runs, so an agent can't slip in an argument no rule checks (like `bcc`):
 - An argument not in `arguments` → deny (`"unexpected argument"`; the name isn't echoed,
   since it comes from the agent).
 - A name in `required` that's missing → deny (`"missing required argument 'to'"`).
-- Tools without an entry work as before. Names only for now, not types.
+- Tools without an entry work as before.
+- **Argument lists check names, not types.** `"subject": {"x": [1, 2]}` or `"body": 5`
+  passes the list above. A value's type is only checked when a rule's condition compares
+  that argument (a wrong type there denies the request). So every argument whose value
+  matters needs a condition. Types in argument lists are planned.
 
 ## Rate limits and approval quotas
 
