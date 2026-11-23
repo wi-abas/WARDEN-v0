@@ -121,7 +121,9 @@ def main(argv: list[str] | None = None) -> int:
             )
     proxy = commands.add_parser("proxy", help="run an MCP server behind Warden")
     proxy.add_argument("--config", type=Path, help="proxy config file (JSON)")
-    proxy.add_argument("--warden-url", help="default http://127.0.0.1:8000")
+    proxy.add_argument(
+        "--warden-url", help="default: config file, then WARDEN_URL, then http://127.0.0.1:8000"
+    )
     proxy.add_argument("--agent-id", help="agent id sent to Warden (default mcp-proxy)")
     proxy.add_argument("--tool-prefix", help='put in front of tool names, e.g. "github."')
     proxy.add_argument("--approval", choices=["wait", "error"], help="default wait")
@@ -273,7 +275,13 @@ def run_proxy(args: argparse.Namespace) -> int:
     logging.basicConfig(stream=sys.stderr, level=logging.INFO, format="warden proxy: %(message)s")
     server = args.server[1:] if args.server[:1] == ["--"] else args.server
     try:
-        data = load_config(args.config).model_dump() if args.config else {}
+        loaded = load_config(args.config) if args.config else None
+        data = loaded.model_dump() if loaded else {}
+        # Where Warden is: --warden-url, then warden_url in the config file (the
+        # specific, reviewed setting for this proxy), then WARDEN_URL, then the default.
+        env_url = os.environ.get("WARDEN_URL")
+        if env_url and (loaded is None or "warden_url" not in loaded.model_fields_set):
+            data["warden_url"] = env_url
         overrides = {
             "warden_url": args.warden_url,
             "agent_id": args.agent_id,
