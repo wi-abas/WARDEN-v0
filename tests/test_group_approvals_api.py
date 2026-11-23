@@ -90,6 +90,7 @@ def test_list_without_group_is_unchanged(client: TestClient) -> None:
             "warnings",
             "action_hash",
             "expires_in_seconds",
+            "age_seconds",
         }
 
 
