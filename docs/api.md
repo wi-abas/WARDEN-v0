@@ -22,10 +22,10 @@ curl -s -X POST http://127.0.0.1:8000/v1/evaluate \
 |---|---|
 | `GET /health` | `{"status": "ok", "rules_loaded": 4}`, or HTTP 503 `"degraded"` when no rules loaded (broken or empty policy file: everything is denied). |
 | `POST /v1/evaluate` | Send an action, get a decision. With agent tokens, needs `Authorization: Bearer <token>` (401/403 otherwise). Over the agent's rate limit: 429 with `Retry-After`. |
-| `GET /v1/approvals` | Admin: list pending approvals, with their arguments. |
+| `GET /v1/approvals` | Admin: pending approvals, with their arguments, as a JSON list. |
 | `POST /v1/approvals/{id}/approve` | Admin: approve one (once). |
 | `POST /v1/approvals/{id}/deny` | Admin: deny one (once). |
-| `GET /v1/approvals?group=true` | Admin: the same list, grouped by agent and tool. |
+| `GET /v1/approvals?group=true` | Admin: the same, grouped by agent and tool: `{"groups": [...]}`. |
 | `GET /v1/approvals?ids=A,B&agent_id=X&tool=Y` | Admin: only those approvals (any filter can be left out; up to 100 ids). Narrows what is shown, never what is decided. |
 | `POST /v1/approvals/decide` | Admin: approve or reject several by id, all or nothing. |
 
@@ -49,6 +49,18 @@ tool and arguments, checked via `action_hash`), and **expires after 15 minutes**
 never turn a `deny` into `allow`. Each approval can be decided only once, with one
 exception: an approved approval the agent hasn't used yet can still be **revoked** with
 `/deny`.
+
+Plain `GET /v1/approvals` answers with a **list**, one item per pending approval:
+
+```json
+[{"approval_id": "JSr4DnD0vXhHMGkgs8llrFvinrli1d1a", "agent_id": "agent-1", "tool": "write_file",
+  "arguments": {"path": "/workspace/a.txt", "content": "hi"}, "warnings": [],
+  "action_hash": "dc3a4297...", "expires_in_seconds": 899}]
+```
+
+With `?group=true` the same items come wrapped in an **object**, `{"groups": [...]}`, one
+group per agent and tool (see [Several at once](#several-at-once-group-approvals)).
+Nothing pending: `[]` or `{"groups": []}`.
 
 The body `{"action_hash": "..."}` on `/approve` and `/deny` is optional: when sent, it
 must be the approval's `action_hash` (409 otherwise), which proves you listed it first.
