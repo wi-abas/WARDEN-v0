@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-from helpers import BASIC_POLICY, live_server, shown_hashes
+from helpers import BASIC_POLICY, live_server, shown, shown_hashes
 
 from warden import approvals_cli
 from warden.api import create_app
@@ -255,7 +255,11 @@ def test_single_decision_storage_failure_after_audit_is_recorded(
         raise sqlite3.OperationalError("database is locked")
 
     monkeypatch.setattr(db, "save_many", locked)
-    response = client.post(f"/v1/approvals/{approval_id}/{action}", headers=ADMIN)
+    response = client.post(
+        f"/v1/approvals/{approval_id}/{action}",
+        headers=ADMIN,
+        json=shown(client, approval_id, ADMIN),
+    )
     assert response.status_code == 503
     assert store._items[approval_id].status is Status.PENDING
     kinds = [e.kind for e in reversed(log.recent_events())]

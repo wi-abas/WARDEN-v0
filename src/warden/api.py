@@ -7,11 +7,13 @@ Endpoints:
 
 Admin only (header "X-Warden-Admin-Key", printed in the terminal at startup):
 - GET  /v1/approvals                  -> pending approvals, with their arguments
-- POST /v1/approvals/{id}/approve     -> approve one (once)
-- POST /v1/approvals/{id}/deny        -> deny one (once)
+- POST /v1/approvals/{id}/approve     -> approve one (once); body {"action_hash": ...}
+- POST /v1/approvals/{id}/deny        -> deny one (once); body {"action_hash": ...},
+                                         or no body to revoke an approved, unused one
 - GET  /v1/approvals?group=true       -> the same, grouped by (agent_id, tool)
 - POST /v1/approvals/decide           -> approve or deny several by id, all or nothing
 - GET  /v1/approvals?ids=A,B&agent_id=X&tool=Y -> only those (narrows the view only)
+- GET  /v1/approvals?max_age_seconds=N -> only those asked for in the last N seconds
 - GET  /v1/approvals?status=rejected  -> rejections that still stand (no arguments)
 - POST /v1/approvals/{id}/lift        -> lift a rejection: the agent may ask again
 
@@ -286,15 +288,24 @@ def _display_safe(value: JsonValue, warnings: list[str]) -> JsonValue:
 
 
 ActionHash = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
+# ?max_age_seconds on GET /v1/approvals: at most a week (approvals live 15 minutes).
+MAX_AGE_QUERY_SECONDS = 7 * 24 * 3600
 # ?ids=A,B,C on GET /v1/approvals: 1 to MAX_GROUP approval ids, comma-separated.
 _ID = APPROVAL_ID_PATTERN.strip("^$")
 IDS_QUERY_PATTERN = rf"^{_ID}(,{_ID}){{0,{MAX_GROUP - 1}}}$"
 
 
+HASH_REQUIRED = "action_hash required: list the approvals and send the action_hash you were shown"
+HASHES_REQUIRED = (
+    "action_hashes required: list the approvals and send the action_hash you were shown for each"
+)
+
+
 class SingleDecision(BaseModel):
-    """Optional body of POST /v1/approvals/{id}/approve|deny: the action_hash the human
-    was shown. When sent, it must match the approval (proof they looked at it).
-    `{}` (and no body at all) means "no action_hash"; any other key is refused."""
+    """Body of POST /v1/approvals/{id}/approve|deny: the action_hash the human was shown,
+    which must match the approval (proof the list was fetched). Required to approve and
+    to reject a pending approval; revoking an approved one works without it (no body, or
+    `{}`; checked if sent). `{}` means "no action_hash"; any other key is refused."""
 
     # mutation-ok: strict/frozen can't matter: one string field, JSON never coerces to it
     model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
@@ -311,9 +322,9 @@ class SingleDecision(BaseModel):
 
 
 class GroupDecision(BaseModel):
-    """Body of POST /v1/approvals/decide: the exact approvals the human decides, and,
-    to approve, the action_hash shown for each (same order): you can't approve a group
-    you haven't listed."""
+    """Body of POST /v1/approvals/decide: the exact approvals the human decides, and the
+    action_hash shown for each (same order): you can't approve or reject a group you
+    haven't listed."""
 
     model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
 
@@ -332,8 +343,7 @@ class GroupDecision(BaseModel):
 
     @model_validator(mode="after")
     def hashes_fit(self) -> "GroupDecision":
-        if self.approve and self.action_hashes is None:
-            raise ValueError("approving needs action_hashes")
+        # Missing action_hashes is refused in decide_group, with a clear message.
         if self.action_hashes is not None and len(self.action_hashes) != len(self.ids):
             raise ValueError("one action_hash per id")
         return self
@@ -533,6 +543,7 @@ class _Warden:
         ids: Annotated[str | None, Query(pattern=IDS_QUERY_PATTERN)] = None,
         agent_id: Annotated[str | None, Query(pattern=AGENT_ID_PATTERN)] = None,
         tool: Annotated[str | None, Query(pattern=TOOL_NAME_PATTERN)] = None,
+        max_age_seconds: Annotated[int | None, Query(ge=1, le=MAX_AGE_QUERY_SECONDS)] = None,
     ) -> JsonValue | JSONResponse:
         """Pending approvals, every one in full. With group=true: grouped by
         (agent_id, tool), never just a count (see docs/design/group-approvals.md).
@@ -540,14 +551,20 @@ class _Warden:
         `ids` (comma-separated, at most 100), `agent_id` and `tool` only narrow what is
         SHOWN, so a reviewer can still see and decide a few approvals while an agent
         floods the queue. Decisions still take exact ids; unknown ids are just absent.
+        `max_age_seconds` narrows it to approvals asked for at most that long ago.
+
+        Promise (tested): this view shows only PENDING, UNEXPIRED approvals. Approved,
+        rejected, used and expired ones never appear here (see
+        docs/design/approval-hygiene.md), so old decisions can't be swept in again.
 
         status=rejected: the rejections that still stand (no arguments: none are kept).
         """
         wanted = set(ids.split(",")) if ids else None
 
-        def shown(a: Approval) -> bool:
+        def shown(a: Approval, age: float = 0.0) -> bool:
             return (
                 (wanted is None or a.approval_id in wanted)
+                and (max_age_seconds is None or age <= max_age_seconds)
                 and (agent_id is None or a.agent_id == agent_id)
                 and (tool is None or a.tool == tool)
             )
@@ -555,16 +572,24 @@ class _Warden:
         if status == "rejected":
             if group:
                 return self.reject(request, 422, "group is only for pending approvals")
+            if max_age_seconds is not None:
+                return self.reject(request, 422, "max_age_seconds is only for pending approvals")
             return [
                 _rejection_item(a, left, since)
                 for a, left, since in self.approvals.rejections()
                 if shown(a)
             ]
         if not group:
-            return [_approval_item(a, left) for a, left in self.approvals.pending() if shown(a)]
+            return [
+                _approval_item(a, left)
+                for a, left in self.approvals.pending()
+                if shown(a, _age(a, left))
+            ]
         groups: list[JsonValue] = []
         for (group_agent, group_tool), items in self.approvals.pending_groups():
-            kept: list[JsonValue] = [_approval_item(a, left) for a, left in items if shown(a)]
+            kept: list[JsonValue] = [
+                _approval_item(a, left) for a, left in items if shown(a, _age(a, left))
+            ]
             if kept:
                 groups.append(
                     {
@@ -596,12 +621,15 @@ class _Warden:
                 approve,
                 before_commit=audit_first,
                 expected_hash=body.action_hash if body is not None else None,
+                require_hash=True,
             )
         except DecideError as exc:
-            code = 404 if exc.not_found else 409
+            code = 404 if exc.not_found else 422 if exc.hash_required else 409
             reason = (
                 "approval not found"
                 if exc.not_found
+                else HASH_REQUIRED
+                if exc.hash_required
                 else "arguments not available yet (Warden restarted): approve after the "
                 "agent asks again"
                 if exc.no_arguments
@@ -708,6 +736,18 @@ class _Warden:
 
     def decide_group(self, body: GroupDecision, request: Request) -> JSONResponse:
         """Approve or deny several approvals of one agent and tool, all or nothing."""
+        if body.action_hashes is None:  # approving AND rejecting need what was shown
+            if self._within_rejection_limit():  # a flood of bad calls can't fill the disk
+                self._emit(
+                    AuditEvent.now(
+                        EventKind.APPROVAL_DECIDE_FAILED,
+                        f"group decision refused: {HASHES_REQUIRED}",
+                        http_status=422,
+                        method=request.method,
+                        path=request.url.path,
+                    )
+                )
+            return JSONResponse(status_code=422, content={"error": HASHES_REQUIRED})
         audited = False
 
         def audit_first(approvals: list[Approval], new_status: Status) -> None:
@@ -789,6 +829,12 @@ class _Warden:
         )
 
 
+def _age(a: Approval, seconds_left: float) -> float:
+    """Seconds since the agent asked. `seconds_left` = expires_at - now (both on the
+    store's clock), so now = expires_at - seconds_left. Never negative."""
+    return max(0.0, a.expires_at - seconds_left - a.created_at)
+
+
 def _approval_item(a: Approval, seconds_left: float) -> dict[str, JsonValue]:
     """One pending approval as shown to the human."""
     warnings: list[str] = []
@@ -810,6 +856,7 @@ def _approval_item(a: Approval, seconds_left: float) -> dict[str, JsonValue]:
         "warnings": [w for w in sorted(set(warnings))],
         "action_hash": a.action_hash,
         "expires_in_seconds": int(seconds_left),
+        "age_seconds": int(_age(a, seconds_left)),
     }
 
 

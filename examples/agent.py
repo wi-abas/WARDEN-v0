@@ -7,8 +7,8 @@ Run it (two terminals):
     1)  WARDEN_ADMIN_KEY=$(openssl rand -hex 32) \\
           uv run warden serve --policy examples/demo-policy.json
     2)  uv run python examples/agent.py
-When the agent waits for approval, approve it from a third terminal with the
-command it prints.
+When the agent waits for approval, review and approve it from a third terminal (with
+the same WARDEN_ADMIN_KEY set) with the command it prints.
 """
 
 import json
@@ -65,11 +65,10 @@ def guarded(
     answer = ask_warden(tool, arguments, url=url)
     if answer.get("decision") == "require_approval" and answer.get("approval_id"):
         approval_id = answer["approval_id"]
-        print(f"   ⏳ {answer.get('reason')}. Approve with:")
-        print(
-            f"      curl -X POST {url}/v1/approvals/{approval_id}/approve "
-            '-H "X-Warden-Admin-Key: $WARDEN_ADMIN_KEY"'
-        )
+        # The human must see the action first: `warden approvals approve` lists it,
+        # shows it and sends its action_hash (Warden refuses an approve without one).
+        print(f"   ⏳ {answer.get('reason')}. Review and approve with:")
+        print(f"      warden approvals approve {approval_id} --warden-url {url}")
         deadline = time.monotonic() + wait_seconds
         while answer.get("decision") == "require_approval":
             if time.monotonic() > deadline:

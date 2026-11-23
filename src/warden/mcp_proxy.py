@@ -526,17 +526,16 @@ class McpProxy:
         answer = await self._ask(tool, arguments, approval_id)
         settings = self.config.approval
         if answer.decision is Decision.REQUIRE_APPROVAL:
-            url = self.config.warden_url
-            key = '-H "X-Warden-Admin-Key: $WARDEN_ADMIN_KEY"'
-            # Review first: approving by id alone means approving arguments unseen. The
-            # action_hash is NOT filled in: copying it from the list proves you read it.
+            url = f"--warden-url {self.config.warden_url}"
+            # Review first: Warden refuses an approval without the action_hash from the
+            # list. `warden approvals approve` lists, shows and sends it; the hint never
+            # prints the hash itself (the human must get it from the list).
             print(
                 f"Warden: {_safe_name(tool)} needs approval (id {approval_id}).\n"
-                f"  1. Check what it would do:  curl -s {url}/v1/approvals {key}\n"
-                f"  2. Then approve:            curl -X POST "
-                f"{url}/v1/approvals/{approval_id}/approve {key} "
-                "-H 'content-type: application/json' "
-                """-d '{"action_hash": "<action_hash from step 1>"}'""",
+                "  1. Check what it would do:  warden approvals list "
+                f"--agent {self.config.agent_id} {url}\n"
+                f"  2. Then approve it:         warden approvals approve {approval_id} {url}\n"
+                "  (both need WARDEN_ADMIN_KEY; with curl, see docs/mcp-proxy.md)",
                 file=sys.stderr,
             )
         if settings.mode == "error" and answer.decision is Decision.REQUIRE_APPROVAL:

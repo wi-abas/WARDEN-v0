@@ -36,3 +36,11 @@ def shown_hashes(store: Any, ids: list[str]) -> list[str]:
     """The action_hash a human would have been shown for each id (as `warden approvals`
     sends them). Unknown ids get a dummy hash: they fail as "not found" anyway."""
     return [store._items[i].action_hash if i in store._items else "0" * 64 for i in ids]
+
+
+def shown(client: Any, approval_id: str, headers: dict[str, str]) -> dict[str, str]:
+    """The body a human sends to /approve or /deny after listing: {"action_hash": the
+    hash the list showed}. {} when it isn't listed (not pending): revoking an approved
+    approval needs no hash, and anything else is refused before the hash matters."""
+    items = client.get("/v1/approvals", headers=headers, params={"ids": approval_id}).json()
+    return {"action_hash": items[0]["action_hash"]} if items else {}

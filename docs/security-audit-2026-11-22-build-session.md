@@ -74,7 +74,7 @@ script before fixing, and each fix has a test that fails without it.
 |---|---|---|
 | **Critical (by design)** | **Enforcement only where Warden is in the path.** A client configured to reach the MCP server directly, or code calling an undecorated function, bypasses Warden. | Proxy and SDK are opt-in. A sandbox is out of scope. |
 | High | **Agent tokens are optional.** Without `--agents`, any local process can be any agent and dodge per-agent limits with new ids (up to 10,000 tracked). | Recommend `--agents` everywhere; maybe make it the default in a later release. |
-| Medium | **Approving by id alone is still possible.** The admin API doesn't require having listed the approval; after a restart it does (no blind approvals), otherwise it relies on the human. | Per-person approval UI (Slack, dashboard) planned. |
+| Medium | **Approving by id alone is still possible.** The admin API doesn't require having listed the approval; after a restart it does (no blind approvals), otherwise it relies on the human. | **Fixed in v0.4** (approval hygiene): `action_hash` from the list is required to approve, to reject a pending approval, and for group rejects; only revoking stays bodiless. Per-person approval UI (Slack, dashboard) still planned. |
 | Medium | **One shared admin key**; no record of which person approved. | Unchanged. |
 | Medium | **Audit chain is tamper-evident, not tamper-proof.** A full rewrite or cutting the newest rows is only caught with an outside copy of the head hashes. Approval state in the same file can be edited by whoever can write it. | No signing key (a key on the same disk adds little). |
 | Low | Proxy forwards `_meta` and server→client requests (sampling, roots, elicitation) unchecked; stdio transport only. | Documented. |

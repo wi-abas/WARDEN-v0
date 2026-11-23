@@ -11,6 +11,7 @@ import pytest
 import uvicorn
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from helpers import shown
 
 from warden.api import create_app
 from warden.audit import SQLiteAuditLog
@@ -57,7 +58,9 @@ def test_agent_runs_allowed_blocks_denied_and_waits_for_approval(
             if pending:
                 approval_id = pending[0]["approval_id"]
                 admin.post(
-                    f"/v1/approvals/{approval_id}/approve", headers={"X-Warden-Admin-Key": KEY}
+                    f"/v1/approvals/{approval_id}/approve",
+                    headers={"X-Warden-Admin-Key": KEY},
+                    json=shown(admin, approval_id, {"X-Warden-Admin-Key": KEY}),
                 )
                 return
             time.sleep(0.01)

@@ -2,7 +2,21 @@
 
 ## Unreleased
 
-### Breaking
+### Breaking (v0.4)
+- **`action_hash` required** to decide what you haven't listed:
+  - `POST /v1/approvals/{id}/approve` needs the body `{"action_hash": "..."}`.
+  - `POST /v1/approvals/{id}/deny` on a **pending** approval needs it too. Revoking an
+    approved, unused approval still works with no body (or `{}`); a sent hash is checked.
+  - `POST /v1/approvals/decide` needs `action_hashes` for reject too (it already did for
+    approve).
+  - Missing: HTTP 422 `{"error": "action_hash required: list the approvals and send the
+    action_hash you were shown"}` (`action_hashes required: ...` for groups); nothing
+    changes and the refusal is audited. Wrong hash: 409, as before.
+- **Migration**: scripts that call `/approve` or `/deny` without a body should list
+  first (`GET /v1/approvals`) and send the `action_hash` from that list, or use
+  `warden approvals approve|reject ID`, which does both (unchanged for CLI users). The
+  MCP proxy and `examples/agent.py` now print `warden approvals list` / `approve`
+  instead of a bodiless curl; they never print the hash.
 - **`host_in` only accepts `http` and `https` URLs by default.** A URL with another
   scheme (`ftp://`, `gopher://`, `file://`, `ws://`, `git://`, ...) can't be checked and
   denies the whole request, for allow and deny rules alike (no protocol smuggling to an
@@ -12,6 +26,13 @@
   are now denied wherever a rule compares URLs (`host_in` and text ops on URLs).
 
 ### Added
+- **Approval hygiene**: `GET /v1/approvals` items carry `age_seconds`;
+  `?max_age_seconds=N` (and `warden approvals list --max-age MINUTES`) shows only recent
+  ones. The default list showing only pending, unexpired approvals is now a tested
+  promise. The CLI prints "asked 8 min ago".
+- `warden approvals approve` warns when the chosen ids span separate runs (asked more
+  than 2 minutes apart), prints each run and asks about all of them; with `--yes` it
+  refuses unless `--across-runs` is also given. Rejecting is never blocked.
 - **`otherwise` on a rule**: one rule, two outcomes. `effect` when every `when`
   condition holds, `otherwise` when one doesn't or its argument is missing. It must be
   stricter than `effect` and needs a non-empty `when` (load errors), so it can never
