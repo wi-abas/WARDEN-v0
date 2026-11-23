@@ -1,8 +1,8 @@
 # Changelog
 
-## Unreleased
+## v0.4.0 (2026-11-24, alpha)
 
-### Breaking (v0.4)
+### Changed
 - **`action_hash` required** to decide what you haven't listed:
   - `POST /v1/approvals/{id}/approve` needs the body `{"action_hash": "..."}`.
   - `POST /v1/approvals/{id}/deny` on a **pending** approval needs it too. Revoking an
