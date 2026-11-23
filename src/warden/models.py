@@ -59,16 +59,29 @@ class _ActionFields(BaseModel):
     def numbers_are_finite(cls, arguments: dict[str, JsonValue]) -> dict[str, JsonValue]:
         # JSON parsers accept 1e400 (infinity) and NaN, but they have no exact JSON
         # form, so the action can't be fingerprinted. Reject them as bad input.
+        # Same for a lone surrogate ("\ud800" in JSON, in a value or a key): it is not
+        # real text and has no UTF-8 form. The error text never quotes the input.
         stack: list[JsonValue] = [arguments]
         while stack:
             value = stack.pop()
             if isinstance(value, float) and not isfinite(value):
                 raise ValueError("numbers must be finite (no infinity or NaN)")
+            if isinstance(value, str) and _has_lone_surrogate(value):
+                raise ValueError("text must be valid Unicode (no lone surrogates)")
             if isinstance(value, dict):
+                stack.extend(value.keys())
                 stack.extend(value.values())
             elif isinstance(value, list):
                 stack.extend(value)
         return arguments
+
+
+def _has_lone_surrogate(text: str) -> bool:
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        return True
+    return False
 
 
 class ActionRequest(_ActionFields):

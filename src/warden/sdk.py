@@ -70,10 +70,13 @@ def freeze(arguments: dict[str, Any]) -> dict[str, JsonValue] | None:
     """A deep, JSON-only copy of `arguments`, or None if they aren't plain JSON values.
 
     This one copy is both checked and executed. JSON is the format Warden checks, so a
-    value with no exact JSON form (an object, a set, NaN) can't be checked at all.
+    value with no exact JSON form (an object, a set, NaN, text with a lone surrogate such
+    as "\\ud800") can't be checked at all.
     """
     try:
-        copy = json.loads(json.dumps(arguments, allow_nan=False))
+        text = json.dumps(arguments, allow_nan=False, ensure_ascii=False)
+        text.encode("utf-8")  # UnicodeEncodeError (a ValueError) on a lone surrogate
+        copy = json.loads(text)
     except (TypeError, ValueError, RecursionError):  # RecursionError: nested too deeply
         return None
     return cast(dict[str, JsonValue], copy)
