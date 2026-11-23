@@ -80,7 +80,7 @@ def test_explicit_streams_are_used(monkeypatch: pytest.MonkeyPatch) -> None:
     """stdin/out/err given to run() are the ones used (not the process's own)."""
     monkeypatch.setattr("sys.stdin", io.StringIO("y\n"))  # must NOT be read
     code, out, err = run(monkeypatch, [item(ID1)], args("reject", ID1), stdin="n\n")
-    assert code == 1 and "Reject these 1 actions? [y/N]" in out and "Nothing changed." in out
+    assert code == 1 and "Reject this action? [y/N]" in out and "Nothing changed." in out
     code, _, err = run(monkeypatch, [], args("list", "x"))
     assert code == 2 and "takes no ids" in err
 

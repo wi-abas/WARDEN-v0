@@ -259,7 +259,8 @@ def _decide(
         )
         return 1
     verb = "Approve" if approve else "Reject"
-    if not yes and not _confirm(f"{verb} these {len(ids)} actions?", stdin, out):
+    question = f"{verb} this action?" if len(ids) == 1 else f"{verb} these {len(ids)} actions?"
+    if not yes and not _confirm(question, stdin, out):
         print("Nothing changed.", file=out)
         return 1
     # The hashes of what was just shown: Warden refuses the decision if any differs.
@@ -268,7 +269,8 @@ def _decide(
     status, data = _call(url, key, "POST", "/v1/approvals/decide", body)
     if status == 200 and isinstance(data, dict):
         done = "Approved" if approve else "Rejected"
-        print(f"{done} {_text(data.get('count'))} actions.", file=out)
+        count = data.get("count")
+        print(f"{done} {_text(count)} action{'' if count == 1 else 's'}.", file=out)
         return 0
     if status == 401:
         raise PermissionError("WARDEN_ADMIN_KEY is wrong (Warden refused it)")
