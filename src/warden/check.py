@@ -31,6 +31,9 @@ Warnings: the policy loads, but probably doesn't do what you meant:
         agent ids are case-sensitive, so these are two different agents.
 - W016  a rule with "otherwise" uses neq or missing in "when": a double negative
         ("allow unless the value isn't X") is hard to read and easy to get backwards.
+- W017  two host_in conditions on the same argument of the same tool accept different
+        URL schemes: a URL outside either list is uncheckable for that rule and denies
+        the whole request, even if the other rule would allow it.
 - W008  an email-domain check ("...@example.com") is case-sensitive, so
         "x@EXAMPLE.com" slips past it. Add "ignore_case": true.
 
@@ -63,12 +66,13 @@ class Report:
     tools: int = 0
 
 
-_CondKey = frozenset[tuple[tuple[str, ...], str, str, bool]]
+_CondKey = frozenset[tuple[tuple[str, ...], str, str, bool, tuple[str, ...] | None]]
 
 
 def _conditions_key(rule: Rule) -> _CondKey:
     return frozenset(
-        (c.path, c.op.value, json.dumps(c.value, sort_keys=True), c.ignore_case) for c in rule.when
+        (c.path, c.op.value, json.dumps(c.value, sort_keys=True), c.ignore_case, c.schemes)
+        for c in rule.when
     )
 
 
@@ -235,11 +239,34 @@ def _warnings(policy: Policy) -> list[str]:
                     f'the argument list for "{rule.tool}" (typo?).'
                 )
 
+    out += _scheme_warnings(by_tool)
+
     for tool in sorted(policy.tools):
         if tool not in by_tool:
             out.append(
                 f'W006: tool "{tool}" has an argument list but no rules, so it\'s always denied.'
             )
+    return out
+
+
+def _scheme_warnings(by_tool: dict[str, list[Rule]]) -> list[str]:
+    """W017: host_in conditions on one argument of one tool with different schemes."""
+    out: list[str] = []
+    for tool, tool_rules in sorted(by_tool.items()):
+        seen: dict[tuple[str, ...], tuple[str, tuple[str, ...]]] = {}
+        for rule in tool_rules:
+            for c in rule.when:
+                if c.op is not Op.HOST_IN:
+                    continue
+                schemes = tuple(sorted(c.url_schemes))
+                first = seen.setdefault(c.path, (rule.id, schemes))
+                if first[1] != schemes:
+                    out.append(
+                        f'W017: rules "{first[0]}" and "{rule.id}" check "{c.label}" of '
+                        f'"{tool}" with host_in but accept different URL schemes '
+                        f"({', '.join(first[1])} vs {', '.join(schemes)}); a URL outside "
+                        f"either list denies the whole request. Use the same 'schemes'."
+                    )
     return out
 
 

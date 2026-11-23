@@ -41,6 +41,11 @@ MAX_IN_VALUES = 100
 MAX_RULE_AGENTS = 100
 # A host name as written in a policy: lowercase ASCII (use punycode "xn--..." for
 # international names), optionally starting with "." to include subdomains.
+# A URL scheme in a host_in condition's "schemes" list, e.g. "https" or "wss".
+SCHEME_PATTERN = r"^[a-z][a-z0-9+.\-]{0,31}$"
+MAX_SCHEMES = 10
+# What host_in accepts when the condition has no "schemes".
+DEFAULT_URL_SCHEMES = ("http", "https")
 HOST_PATTERN = r"^\.?[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$"
 
 
@@ -124,8 +129,8 @@ class Op(StrEnum):
     ENDSWITH = "endswith"
     EXISTS = "exists"  # the argument is present (takes no value)
     MISSING = "missing"  # the argument is absent (takes no value)
-    # The URL's real host is one of these (any scheme/port/case). ".x.com" = x.com
-    # and any subdomain of it.
+    # The URL's real host is one of these (any port/case). ".x.com" = x.com and any
+    # subdomain of it. Only http/https URLs, unless the condition lists "schemes".
     HOST_IN = "host_in"
     # The text argument contains this text (or any of a list of texts). Compares text,
     # not meaning ("rm -fr" doesn't contain "rm -rf"): only for deny / require_approval.
@@ -210,10 +215,48 @@ class Condition(BaseModel):
     value: JsonValue = None  # required for every op except exists / missing
     # Compare text without caring about upper/lower case, e.g. email domains.
     ignore_case: bool = False
+    # host_in only: the URL schemes this condition accepts (replaces http + https).
+    # A URL with any other scheme can't be checked: the whole request is denied.
+    schemes: Annotated[
+        tuple[Annotated[str, Field(pattern=SCHEME_PATTERN)], ...] | None,
+        WithJsonSchema(
+            {
+                "type": "array",
+                "items": {"type": "string", "pattern": SCHEME_PATTERN},
+                "minItems": 1,
+                "maxItems": MAX_SCHEMES,
+                "uniqueItems": True,
+                "title": "Schemes",
+            }
+        ),
+    ] = Field(default=None, min_length=1, max_length=MAX_SCHEMES)
+
+    @field_validator("schemes", mode="before")
+    @classmethod
+    def schemes_not_null(cls, value: object) -> object:
+        if value is None:
+            raise ValueError(
+                "'schemes' must be a list of URL schemes (leave it out for http/https)"
+            )
+        return tuple(value) if isinstance(value, list) else value
+
+    @field_validator("schemes")
+    @classmethod
+    def schemes_are_unique(cls, schemes: tuple[str, ...] | None) -> tuple[str, ...] | None:
+        if schemes is not None and len(set(schemes)) != len(schemes):
+            raise ValueError("'schemes' lists a scheme twice")
+        return schemes
+
+    @property
+    def url_schemes(self) -> tuple[str, ...]:
+        """The schemes a host_in condition accepts."""
+        return self.schemes if self.schemes is not None else DEFAULT_URL_SCHEMES
 
     @model_validator(mode="after")
     def value_fits_op(self) -> "Condition":
         # Catch policy mistakes at load time, e.g. "gt" with a text value.
+        if self.schemes is not None and self.op is not Op.HOST_IN:
+            raise ValueError("'schemes' only works with 'host_in'")
         if self.op in PRESENCE_OPS and self.value is not None:
             raise ValueError(f"'{self.op}' takes no value")
         if self.op in NUMBER_OPS and not is_number(self.value):

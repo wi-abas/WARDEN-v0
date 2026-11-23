@@ -80,6 +80,7 @@ _UNCLEAN_PATH = "not a clean path: '..', '.', '//', '%', backslash or edge space
 _UNCLEAN_URL = "not a clean URL"
 _UNCLEAN_EMAIL = "not one plain email address"
 _UNCLEAN_HOST = "not a clean host name"
+_SCHEME_NOT_ALLOWED = "URL scheme not accepted by the rule"
 
 
 def _comparable(a: JsonValue, b: JsonValue) -> bool:
@@ -153,6 +154,12 @@ def _is_clean_path(text: str) -> bool:
     return not any(segment and not segment.strip(". ") for segment in segments)
 
 
+def _valid_port(port: str) -> bool:
+    """1 to 65535 in plain ASCII digits, no leading zero. Libraries disagree about what
+    ":0", ":99999" or ":0443" reach (an error, a truncated number, the default port)."""
+    return port.isascii() and port.isdigit() and not port.startswith("0") and int(port) <= 65535
+
+
 def _is_clean_url(text: str) -> bool:
     """scheme://host[:port]/clean/path, with no tricks in the host part.
 
@@ -171,11 +178,11 @@ def _is_clean_url(text: str) -> bool:
     # but don't match it as text. Allowed: name, name:port, [ipv6], [ipv6]:port.
     if host.startswith("["):
         name, bracket, after = host[1:].partition("]")
-        if not bracket or not name or (after and not (after[0] == ":" and after[1:].isdigit())):
+        if not bracket or not name or (after and not (after[0] == ":" and _valid_port(after[1:]))):
             return False
     else:
         name, colon, port = host.partition(":")
-        if colon and not port.isdigit():
+        if colon and not _valid_port(port):
             return False
         if name.endswith("."):
             return False
@@ -304,6 +311,12 @@ def _holds(condition: Condition, arguments: dict[str, JsonValue]) -> bool:
         if not isinstance(actual, str) or not isinstance(expected, list):
             raise _UncheckableArgument(condition.label)
         host = _url_host(actual, condition)
+        # Only web URLs by default: "ftp://", "gopher://" or "file://" to an allowed host
+        # is not what a host allow list means, and a deny rule must not be dodged by an
+        # odd scheme either. So another scheme is uncheckable (whole request denied).
+        scheme = actual.split("://", 1)[0]
+        if not scheme.isascii() or scheme.lower() not in condition.url_schemes:
+            raise _UncheckableArgument(condition.label, _SCHEME_NOT_ALLOWED)
         return any(
             host == entry or (entry.startswith(".") and (host == entry[1:] or host.endswith(entry)))
             for entry in expected
