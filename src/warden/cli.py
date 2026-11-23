@@ -17,8 +17,8 @@ warden agent add ID     create an agent token (printed once; only its hash is st
 warden agent list | remove ID     manage the agents file (--agents FILE)
 warden audit verify [--audit-db FILE] [--expect FILE]   check the audit log's hash chain
 warden audit head [--audit-db FILE]     print a checkpoint to keep elsewhere
-warden approvals list [--group] [--agent A] [--tool T]  pending approvals, in full
-warden approvals approve|reject ID [ID ...] [--yes]
+warden approvals list [--group] [--agent A] [--tool T] [--max-age MIN]  pending, in full
+warden approvals approve|reject ID [ID ...] [--yes] [--across-runs]
 warden approvals list --rejected / lift ID [--yes]   standing rejections / lift one
                        decide exactly these, all or nothing (needs WARDEN_ADMIN_KEY)
 warden proxy --config FILE
@@ -82,7 +82,15 @@ def main(argv: list[str] | None = None) -> int:
     )
     approvals.add_argument("--agent", help="list: only this agent's approvals")
     approvals.add_argument("--tool", help="list: only this tool's approvals")
+    approvals.add_argument(
+        "--max-age", type=int, metavar="MINUTES", help="list: only those asked for recently"
+    )
     approvals.add_argument("--yes", action="store_true", help="don't ask (for scripts)")
+    approvals.add_argument(
+        "--across-runs",
+        action="store_true",
+        help="approve --yes: allow ids from separate agent runs (more than 2 min apart)",
+    )
     approvals.add_argument("--warden-url", help="default WARDEN_URL or http://127.0.0.1:8000")
     init = commands.add_parser("init", help="create a starter policy file")
     init.add_argument("policy", nargs="?", type=Path, default=DEFAULT_POLICY_PATH)

@@ -22,11 +22,12 @@ curl -s -X POST http://127.0.0.1:8000/v1/evaluate \
 |---|---|
 | `GET /health` | `{"status": "ok", "rules_loaded": 4}`, or HTTP 503 `"degraded"` when no rules loaded (broken or empty policy file: everything is denied). |
 | `POST /v1/evaluate` | Send an action, get a decision. With agent tokens, needs `Authorization: Bearer <token>` (401/403 otherwise). Over the agent's rate limit: 429 with `Retry-After`. |
-| `GET /v1/approvals` | Admin: pending approvals, with their arguments, as a JSON list. |
-| `POST /v1/approvals/{id}/approve` | Admin: approve one (once). |
-| `POST /v1/approvals/{id}/deny` | Admin: deny one (once). |
+| `GET /v1/approvals` | Admin: pending, unexpired approvals, with their arguments and age, as a JSON list. |
+| `POST /v1/approvals/{id}/approve` | Admin: approve one (once). Body `{"action_hash": ...}` required. |
+| `POST /v1/approvals/{id}/deny` | Admin: deny one (once). Body `{"action_hash": ...}` required for a pending approval; revoking an approved one needs no body. |
 | `GET /v1/approvals?group=true` | Admin: the same, grouped by agent and tool: `{"groups": [...]}`. |
 | `GET /v1/approvals?ids=A,B&agent_id=X&tool=Y` | Admin: only those approvals (any filter can be left out; up to 100 ids). Narrows what is shown, never what is decided. |
+| `GET /v1/approvals?max_age_seconds=N` | Admin: only approvals asked for at most N seconds ago (1 to 604800). Pending only. |
 | `POST /v1/approvals/decide` | Admin: approve or reject several by id, all or nothing. |
 | `GET /v1/approvals?status=rejected` | Admin: rejections that still stand (no arguments). Takes the same `ids`/`agent_id`/`tool` filters; not `group`. |
 | `POST /v1/approvals/{id}/lift` | Admin: lift a rejection, so the agent may ask for that action again. |
@@ -52,21 +53,29 @@ never turn a `deny` into `allow`. Each approval can be decided only once, with o
 exception: an approved approval the agent hasn't used yet can still be **revoked** with
 `/deny`.
 
-Plain `GET /v1/approvals` answers with a **list**, one item per pending approval:
+Plain `GET /v1/approvals` answers with a **list**, one item per pending approval. It
+only ever shows **pending, unexpired** approvals: approved, rejected, used and expired
+ones never appear (`?status=rejected` is the only other view), so an old decision can't
+be swept into a new one. `age_seconds` is how long ago the agent asked:
 
 ```json
 [{"approval_id": "JSr4DnD0vXhHMGkgs8llrFvinrli1d1a", "agent_id": "agent-1", "tool": "write_file",
   "arguments": {"path": "/workspace/a.txt", "content": "hi"}, "warnings": [],
-  "action_hash": "dc3a4297...", "expires_in_seconds": 899}]
+  "action_hash": "dc3a4297...", "expires_in_seconds": 899, "age_seconds": 1}]
 ```
 
 With `?group=true` the same items come wrapped in an **object**, `{"groups": [...]}`, one
 group per agent and tool (see [Several at once](#several-at-once-group-approvals)).
 Nothing pending: `[]` or `{"groups": []}`.
 
-The body `{"action_hash": "..."}` on `/approve` and `/deny` is optional: when sent, it
-must be the approval's `action_hash` (409 otherwise), which proves you listed it first.
-Send it; a later version may require it.
+The body `{"action_hash": "..."}` is **required** (since v0.4) on `/approve`, and on
+`/deny` of a pending approval: it must be the approval's `action_hash` from the list
+(409 "action_hash doesn't match this approval" otherwise), which proves you listed it
+first. Without it: 422 `{"error": "action_hash required: list the approvals and send the
+action_hash you were shown"}` and nothing changes. **Revoking** an approved, unused
+approval with `/deny` works with no body (or `{}`): revoking can only make things
+stricter, so it stays quick; a sent `action_hash` is still checked. After a restart the
+hash is still known (it is stored), so a restarted approval can still be rejected.
 
 In `GET /v1/approvals`, hidden or look-alike characters in arguments (zero-width spaces,
 right-to-left overrides, full-width letters) are shown as visible `\uXXXX` escapes and
@@ -91,7 +100,16 @@ the question for scripts. Exit codes: 0 done, 1 refused or answered no, 2 usage 
 missing `WARDEN_ADMIN_KEY` (never accepted as a flag) or Warden unreachable.
 
 If an agent floods the queue, `list --agent A --tool T` shows only that agent and tool,
-and `approve`/`reject` keep working: they fetch only the ids you name.
+and `approve`/`reject` keep working: they fetch only the ids you name. `list --max-age
+MINUTES` shows only approvals asked for in the last MINUTES. Each item shows "asked
+8 min ago" next to "expires in".
+
+**Separate runs.** If the ids you approve were asked for more than 2 minutes apart
+(sorted by age, a gap between neighbours), they probably come from separate agent runs,
+maybe an abandoned one. The CLI prints each run (count, time range) and asks `Approve all
+10 actions from 2 separate runs? [y/N]`. With `--yes` it **refuses** (exit 1, nothing
+changed) unless you also pass `--across-runs`. Rejecting is never blocked. This is a
+timing hint, not a fact: the server doesn't refuse anything based on it.
 
 Over HTTP:
 
@@ -102,7 +120,7 @@ curl -s 'http://127.0.0.1:8000/v1/approvals?group=true' -H 'X-Warden-Admin-Key: 
 {"groups": [{"agent_id": "mail-bot", "tool": "send_email", "count": 2, "approvals": [
   {"approval_id": "Qd3...", "agent_id": "mail-bot", "tool": "send_email",
    "arguments": {"to": "ann@example.com"}, "warnings": [], "action_hash": "9f2...",
-   "expires_in_seconds": 812},
+   "expires_in_seconds": 812, "age_seconds": 88},
   {"approval_id": "Zk8...", "...": "..."}]}]}
 ```
 
@@ -120,8 +138,10 @@ Rules:
 - **Approve what you saw**: approving needs `action_hashes`, the `action_hash` the list
   showed for each id, in the same order (422 without them). A hash that doesn't match its
   id refuses the whole group (409, "list the approvals again"), so ids copied from an
-  agent's message or an old list can't be approved without listing. Rejecting doesn't
-  need them (checked if sent). The CLI sends them for you.
+  agent's message or an old list can't be approved without listing. Since v0.4
+  rejecting needs them too (422 "action_hashes required: ..." without them): with
+  sticky rejections a "no" lasts, so it should be a "no" to something seen. The CLI
+  sends them for you.
 - **Exact ids only**, 1 to 100, no repeats (else 422). There is no "approve everything
   from agent X": an approval that arrives after you looked is never included.
 - **One agent and one tool** per decision. A group never mixes them.

@@ -2,6 +2,7 @@
 
 warden approvals list [--group]              every pending action, in full
 warden approvals list --agent A --tool T     only those (when an agent floods the queue)
+warden approvals list --max-age MINUTES      only those asked for in the last MINUTES
 warden approvals approve ID [ID ...] [--yes] approve exactly these (all or nothing)
 warden approvals reject ID [ID ...] [--yes]  reject exactly these (all or nothing)
 warden approvals list --rejected             rejections that still stand
@@ -16,6 +17,12 @@ up in shell history and process lists) and never printed.
 
 Before deciding, every named action is fetched again and printed in full, then the
 human is asked "Approve these N actions? [y/N]". `--yes` skips the question (scripts).
+Lists show only pending, unexpired approvals, each with how long ago it was asked.
+
+Separate runs: when the chosen ids were asked for more than 2 minutes apart (see
+docs/design/approval-hygiene.md), they probably come from separate agent runs, maybe an
+abandoned one. `approve` prints each run and asks about all of them; with `--yes` it
+refuses unless `--across-runs` is also given. Rejecting is never blocked.
 Everything printed from the server goes through `_text`, so control characters or
 look-alike letters can't make the terminal show something other than what is there.
 
@@ -43,6 +50,9 @@ MAX_RESPONSE_BYTES = 32 * 1024 * 1024
 TIMEOUT_SECONDS = 10  # mutation-ok: timeout
 # One byte more than allowed, to tell "too large" from "exactly the limit".
 _READ_LIMIT = MAX_RESPONSE_BYTES + 1  # mutation-ok: reading 2 more changes nothing
+# Approvals asked for more than this many seconds apart count as separate runs.
+RUN_GAP_SECONDS = 120
+MAX_AGE_MINUTES = 7 * 24 * 60  # the server's limit for max_age_seconds, in minutes
 
 
 class _Unreachable(Exception):
@@ -85,12 +95,20 @@ def _call(url: str, key: str, method: str, path: str, body: Any = None) -> tuple
         raise _Unreachable(f"Warden at {url} sent something that isn't JSON") from None
 
 
+def _ago(age: Any) -> str:
+    """'8 min ago' style text from age_seconds (anything else: shown escaped)."""
+    if not isinstance(age, int) or isinstance(age, bool):
+        return f"{_text(age)}s ago"
+    return f"{age}s ago" if age < 60 else f"{age // 60} min ago"
+
+
 def _print_item(item: Any, number: int, out: TextIO) -> None:
     if not isinstance(item, dict):
         raise _Unreachable("unexpected answer from Warden")
     print(
         f"  [{number}] {_text(item.get('approval_id'))}"
-        f"  (expires in {_text(item.get('expires_in_seconds'))}s)",
+        f"  (asked {_ago(item.get('age_seconds'))}, "
+        f"expires in {_text(item.get('expires_in_seconds'))}s)",
         file=out,
     )
     print(f"      action_hash: {_text(item.get('action_hash'))}", file=out)
@@ -123,6 +141,7 @@ def _pending(
     ids: list[str] | None = None,
     agent: str | None = None,
     tool: str | None = None,
+    max_age: int | None = None,
 ) -> list[Any]:
     query = {"group": "true"} if group else {}
     if ids:
@@ -131,6 +150,8 @@ def _pending(
         query["agent_id"] = agent
     if tool:
         query["tool"] = tool
+    if max_age is not None:
+        query["max_age_seconds"] = str(max_age * 60)
     path = "/v1/approvals" + ("?" + urllib.parse.urlencode(query) if query else "")
     status, data = _call(url, key, "GET", path)
     if status == 401:
@@ -224,6 +245,17 @@ def run(
     if args.action != "list" and (agent or tool):
         print("warden approvals: --agent and --tool are for `list`", file=err)
         return 2
+    max_age = getattr(args, "max_age", None)
+    if max_age is not None and (args.action != "list" or getattr(args, "rejected", False)):
+        print("warden approvals: --max-age is for `list` (pending approvals)", file=err)
+        return 2
+    if max_age is not None and not 1 <= max_age <= MAX_AGE_MINUTES:
+        print(f"warden approvals: --max-age takes 1 to {MAX_AGE_MINUTES} minutes", file=err)
+        return 2
+    across_runs = getattr(args, "across_runs", False)
+    if across_runs and args.action != "approve":
+        print("warden approvals: --across-runs is for `approve`", file=err)
+        return 2
     rejected = getattr(args, "rejected", False)
     if rejected and (args.action != "list" or args.group):
         print("warden approvals: --rejected is for `list` (without --group)", file=err)
@@ -275,7 +307,7 @@ def run(
         if args.action == "lift":
             return _lift(url, key, ids[0], args.yes, stdin, out, err)
         if args.action == "list":
-            items = _pending(url, key, group=args.group, agent=agent, tool=tool)
+            items = _pending(url, key, group=args.group, agent=agent, tool=tool, max_age=max_age)
             if not items:
                 print("No pending approvals.", file=out)
             elif args.group:
@@ -289,13 +321,38 @@ def run(
                         )
                     _print_item(item, number, out)
             return 0
-        return _decide(url, key, ids, args.action == "approve", args.yes, stdin, out, err)
+        return _decide(
+            url, key, ids, args.action == "approve", args.yes, stdin, out, err, across_runs
+        )
     except PermissionError as exc:
         print(f"warden approvals: {exc}", file=err)
         return 1
     except _Unreachable as exc:
         print(f"warden approvals: {exc}", file=err)
         return 2
+
+
+def _runs(items: list[Any]) -> list[list[dict[str, Any]]]:
+    """Split approvals into "runs": sorted newest first by age_seconds, a gap of more
+    than RUN_GAP_SECONDS between neighbours starts a new run. A timing hint, not a
+    fact. An item without a usable age is its own run (errs towards warning)."""
+    aged: list[dict[str, Any]] = []
+    runs: list[list[dict[str, Any]]] = []
+    for item in items:
+        age = item.get("age_seconds")
+        if isinstance(age, int) and not isinstance(age, bool):
+            aged.append(item)
+        else:
+            runs.append([item])
+    current: list[dict[str, Any]] = []
+    for item in sorted(aged, key=lambda i: int(i["age_seconds"])):
+        if current and item["age_seconds"] - current[-1]["age_seconds"] > RUN_GAP_SECONDS:
+            runs.append(current)
+            current = []
+        current.append(item)
+    if current:
+        runs.append(current)
+    return runs
 
 
 def _decide(
@@ -307,6 +364,7 @@ def _decide(
     stdin: TextIO,
     out: TextIO,
     err: TextIO,
+    across_runs: bool = False,
 ) -> int:
     # Show exactly what will be decided: fetched now, every action in full. Only the
     # named ids are fetched, so a flood of other approvals can't block this.
@@ -332,6 +390,25 @@ def _decide(
         return 1
     verb = "Approve" if approve else "Reject"
     question = f"{verb} this action?" if len(ids) == 1 else f"{verb} these {len(ids)} actions?"
+    runs = _runs(chosen)
+    if approve and len(runs) > 1:  # rejecting is never blocked: saying no is safe
+        print(
+            f"WARNING: these {len(ids)} actions come from {len(runs)} separate runs "
+            f"(asked more than {RUN_GAP_SECONDS // 60} minutes apart); an old run may "
+            "have been abandoned:",
+            file=out,
+        )
+        for run_items in runs:
+            newest, oldest = run_items[0].get("age_seconds"), run_items[-1].get("age_seconds")
+            print(f"  {len(run_items)} action(s), asked {_ago(oldest)} to {_ago(newest)}", file=out)
+        if yes and not across_runs:
+            print(
+                "warden approvals: refusing to approve actions from separate runs with "
+                "--yes; approve each run on its own, or add --across-runs. Nothing changed.",
+                file=err,
+            )
+            return 1
+        question = f"Approve all {len(ids)} actions from {len(runs)} separate runs?"
     if not yes and not _confirm(question, stdin, out):
         print("Nothing changed.", file=out)
         return 1

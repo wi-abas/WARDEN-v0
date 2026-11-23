@@ -40,7 +40,8 @@
   body (checked if sent). Revoking must be quick and can only make things stricter.
 - `POST /v1/approvals/decide`: `action_hashes` now required for reject too. The CLI
   already sends them, so `warden approvals` is unaffected.
-- Missing hash: HTTP 400, "action_hash required: list the approvals and send the
+- Missing hash: HTTP 422 (as built; was 400 in the first draft, 422 matches the other
+  "required field missing" answers), "action_hash required: list the approvals and send the
   action_hash you were shown"; nothing changes, nothing echoed. The hash is known even
   after a restart (it's stored), so rejecting a restarted approval still works.
 
@@ -69,6 +70,5 @@ chose to show them.
   fetched, not read).
 - The 2-minute gap is a heuristic: one slow run can look like two, two quick runs
   like one.
-- **Open question for Wissam:** 2 minutes as the run gap, and `--across-runs` as the
-  escape hatch, or simply refuse `--yes` whenever any chosen approval is older than N
-  minutes?
+- **Decided (Wissam):** "detect separate runs": 2 minutes as the run gap, and
+  `--across-runs` as the escape hatch for `--yes`.

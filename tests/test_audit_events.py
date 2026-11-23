@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-from helpers import BASIC_POLICY
+from helpers import BASIC_POLICY, shown
 
 from warden.api import MAX_BODY_BYTES, create_app
 from warden.approvals import ApprovalStore
@@ -53,7 +53,11 @@ def test_human_decision_is_recorded(
 ) -> None:
     approval_id = pending_id(client)
     action_hash = client.post("/v1/evaluate", json=email()).json()["action_hash"]
-    client.post(f"/v1/approvals/{approval_id}/{action}", headers=ADMIN)
+    client.post(
+        f"/v1/approvals/{approval_id}/{action}",
+        headers=ADMIN,
+        json=shown(client, approval_id, ADMIN),
+    )
     [event] = log.recent_events()
     assert event.kind == kind
     assert event.approval_id == approval_id
@@ -80,7 +84,11 @@ def test_unrecorded_approval_does_not_happen(tmp_path: Path) -> None:
     client = TestClient(app)
     approval_id = pending_id(client)
 
-    response = client.post(f"/v1/approvals/{approval_id}/approve", headers=ADMIN)
+    response = client.post(
+        f"/v1/approvals/{approval_id}/approve",
+        headers=ADMIN,
+        json=shown(client, approval_id, ADMIN),
+    )
     assert response.status_code == 503
     # Still pending, and the agent can't use it.
     assert [a.approval_id for a, _ in store.pending()] == [approval_id]
@@ -98,8 +106,16 @@ def test_failed_decision_is_recorded(
     approval_id = "x" * 32
     if setup == "decided":
         approval_id = pending_id(client)
-        client.post(f"/v1/approvals/{approval_id}/deny", headers=ADMIN)
-    client.post(f"/v1/approvals/{approval_id}/approve", headers=ADMIN)
+        client.post(
+            f"/v1/approvals/{approval_id}/deny",
+            headers=ADMIN,
+            json=shown(client, approval_id, ADMIN),
+        )
+    client.post(
+        f"/v1/approvals/{approval_id}/approve",
+        headers=ADMIN,
+        json=shown(client, approval_id, ADMIN),
+    )
     event = log.recent_events()[0]
     assert event.kind == EventKind.APPROVAL_DECIDE_FAILED
     assert (event.http_status, event.reason, event.approval_id) == (status, reason, approval_id)
@@ -129,7 +145,11 @@ def test_modified_action_attempt_keeps_the_approval_id(
     client: TestClient, log: SQLiteAuditLog
 ) -> None:
     approval_id = pending_id(client)
-    client.post(f"/v1/approvals/{approval_id}/approve", headers=ADMIN)
+    client.post(
+        f"/v1/approvals/{approval_id}/approve",
+        headers=ADMIN,
+        json=shown(client, approval_id, ADMIN),
+    )
     client.post("/v1/evaluate", json=email(approval_id, to="attacker@example.com"))
     entry = log.recent()[0]
     assert (entry.decision, entry.approval_id) == ("deny", approval_id)

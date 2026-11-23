@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-from helpers import BASIC_POLICY
+from helpers import BASIC_POLICY, shown
 
 from warden.api import create_app
 from warden.approvals import ApprovalStore
@@ -60,7 +60,11 @@ def ask(client: TestClient, body: dict[str, Any]) -> dict[str, Any]:
 
 
 def approve(client: TestClient, approval_id: str, action: str = "approve") -> int:
-    return client.post(f"/v1/approvals/{approval_id}/{action}", headers=ADMIN).status_code
+    return client.post(
+        f"/v1/approvals/{approval_id}/{action}",
+        headers=ADMIN,
+        json=shown(client, approval_id, ADMIN),
+    ).status_code
 
 
 def get_approved(client: TestClient, body: dict[str, Any] | None = None) -> str:

@@ -67,10 +67,15 @@ class Approval:
 class DecideError(Exception):
     """Approve/deny failed. `not_found` = unknown or expired; `no_arguments` = can't
     approve what the human can't see yet; `hash_mismatch` = the human looked at a
-    different action than this id's; else already decided."""
+    different action than this id's; `hash_required` = no action_hash was sent where
+    one is required; else already decided."""
 
     def __init__(
-        self, not_found: bool, no_arguments: bool = False, hash_mismatch: bool = False
+        self,
+        not_found: bool,
+        no_arguments: bool = False,
+        hash_mismatch: bool = False,
+        hash_required: bool = False,
     ) -> None:
         super().__init__(
             "not found"
@@ -79,11 +84,14 @@ class DecideError(Exception):
             if no_arguments
             else "action_hash mismatch"
             if hash_mismatch
+            else "action_hash required"
+            if hash_required
             else "decided"
         )
         self.not_found = not_found
         self.no_arguments = no_arguments
         self.hash_mismatch = hash_mismatch
+        self.hash_required = hash_required
 
 
 class GroupReason(StrEnum):
@@ -345,6 +353,7 @@ class ApprovalStore:
         approve: bool,
         before_commit: Callable[[Approval, Status], None] = lambda a, s: None,
         expected_hash: str | None = None,
+        require_hash: bool = False,
     ) -> Status:
         """Approve or deny a pending approval, exactly once.
 
@@ -353,6 +362,9 @@ class ApprovalStore:
         `before_commit` runs (under the lock) before the status changes. If it raises,
         nothing changes: used to make sure every human decision is audited first.
         With `expected_hash` (the action_hash the human was shown), it must match.
+        With `require_hash` (the HTTP API), approving or rejecting a PENDING approval
+        needs `expected_hash`; only revoking an approved one works without it (revoking
+        can only make things stricter, so it must stay quick).
         """
         with self._lock:
             now = self._clock()
@@ -363,6 +375,8 @@ class ApprovalStore:
             revoking = approval.status is Status.APPROVED and not approve
             if approval.status is not Status.PENDING and not revoking:
                 raise DecideError(not_found=False)
+            if require_hash and expected_hash is None and not revoking:
+                raise DecideError(not_found=False, hash_required=True)
             if approve and approval.arguments is None:
                 # Restarted: nobody can see what this would approve. Deny still works.
                 raise DecideError(not_found=False, no_arguments=True)

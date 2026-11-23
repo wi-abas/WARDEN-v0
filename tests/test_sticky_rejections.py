@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-from helpers import BASIC_POLICY, live_server
+from helpers import BASIC_POLICY, live_server, shown
 from pydantic import ValidationError
 
 from warden.api import create_app
@@ -355,7 +355,14 @@ def app_with(
 
 def reject_one(client: TestClient) -> str:
     approval_id: str = client.post("/v1/evaluate", json=EMAIL).json()["approval_id"]
-    assert client.post(f"/v1/approvals/{approval_id}/deny", headers=ADMIN).status_code == 200
+    assert (
+        client.post(
+            f"/v1/approvals/{approval_id}/deny",
+            headers=ADMIN,
+            json=shown(client, approval_id, ADMIN),
+        ).status_code
+        == 200
+    )
     return approval_id
 
 
@@ -499,9 +506,9 @@ def test_api_group_reject_is_sticky(tmp_path: Path) -> None:
     client, _, _ = app_with(tmp_path)
     bodies = [{**EMAIL, "arguments": {"to": f"p{i}@x.com"}} for i in range(2)]
     ids = [client.post("/v1/evaluate", json=b).json()["approval_id"] for b in bodies]
-    decided = client.post(
-        "/v1/approvals/decide", headers=ADMIN, json={"ids": ids, "approve": False}
-    )
+    hashes = [shown(client, i, ADMIN)["action_hash"] for i in ids]
+    decision = {"ids": ids, "action_hashes": hashes, "approve": False}
+    decided = client.post("/v1/approvals/decide", headers=ADMIN, json=decision)
     assert decided.status_code == 200
     for body in bodies:
         assert client.post("/v1/evaluate", json=body).json()["decision"] == "deny"

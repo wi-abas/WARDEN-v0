@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-from helpers import BASIC_POLICY, live_server
+from helpers import BASIC_POLICY, live_server, shown
 
 from warden import approvals_cli
 from warden.api import create_app
@@ -193,7 +193,11 @@ def test_server_refusal_after_showing(
     real_confirm = approvals_cli._confirm
 
     def decide_one_meanwhile(*args: Any) -> bool:
-        client.post(f"/v1/approvals/{ids[1]}/deny", headers={"X-Warden-Admin-Key": KEY})
+        client.post(
+            f"/v1/approvals/{ids[1]}/deny",
+            headers={"X-Warden-Admin-Key": KEY},
+            json=shown(client, ids[1], {"X-Warden-Admin-Key": KEY}),
+        )
         return real_confirm(*args)
 
     monkeypatch.setattr(approvals_cli, "_confirm", decide_one_meanwhile)

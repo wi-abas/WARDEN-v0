@@ -106,8 +106,19 @@ the token.
 
 ## Approving
 
-When a call needs approval, the proxy writes the approve command to its stderr (Claude
-Desktop keeps it in its MCP log). Or list what's waiting:
+When a call needs approval, the proxy writes what to do to its stderr (Claude Desktop
+keeps it in its MCP log):
+
+```text
+Warden: write_file needs approval (id <approval id>).
+  1. Check what it would do:  warden approvals list --agent <agent id> --warden-url <url>
+  2. Then approve it:         warden approvals approve <approval id> --warden-url <url>
+```
+
+Both need `WARDEN_ADMIN_KEY`. `warden approvals approve` shows the action again and sends
+its `action_hash` for you. The hint never prints the `action_hash` itself: since v0.4
+Warden refuses an approve without it, and the point is that you copy it from the list.
+With curl, list first, then send the `action_hash` you were shown:
 
 ```sh
 curl -s http://127.0.0.1:8000/v1/approvals -H "X-Warden-Admin-Key: $WARDEN_ADMIN_KEY"

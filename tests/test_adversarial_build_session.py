@@ -321,7 +321,8 @@ def test_one_persistent_approval_gives_exactly_one_allow_under_a_race(tmp_path: 
         approve = urllib.request.Request(  # noqa: S310
             f"{url}/v1/approvals/{approval_id}/approve",
             method="POST",
-            headers={"X-Warden-Admin-Key": ADMIN_KEY},
+            data=json.dumps({"action_hash": action_hash}).encode(),
+            headers={"X-Warden-Admin-Key": ADMIN_KEY, "content-type": "application/json"},
         )
         urllib.request.urlopen(approve, timeout=10).close()  # noqa: S310
         barrier = threading.Barrier(24)
