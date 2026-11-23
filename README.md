@@ -256,6 +256,9 @@ Each of these is covered by tests in `tests/`.
   `tools` entry for every tool with "deny when..." rules.
 - **The admin key is one shared secret, not real user accounts.** Any program that can
   read your terminal output can approve. There's no record of *who* approved.
+- **A rejection sticks for the exact action only.** After a human says no, the same
+  agent asking for the same action is refused for 15 minutes (configurable); a slightly
+  changed action is a new approval.
 - **After a restart, pending approvals can't be approved until the agent asks again**
   (arguments are never written to disk, so the human couldn't see them).
 - **The audit log is tamper-evident, not tamper-proof.** Someone who can edit the file

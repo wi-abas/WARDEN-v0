@@ -3,6 +3,16 @@
 ## Unreleased
 
 ### Added
+- **Sticky rejections**: after a human rejects (or revokes) an approval, the same agent
+  asking for the exact same action within `limits.rejection_window_seconds` (default
+  900, `0` = off, max 7 days; per agent) gets `deny` ("rejected by a human; this exact
+  action is refused until ...") instead of a new pending approval. Group rejects are
+  sticky too; rejections don't count toward the pending quota; they survive a restart
+  (approvals table, new `decided_at` column, migrated automatically).
+- `GET /v1/approvals?status=rejected` and `warden approvals list --rejected`: standing
+  rejections. `POST /v1/approvals/{id}/lift` and `warden approvals lift ID`: lift one,
+  audited (`approval_rejection_lifted`) before it takes effect.
+- Schema: `rejection_window_seconds` in `limits` (still `policy-v1`, a superset).
 - **Per-agent rules**: a rule may list the agents it applies to
   (`"agents": ["billing-agent"]`); no key = every agent, as before. Exact,
   case-sensitive names; an empty list, `null` or duplicates are refused. Most
@@ -14,6 +24,9 @@
 - Schema: `agents` on a rule (still `policy-v1`, a superset).
 
 ### Changed
+- Asking again for a rejected action is now refused for the rejection window (it used
+  to create a new pending approval at once). Set `rejection_window_seconds: 0` for the
+  old behaviour.
 - With `--agents`, a `limits.agents` entry for an agent that isn't in the agents file
   now stops `warden serve` from starting (it was silently unused).
 

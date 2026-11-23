@@ -61,6 +61,5 @@ window.
   "similar" actions apart without judging meaning, which it never does. Per-agent
   quotas and rate limits bound how often this can happen.
 - No "reject this kind of action forever": change the policy for that.
-- **Open question for Wissam:** should a revoke (deny of an already approved
-  approval) be sticky too? This note says yes ("no" is "no"); the alternative is to
-  treat a revoke as "not this time" only.
+- **Decided:** a revoke (deny of an already approved approval) is sticky too ("no" is
+  "no").

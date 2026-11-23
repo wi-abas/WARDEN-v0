@@ -28,6 +28,8 @@ curl -s -X POST http://127.0.0.1:8000/v1/evaluate \
 | `GET /v1/approvals?group=true` | Admin: the same, grouped by agent and tool: `{"groups": [...]}`. |
 | `GET /v1/approvals?ids=A,B&agent_id=X&tool=Y` | Admin: only those approvals (any filter can be left out; up to 100 ids). Narrows what is shown, never what is decided. |
 | `POST /v1/approvals/decide` | Admin: approve or reject several by id, all or nothing. |
+| `GET /v1/approvals?status=rejected` | Admin: rejections that still stand (no arguments). Takes the same `ids`/`agent_id`/`tool` filters; not `group`. |
+| `POST /v1/approvals/{id}/lift` | Admin: lift a rejection, so the agent may ask for that action again. |
 
 ## Approvals
 
@@ -136,6 +138,46 @@ Rules:
 - **Audit**: one `approval_approved`/`approval_denied` event per approval plus one
   `approval_group_decided` event (count and ids), all written in one transaction before
   anything changes. If that write fails: 503, nothing changed.
+
+## Sticky rejections
+
+When a human rejects a pending approval (or revokes an approved one, singly or in a
+group), "no" sticks: for the agent's `rejection_window_seconds` (policy `limits`,
+default 900, `0` = off, see [policies.md](policies.md)), the same agent asking for the
+same action (same `action_hash`) gets
+
+```json
+{"decision": "deny", "reason": "rejected by a human; this exact action is refused until 2026-11-23 14:32:05 UTC (approval Qd3...)",
+ "matched_rule": "email-needs-approval", "action_hash": "9f2...", "approval_id": null}
+```
+
+instead of a new pending approval. A different action (one character changed in the
+arguments) is a new approval as usual. Rejections don't count toward the pending quota.
+
+```sh
+uv run warden approvals list --rejected       # rejections that still stand
+uv run warden approvals lift ID               # shows it, asks [y/N]; --yes for scripts
+```
+```sh
+curl -s 'http://127.0.0.1:8000/v1/approvals?status=rejected' -H 'X-Warden-Admin-Key: <key>'
+```
+```json
+[{"approval_id": "Qd3...", "agent_id": "mail-bot", "tool": "send_email", "action_hash": "9f2...",
+  "rejected_at": "2026-11-23T14:17:05Z", "expires_in_seconds": 812}]
+```
+```sh
+curl -s -X POST http://127.0.0.1:8000/v1/approvals/<approval_id>/lift -H 'X-Warden-Admin-Key: <key>'
+```
+```json
+{"approval_id": "Qd3...", "status": "lifted"}
+```
+
+Lifting deletes the rejection; it doesn't approve anything. The agent's next request is
+an ordinary pending approval that a human must approve after seeing it. Unknown or
+expired: 404; not a rejection (pending, approved, used): 409. The lift is audited
+(`approval_rejection_lifted`) **before** it takes effect: if that write fails, 503 and
+the rejection stands. Rejections are kept in the approvals table (no arguments), so they
+survive a restart.
 
 **Restarts:** approval state (id, agent, tool, `action_hash`, status, expiry) is kept in
 the audit database, so pending and approved approvals survive a restart; `used` is saved

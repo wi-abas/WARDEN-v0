@@ -277,12 +277,14 @@ may only read, and nobody else may do either:
 
 ## Rate limits and approval quotas
 
-Optional. Each agent gets a request budget and a cap on how many approvals it may have
-waiting, so one agent can't flood Warden or crowd out the others:
+Optional. Each agent gets a request budget, a cap on how many approvals it may have
+waiting, and a rejection window, so one agent can't flood Warden, crowd out the others or
+nag a reviewer:
 
 ```json
 "limits": {
-  "default": { "requests_per_minute": 1200, "max_pending_approvals": 100 },
+  "default": { "requests_per_minute": 1200, "max_pending_approvals": 100,
+               "rejection_window_seconds": 900 },
   "agents": { "billing-agent": { "requests_per_minute": 30, "max_pending_approvals": 5 } }
 }
 ```
@@ -294,6 +296,15 @@ waiting, so one agent can't flood Warden or crowd out the others:
 - Over the approval quota: `deny`, "too many pending approvals for this agent". Asking
   again for the same action reuses its approval and doesn't count twice.
   `"max_pending_approvals": 0` turns every `require_approval` for that agent into `deny`.
+- **Rejection window** (sticky rejections): after a human rejects (or revokes) an
+  approval, the same agent asking for the exact same action within
+  `rejection_window_seconds` gets `deny`, "rejected by a human; this exact action is
+  refused until ... (approval ID)", instead of a new pending approval. Default 900
+  (15 minutes), `0` = off (a new pending approval at once), at most 604800 (7 days).
+  Only the exact action (same agent, tool and arguments) is refused; rejections don't
+  count toward the approval quota. An admin can lift one early (`warden approvals lift
+  ID`, see [api.md](api.md#sticky-rejections)). `warden limits set` doesn't edit it yet:
+  edit the JSON.
 - Without agent tokens (`--agents`), an agent can dodge its limit by using a new
   `agent_id`. Limits reset when Warden restarts.
 
