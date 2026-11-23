@@ -14,6 +14,7 @@ the check has no effect. See docs/design/sdk.md.
 """
 
 import asyncio
+import dataclasses
 import functools
 import inspect
 import json
@@ -109,6 +110,7 @@ def _decide(
     approval_id = answer.approval_id
     if approval_id is None:
         return Answer(Decision.DENY, "approval needed, but Warden gave no approval id")
+    why = answer.reason  # the rule's message: why a human must approve
     deadline = time.monotonic() + wait_for_approval
     # The first re-ask is immediate: a human may already have approved this exact action.
     answer = client.evaluate(tool, arguments, approval_id)
@@ -116,6 +118,9 @@ def _decide(
         # Rate limited while polling: back off, keep waiting (it's still not an allow).
         sleep(max(poll_seconds, answer.retry_after or 0.0))
         answer = client.evaluate(tool, arguments, approval_id)
+    if answer.decision is Decision.REQUIRE_APPROVAL and answer.reason != why:
+        # Re-asks only say "waiting for a human to approve": keep the rule's reason too.
+        answer = dataclasses.replace(answer, reason=f"{why} ({answer.reason})")
     return answer
 
 
