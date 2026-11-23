@@ -14,8 +14,8 @@ Security properties (each one is tested in tests/test_engine.py):
   - An argument that can't be checked denies the whole request, so a "deny"
     rule can't be dodged. "Can't be checked" means: the wrong type ("50000"
     as text for a number check), an unclean path when the rule compares paths
-    ("//etc", "/./etc", "/data/../etc", backslashes), or not one plain email
-    address when the rule compares emails ("x@evil.com ", "x@evil.com.",
+    ("//etc", "/./etc", "/data/../etc", "/data/.. /etc", "/data/...", backslashes),
+    or not one plain email address when the rule compares emails ("x@evil.com ", "x@evil.com.",
     "Evil <x@evil.com>", "a@x.com, b@y.com"), or, when the rule compares a host
     name like "evil.com", a trailing dot, edge spaces or brackets ("x@evil.com.").
 - Most restrictive wins: DENY beats REQUIRE_APPROVAL, which beats ALLOW.
@@ -134,7 +134,9 @@ def _is_clean_path(text: str) -> bool:
     inner = segments[1:-1] if text.startswith("/") else segments[:-1]
     if any(segment == "" for segment in inner):  # "//"
         return False
-    return not any(segment in {".", ".."} for segment in segments)
+    # ".", "..", and any other segment made only of dots and spaces ("...", ".. ", " "):
+    # Windows and tools that strip trailing dots/spaces read ".. " as ".." (a way out).
+    return not any(segment and not segment.strip(". ") for segment in segments)
 
 
 def _is_clean_url(text: str) -> bool:

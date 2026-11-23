@@ -5,6 +5,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 
 from warden.check import check_policy
 from warden.engine import evaluate
@@ -169,6 +171,50 @@ def test_spaces_around_a_path_cannot_dodge_a_deny_rule(path: str) -> None:
 
 def test_spaces_inside_a_path_are_fine() -> None:
     assert ask(DENY_ETC, "read_file", path="/home/me/my file.txt") == Decision.ALLOW
+
+
+ALLOW_WORKSPACE = [
+    {
+        "id": "workspace",
+        "tool": "read_file",
+        "effect": "allow",
+        "when": [{"arg": "path", "op": "startswith", "value": "/workspace/"}],
+    }
+]
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/workspace/.. /etc/passwd",  # Windows drops trailing spaces and dots: ".."
+        "/workspace/ ../etc/passwd",
+        "/workspace/. /etc",
+        "/workspace/...",
+        "/workspace/.../etc",
+        "/workspace/a/...",
+        "/workspace/a/. ",
+        "/workspace/a/ /b",
+        "/workspace/a/. . ./b",
+    ],
+)
+def test_dot_and_space_segments_cannot_escape_an_allow_list(path: str) -> None:
+    """A segment made only of dots and spaces is read as ".." (or ".") by Windows and
+    by tools that strip trailing dots/spaces, so it is refused like "..": deny."""
+    assert ask(ALLOW_WORKSPACE, "read_file", path=path) == Decision.DENY
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["/workspace/notes..txt", "/workspace/.hidden", "/workspace/a b/c", "/workspace/..x/y"],
+)
+def test_names_with_dots_or_spaces_are_still_fine(path: str) -> None:
+    assert ask(ALLOW_WORKSPACE, "read_file", path=path) == Decision.ALLOW
+
+
+@given(st.lists(st.sampled_from([".", " "]), min_size=1, max_size=6).map("".join))
+def test_any_dots_and_spaces_segment_is_refused(segment: str) -> None:
+    for path in (f"/workspace/{segment}/etc", f"/workspace/{segment}", f"/workspace/a/{segment}"):
+        assert ask(ALLOW_WORKSPACE, "read_file", path=path) == Decision.DENY, repr(path)
 
 
 @pytest.mark.parametrize(
