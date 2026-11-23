@@ -34,4 +34,4 @@ the temp folder for debugging.
 `policy.json` is the policy the server runs; `policy-tests.json` its `warden test` cases.
 
 Some known weaknesses are left out on purpose until they are fixed (see the `TODO`
-comments in `sneaky_agent.py` and `sneaky_approvals.py`).
+comment in `sneaky_agent.py` about `host_in` and URL schemes).

@@ -105,6 +105,7 @@ for agent in good-agent sneaky-agent flood-bot mcp-desktop; do
   w agent add "$agent" --agents "$STATE/agents.json" 2>>"$LOG" | tail -1 >"$STATE/token-$agent"
 done
 check "4 agent tokens created" test "$(cat "$STATE"/token-* | grep -c '^wdn_')" = 4
+check "policy agent names match the agents file" w check "$STATE/policy.json" --strict --agents "$STATE/agents.json"
 start_server || exit 1
 echo "Warden on port $PORT"
 

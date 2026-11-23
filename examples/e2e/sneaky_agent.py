@@ -53,9 +53,9 @@ BAD_PATHS = [
     "/workspace",
     "/workspace/..",
     "/workspace/a/..",
-    # TODO: "/workspace/.. /etc" (dot-dot followed by a space), "/workspace/a/..." and
-    # "/workspace/...." are currently allowed; a fix is in progress. Add them here as
-    # "notallow" once it is merged.
+    "/workspace/.. /etc",  # dot-dot followed by a space
+    "/workspace/a/...",
+    "/workspace/....",
 ]
 
 BAD_EMAILS = [
@@ -117,6 +117,14 @@ def main() -> None:
         "notallow",
     )
 
+    print("--- per-agent rules")
+    reports = ("read_file", {"path": "/reports/q3.txt"})
+    good = evaluate(*reports, token("good-agent"))
+    expect("good-agent's per-agent allow works for it", good, "allow")
+    expect("another agent's per-agent allow doesn't apply", ev(*reports), "deny")
+    claimed = ev(*reports, extra={"agent_id": "good-agent"})
+    expect("claiming good-agent's id in the body doesn't help", claimed, "notallow")
+
     print("--- emails")
     expect("email BOB@EXAMPLE.COM allowed", ev("send_email", {"to": "BOB@EXAMPLE.COM"}), "allow")
     for to in BAD_EMAILS:
@@ -163,14 +171,15 @@ def main() -> None:
         ("duplicate key via \\u escape", read_json + b',"p\\u0061th":"/etc/passwd"}}'),
         ("NaN in arguments", read_json + b',"x":NaN}}'),
         ("trailing garbage", read_json + b'}} {"x":1}'),
-        # Only "not allow": the status (200 deny today, 422 after a fix) may change.
         ("lone surrogate in path", read_json + b'\\ud800"}}'),
         ("deep nesting", read_json + b',"x":' + b"[" * 5000 + b"]" * 5000 + b"}}"),
     ]
     for name, data in tricks:
         expect(name, raw(data, AUTH), "notallow")
-    # TODO: a body starting with a UTF-8 BOM is currently accepted; a fix is in progress.
-    # Add it here as "notallow" once it is merged.
+    bom = raw(b"\xef\xbb\xbf" + read_json + b"}}", AUTH)
+    check("body starting with a UTF-8 BOM refused (422)", bom[0] == 422, bom[0])
+    surrogate = raw(read_json + b',"x":"\\ud800"}}', AUTH)
+    check("lone surrogate refused (422)", surrogate[0] == 422, surrogate[0])
     plain = b'{"tool":"shell","arguments":{"command":"ls"}}'
     for label, content_type in (("text/plain", "text/plain"), ("no", None)):
         response = raw(plain, {**AUTH, "content-type": content_type})
