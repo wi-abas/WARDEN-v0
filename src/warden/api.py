@@ -87,6 +87,7 @@ from warden.policy import (
     Policy,
     load_policy,
     no_duplicate_keys,
+    per_agent_problem,
 )
 from warden.settings import Settings
 
@@ -762,14 +763,22 @@ def create_app(
     admin_key: str | None = None,
     agents: AgentRegistry | None = None,
 ) -> FastAPI:
-    """Build the app. Rules, audit log, approvals and admin key are set up once, here."""
+    """Build the app. Rules, audit log, approvals and admin key are set up once, here.
+
+    Raises StartupError if the policy has per-agent rules but agent ids can't be
+    trusted (no agents file), or names an agent that isn't in the agents file.
+    """
+    policy = load_policy(policy_path)
+    problem = per_agent_problem(policy, agents.agent_ids if agents is not None else None)
+    if problem is not None:
+        raise StartupError(problem)
     if admin_key is None:
         # New random key every start. Printed to the terminal (for the human),
         # never written to the log file and never sent to agents.
         admin_key = secrets.token_urlsafe(32)
         print(f"\nWarden admin key (needed to approve actions): {admin_key}\n", file=sys.stderr)
     w = _Warden(
-        policy=load_policy(policy_path),
+        policy=policy,
         audit_log=audit_log or SQLiteAuditLog(audit.DEFAULT_AUDIT_PATH),
         approvals=approvals or ApprovalStore(),
         admin_key=admin_key,

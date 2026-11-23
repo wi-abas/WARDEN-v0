@@ -86,6 +86,21 @@
       ]
     },
     {
+      "id": "good-reads-reports",
+      "tool": "read_file",
+      "effect": "allow",
+      "agents": [
+        "good-agent"
+      ],
+      "when": [
+        {
+          "arg": "path",
+          "op": "startswith",
+          "value": "/reports/"
+        }
+      ]
+    },
+    {
       "id": "write-workspace",
       "tool": "write_file",
       "effect": "allow",

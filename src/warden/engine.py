@@ -346,6 +346,10 @@ def _holds(condition: Condition, arguments: dict[str, JsonValue]) -> bool:
 def _rule_matches(rule: Rule, request: ActionRequest) -> bool:
     if rule.tool != request.tool:
         return False
+    # A per-agent rule only applies to the agents it lists (exact match). Checked before
+    # any condition: for another agent the rule simply doesn't exist.
+    if not rule.applies_to(request.agent_id):
+        return False
     # Check every condition (no short-circuit), so an uncheckable argument is always
     # caught, whatever order the conditions are written in.
     results = [_condition_result(rule, condition, request) for condition in rule.when]

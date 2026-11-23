@@ -80,10 +80,8 @@ def approvals() -> None:
     response = ev("delete_file", revoke)
     aid2, hash2 = response[1]["approval_id"], response[1]["action_hash"]
     admin("POST", f"/v1/approvals/{aid2}/approve", {"action_hash": hash2})
-    # TODO: POST .../deny with an empty JSON body {} currently answers 422; a fix is in
-    # progress. Add a check for it here once merged (and keep the revoke below working).
-    status = admin("POST", f"/v1/approvals/{aid2}/deny", {"action_hash": hash2})[0]
-    check("revoke an approved, unused approval -> 200", status == 200, status)
+    status = admin("POST", f"/v1/approvals/{aid2}/deny", {})[0]
+    check("revoke an approved, unused approval with a {} body -> 200", status == 200, status)
     response = ev("delete_file", revoke, approval_id=aid2)
     check("revoked approval can't be used", decision(response) == "deny", response[1])
 

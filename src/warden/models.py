@@ -12,7 +12,15 @@ from enum import StrEnum
 from math import isfinite
 from typing import Annotated, TypeGuard
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    WithJsonSchema,
+    field_validator,
+    model_validator,
+)
 
 # Lowercase letters, digits, "_", "." and "-", 1 to 64 characters.
 # Strict on purpose: "Delete_File", "delete_file " or lookalike Unicode letters
@@ -30,6 +38,7 @@ MAX_ARGUMENTS = 50
 MAX_ARG_DEPTH = 8  # "a.b.c..." at most this many levels deep
 MAX_CONDITIONS = 20
 MAX_IN_VALUES = 100
+MAX_RULE_AGENTS = 100
 # A host name as written in a policy: lowercase ASCII (use punycode "xn--..." for
 # international names), optionally starting with "." to include subdomains.
 HOST_PATTERN = r"^\.?[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$"
@@ -255,6 +264,42 @@ class Rule(BaseModel):
     # Shown as the decision's reason, e.g. "Payments over €500 need finance approval".
     # One line, no control characters (it ends up in logs and the audit log).
     message: str | None = Field(default=None, pattern=MESSAGE_PATTERN)
+    # Optional: the agents this rule applies to (exact, case-sensitive ids). Left out =
+    # every agent. Never empty: an empty list would be a rule that silently never applies.
+    agents: Annotated[
+        tuple[Annotated[str, Field(pattern=AGENT_ID_PATTERN)], ...] | None,
+        WithJsonSchema(
+            {
+                "type": "array",
+                "items": {"type": "string", "pattern": AGENT_ID_PATTERN},
+                "minItems": 1,
+                "maxItems": MAX_RULE_AGENTS,
+                "uniqueItems": True,
+                "title": "Agents",
+            }
+        ),
+    ] = Field(default=None, min_length=1, max_length=MAX_RULE_AGENTS)
+
+    @field_validator("agents", mode="before")
+    @classmethod
+    def agents_not_null(cls, value: object) -> object:
+        # Only runs when the key is written. `"agents": null` could be read as "nobody"
+        # or "everybody": refuse it; leave the key out for "every agent".
+        if value is None:
+            raise ValueError("'agents' must be a list of agent ids (leave it out for every agent)")
+        # JSON has lists, not tuples (strict mode would refuse a list after this hook).
+        return tuple(value) if isinstance(value, list) else value
+
+    @field_validator("agents")
+    @classmethod
+    def agents_are_unique(cls, agents: tuple[str, ...] | None) -> tuple[str, ...] | None:
+        if agents is not None and len(set(agents)) != len(agents):
+            raise ValueError("'agents' lists an agent twice")
+        return agents
+
+    def applies_to(self, agent_id: str) -> bool:
+        """True if this rule is for every agent, or `agent_id` is one of its agents."""
+        return self.agents is None or agent_id in self.agents
 
 
 class ToolSpec(BaseModel):

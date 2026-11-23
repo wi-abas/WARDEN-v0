@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- **Per-agent rules**: a rule may list the agents it applies to
+  (`"agents": ["billing-agent"]`); no key = every agent, as before. Exact,
+  case-sensitive names; an empty list, `null` or duplicates are refused. Most
+  restrictive still wins, so a per-agent allow never beats a deny for everyone.
+- `warden serve` refuses to start when the policy has a per-agent rule but no
+  `--agents` file, or names an agent (in a rule or `limits.agents`) that isn't in it.
+- `warden check --agents FILE`: W014 (unknown agent name), W015 (names that differ only
+  in case). W003/W004 take `agents` into account.
+- Schema: `agents` on a rule (still `policy-v1`, a superset).
+
+### Changed
+- With `--agents`, a `limits.agents` entry for an agent that isn't in the agents file
+  now stops `warden serve` from starting (it was silently unused).
+
 ## v0.3.0 (2026-11-22, alpha)
 
 ### Security fixes (full code review)

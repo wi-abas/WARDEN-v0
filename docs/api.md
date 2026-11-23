@@ -163,11 +163,10 @@ token from `WARDEN_AGENT_TOKEN`. Approvals can only be used by the agent that as
 default `warden-agents.json`, mode 600). To rotate a token: remove, add, restart Warden.
 Changes take effect on restart. Design: [design/agent-tokens.md](design/agent-tokens.md).
 
-**Tokens are identity, not permissions.** Every rule in the policy applies to every
-agent; a token can't give one agent more or fewer rights than another (per-agent rules
-are planned). For different permissions today, run one Warden per agent, each with its
-own policy, port and audit database, and point each agent at its own Warden
-(see [How clients find Warden](#how-clients-find-warden)).
+**Tokens are identity; per-agent rules are permissions.** A rule with
+`"agents": ["billing-agent"]` applies only to that agent (see
+[Per-agent rules](policies.md#per-agent-rules)). Such rules need `--agents`: without it,
+`warden serve` refuses to start.
 
 **Migrating:** nothing changes until you pass `--agents`. Add every agent, hand out the
 tokens, then restart with `--agents`.

@@ -24,8 +24,15 @@ Warnings: the policy loads, but probably doesn't do what you meant:
 - W013  a rule looks inside an object (["headers", "to"]) and its effect is deny /
         require_approval, but argument lists only cover top-level names, so an
         unexpected key inside the object ("headers.bcc") isn't checked.
+- W014  a rule's "agents" (or limits.agents) names an agent that isn't in the agents
+        file (--agents FILE): probably a typo, and `warden serve` refuses to start.
+- W015  two agent names differ only in upper/lower case ("Billing" and "billing"):
+        agent ids are case-sensitive, so these are two different agents.
 - W008  an email-domain check ("...@example.com") is case-sensitive, so
         "x@EXAMPLE.com" slips past it. Add "ignore_case": true.
+
+W003 and W004 take a rule's "agents" into account: a rule for every agent can make a
+per-agent rule dead, but a per-agent deny never kills a rule for every agent.
 
 Only reads the file. Never starts the server or changes anything.
 """
@@ -36,8 +43,9 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
+from warden.agents import AgentsError, read_agents_file
 from warden.models import Decision, Op, Rule
-from warden.policy import DuplicateKeyError, Policy, describe_errors, parse_policy
+from warden.policy import DuplicateKeyError, Policy, describe_errors, named_agents, parse_policy
 
 _STRICTNESS = {Decision.ALLOW: 0, Decision.REQUIRE_APPROVAL: 1, Decision.DENY: 2}
 
@@ -46,14 +54,53 @@ _STRICTNESS = {Decision.ALLOW: 0, Decision.REQUIRE_APPROVAL: 1, Decision.DENY: 2
 class Report:
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    # Things to know that aren't problems in the file itself (don't fail --strict).
+    notes: list[str] = field(default_factory=list)
     rules: int = 0
     tools: int = 0
 
 
-def _conditions_key(rule: Rule) -> frozenset[tuple[tuple[str, ...], str, str, bool]]:
+_CondKey = frozenset[tuple[tuple[str, ...], str, str, bool]]
+
+
+def _conditions_key(rule: Rule) -> _CondKey:
     return frozenset(
         (c.path, c.op.value, json.dumps(c.value, sort_keys=True), c.ignore_case) for c in rule.when
     )
+
+
+def _covers(other: Rule, rule: Rule) -> bool:
+    """True if `other` applies to every agent that `rule` applies to."""
+    if other.agents is None:
+        return True
+    return rule.agents is not None and set(rule.agents) <= set(other.agents)
+
+
+def _agents_key(rule: Rule) -> frozenset[str] | None:
+    return None if rule.agents is None else frozenset(rule.agents)
+
+
+def _agent_warnings(policy: Policy, known_agents: list[str] | None) -> list[str]:
+    out: list[str] = []
+    named = named_agents(policy)
+    if known_agents is not None:
+        known = set(known_agents)
+        for agent, where in sorted(named.items()):
+            if agent not in known:
+                out.append(
+                    f'W014: {where[0]} names agent "{agent}", which isn\'t in the agents '
+                    f"file (typo?); `warden serve` refuses to start with it."
+                )
+    by_folded: dict[str, set[str]] = {}
+    for agent in set(named) | set(known_agents or ()):
+        by_folded.setdefault(agent.casefold(), set()).add(agent)
+    for spellings in sorted(sorted(v) for v in by_folded.values() if len(v) > 1):
+        listed = '", "'.join(spellings)
+        out.append(
+            f'W015: agent names "{listed}" differ only in upper/lower case; agent ids are '
+            f"case-sensitive, so these are different agents (one agent written two ways?)."
+        )
+    return out
 
 
 def _warnings(policy: Policy) -> list[str]:
@@ -81,6 +128,7 @@ def _warnings(policy: Policy) -> list[str]:
                     not other.when
                     and other.id != rule.id
                     and _STRICTNESS[other.effect] > _STRICTNESS[rule.effect]
+                    and _covers(other, rule)
                 ):
                     out.append(
                         f'W003: rule "{rule.id}" can never apply: "{other.id}" always '
@@ -88,9 +136,14 @@ def _warnings(policy: Policy) -> list[str]:
                     )
                     break
 
-        seen: dict[tuple[Decision, frozenset[tuple[tuple[str, ...], str, str, bool]]], str] = {}
+        seen: dict[
+            tuple[
+                Decision, frozenset[tuple[tuple[str, ...], str, str, bool]], frozenset[str] | None
+            ],
+            str,
+        ] = {}
         for rule in tool_rules:
-            key = (rule.effect, _conditions_key(rule))
+            key = (rule.effect, _conditions_key(rule), _agents_key(rule))
             if key in seen:
                 out.append(f'W004: rule "{rule.id}" duplicates rule "{seen[key]}".')
             else:
@@ -183,7 +236,8 @@ def _warnings(policy: Policy) -> list[str]:
     return out
 
 
-def check_policy(path: Path) -> Report:
+def check_policy(path: Path, agents_path: Path | None = None) -> Report:
+    """Check the policy file; with `agents_path`, also the agent names it uses."""
     report = Report()
     try:
         raw = path.read_text(encoding="utf-8")
@@ -201,6 +255,19 @@ def check_policy(path: Path) -> Report:
     report.rules = len(policy.rules)
     report.tools = len({r.tool for r in policy.rules} | set(policy.tools))
     report.warnings = _warnings(policy)
+    known_agents = None
+    if agents_path is not None:
+        try:
+            known_agents = [entry.id for entry in read_agents_file(agents_path).agents]
+        except AgentsError as exc:
+            report.errors.append(f"agents file: {exc}")
+            return report
+    report.warnings += _agent_warnings(policy, known_agents)
+    if known_agents is None and any(rule.agents for rule in policy.rules):
+        report.notes.append(
+            "the policy has per-agent rules: `warden serve` needs --agents (agent tokens) "
+            "for them. Run `warden check --agents FILE` to check the agent names."
+        )
     return report
 
 
@@ -214,6 +281,9 @@ def format_report(path: Path, report: Report) -> str:
     if report.warnings:
         lines.append("")
         lines += [f"WARNING {w}" for w in report.warnings]
+    if report.notes:
+        lines.append("")
+        lines += [f"NOTE: {n}" for n in report.notes]
     lines.append("")
 
     def count(n: int, word: str) -> str:
