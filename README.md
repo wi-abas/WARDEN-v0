@@ -157,6 +157,11 @@ uv run warden approvals list --agent A --tool T   # just one agent and tool (e.g
 
 Settings (`--policy`, `--port`, the admin key, ...): see [docs/api.md](https://github.com/wi-abas/agent-warden/blob/main/docs/api.md#settings).
 
+**Changed the port?** Clients don't follow `--port`. Tell them the URL:
+`export WARDEN_URL=http://127.0.0.1:8790` for `warden approvals` and the SDK's default
+client, `--warden-url` for `warden proxy`, `WardenClient(url=...)` in code. Details:
+[how clients find Warden](https://github.com/wi-abas/agent-warden/blob/main/docs/api.md#how-clients-find-warden).
+
 ## Speed
 
 About **1.1 ms per tool call** over HTTP on an Apple M1, including the hash-chained

@@ -57,7 +57,7 @@ Everything else (including the server's other tools) is denied, as always.
 |---|---|---|
 | `server.command`, `server.args` | How to start the real MCP server | required |
 | `server.env` | Extra environment variables for the server (never logged). The server gets the proxy's environment **without** `WARDEN_ADMIN_KEY` and `WARDEN_AGENT_TOKEN` | `{}` |
-| `warden_url` | Warden on this machine (`127.0.0.1`, `localhost` or `::1` only) | `http://127.0.0.1:8000` |
+| `warden_url` | Warden on this machine (`127.0.0.1`, `localhost` or `::1` only). `--warden-url` overrides it; the `WARDEN_URL` environment variable is **not** used | `http://127.0.0.1:8000` |
 | `agent_id` | The agent id Warden records | `mcp-proxy` |
 | `tool_prefix` | Added in front of tool names sent to Warden, so two servers' `search` tools can have different rules | `""` |
 | `approval.mode` | `wait` or `error` (see above) | `wait` |

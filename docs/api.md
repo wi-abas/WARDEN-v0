@@ -208,3 +208,38 @@ Warden** if they shouldn't be able to approve their own actions.
 
 An invalid setting, or a policy file that is invalid or has no rules, stops Warden with a
 clear message instead of starting a server that would deny everything. The host is always `127.0.0.1`.
+
+### How clients find Warden
+
+The settings above are for the **server** (`warden serve`). Clients don't read them: if
+you start Warden on another port (`--port 8790` or `WARDEN_PORT`), tell each client the
+new URL too. `warden approvals` doesn't see `WARDEN_PORT` and keeps trying `:8000`.
+
+| Client | Where it gets the URL (first one set wins) | Default |
+|---|---|---|
+| `warden approvals` | `--warden-url URL`, then `WARDEN_URL` | `http://127.0.0.1:8000` |
+| SDK `@guard` / `run_guarded` **without** `client=` | `WARDEN_URL` (also `WARDEN_AGENT_ID`, `WARDEN_AGENT_TOKEN`), read at call time | `http://127.0.0.1:8000`, agent `agent` |
+| SDK `WardenClient(...)` you create yourself | its `url=` argument only (**not** `WARDEN_URL`) | `http://127.0.0.1:8000` |
+| `warden proxy` | `--warden-url URL`, then `warden_url` in the `--config` file (**not** `WARDEN_URL`) | `http://127.0.0.1:8000` |
+| Your own HTTP code | whatever URL you wrote | |
+
+`warden limits`, `warden check`, `warden test` and `warden audit` don't talk to the server
+at all; they read files.
+
+So, for Warden on port 8790:
+
+```sh
+uv run warden serve --port 8790
+export WARDEN_URL=http://127.0.0.1:8790        # for warden approvals and default SDK clients
+uv run warden approvals list --group           # or: --warden-url http://127.0.0.1:8790
+uv run warden proxy --warden-url http://127.0.0.1:8790 -- COMMAND [ARGS...]
+```
+```python
+warden = WardenClient(url="http://127.0.0.1:8790", agent_id="billing-agent")
+```
+
+A client URL must be `http://` with host `127.0.0.1`, `localhost` or `::1` and an explicit
+port, and nothing else (no path, user, query or fragment). Anything else is refused:
+`warden approvals` and `warden proxy` exit with code 2, and the SDK raises
+`ClientConfigError` instead of calling Warden. Clients also ignore `HTTP_PROXY` settings,
+so tool arguments and the admin key never go to a proxy.
