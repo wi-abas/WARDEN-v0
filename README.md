@@ -29,6 +29,26 @@ A pretend agent reads files, tries a path trick, emails colleagues (and tries a 
 approval and to replay it. Warden's answer to each is shown and checked. The policy it uses
 is [`examples/demo-policy.json`](https://github.com/wi-abas/agent-warden/blob/main/examples/demo-policy.json).
 
+## Install in your own project
+
+Warden is not on PyPI yet, so install it from GitHub. It needs Python 3.12 or newer.
+
+```sh
+uv add "agent-warden @ git+https://github.com/wi-abas/agent-warden"   # with uv
+pip install "git+https://github.com/wi-abas/agent-warden"              # with pip (in a virtualenv)
+```
+
+Then, from your project folder:
+
+```sh
+uv run warden init      # creates policies/default.json (a starter policy)
+uv run warden check     # validates it
+uv run warden serve     # starts Warden on http://127.0.0.1:8000
+```
+
+(With pip, drop the `uv run`.) Once released on PyPI the package will be called
+`agent-warden`; the import name stays `warden`.
+
 ## Use it from your agent
 
 Three ways, from least to most work on your side.
