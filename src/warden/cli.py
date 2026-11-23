@@ -7,6 +7,7 @@ warden serve           start the server; options: --policy FILE --port N
 warden init [FILE]     create a starter policy (default policies/default.json)
 warden check FILE      validate a policy file; exit 1 on errors
 warden check --strict  ...also exit 1 on warnings (useful in CI)
+warden check --agents FILE   ...also check the agent names per-agent rules use
 warden schema          print the JSON Schema for policy files
 warden test FILE [--policy FILE]        run policy tests (example requests + expected decisions)
 warden limits [--policy FILE]           show rate limits and approval quotas
@@ -88,6 +89,9 @@ def main(argv: list[str] | None = None) -> int:
     check = commands.add_parser("check", help="validate a policy file")
     check.add_argument("policy", nargs="?", type=Path, default=DEFAULT_POLICY_PATH)
     check.add_argument("--strict", action="store_true", help="exit 1 on warnings too")
+    check.add_argument(
+        "--agents", type=Path, help="agents file: check the agent names the policy uses"
+    )
     limits = commands.add_parser("limits", help="show or change rate limits")
     limits.add_argument(
         "--policy",
@@ -157,7 +161,7 @@ def main(argv: list[str] | None = None) -> int:
         return init_policy(args.policy)
 
     if args.command == "check":
-        report = check_policy(args.policy)
+        report = check_policy(args.policy, args.agents)
         print(format_report(args.policy, report))
         return 1 if report.errors or (args.strict and report.warnings) else 0
 

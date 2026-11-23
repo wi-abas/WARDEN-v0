@@ -11,6 +11,7 @@ decision. Protect it with file permissions.
 import json
 import logging
 import re
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Annotated, Self
 
@@ -60,6 +61,44 @@ class Policy(BaseModel):
 
 
 EMPTY_POLICY = Policy(rules=())
+
+
+def named_agents(policy: Policy) -> dict[str, list[str]]:
+    """Every agent id the policy names -> where: "rule 'x'" or "limits.agents"."""
+    out: dict[str, list[str]] = {}
+    for rule in sorted(policy.rules, key=lambda r: r.id):
+        for agent in rule.agents or ():
+            out.setdefault(agent, []).append(f"rule '{rule.id}'")
+    for agent in policy.limits.agents:
+        out.setdefault(agent, []).append("limits.agents")
+    return out
+
+
+def per_agent_problem(policy: Policy, known_agents: Iterable[str] | None) -> str | None:
+    """Why the server must not start with this policy, or None.
+
+    `known_agents` are the ids in the agents file, or None without one.
+    - Without an agents file, agent_id is self-declared: any local program could claim
+      a per-agent allow, or dodge a per-agent deny by typing another name.
+    - With one, every agent the policy names must exist: a typo in a deny rule's
+      "agents" ("biling-agent") would otherwise protect nothing, silently.
+    """
+    if known_agents is None:
+        per_agent = [rule.id for rule in sorted(policy.rules, key=lambda r: r.id) if rule.agents]
+        if per_agent:
+            return (
+                f"rule '{per_agent[0]}' is per-agent: start with --agents so agent ids are "
+                f"proven (agent tokens, see `warden agent add`)"
+            )
+        return None
+    known = set(known_agents)
+    for agent, where in sorted(named_agents(policy).items()):
+        if agent not in known:
+            return (
+                f"{where[0]} names agent '{agent}', which is not in the agents file "
+                f"(typo? add it with `warden agent add {agent}`)"
+            )
+    return None
 
 
 class DuplicateKeyError(ValueError):

@@ -168,6 +168,18 @@
           ],
           "default": null,
           "title": "Message"
+        },
+        "agents": {
+          "default": null,
+          "items": {
+            "pattern": "^[A-Za-z0-9_.\\-]{1,128}$",
+            "type": "string"
+          },
+          "maxItems": 100,
+          "minItems": 1,
+          "title": "Agents",
+          "type": "array",
+          "uniqueItems": true
         }
       },
       "required": [
