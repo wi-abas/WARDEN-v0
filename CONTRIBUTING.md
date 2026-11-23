@@ -17,6 +17,8 @@ uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run pyt
 
 All four must pass (CI runs the same).
 
+The end-to-end scenario (real server, fake agents, MCP proxy; part of `pytest`) also runs on its own: `bash examples/e2e/run_all.sh` (see `examples/e2e/README.md`).
+
 `tests/test_properties.py` uses [Hypothesis](https://hypothesis.readthedocs.io/) to try
 hundreds of generated inputs per rule (engine, fingerprints, approvals, bypass attempts).
 Before a security-relevant change, run it much harder:

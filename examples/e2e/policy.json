@@ -1,0 +1,197 @@
+{
+  "$schema": "https://raw.githubusercontent.com/wi-abas/agent-warden/main/schemas/policy-v1.json",
+  "tools": {
+    "read_file": {
+      "arguments": [
+        "path"
+      ],
+      "required": [
+        "path"
+      ]
+    },
+    "write_file": {
+      "arguments": [
+        "path",
+        "content"
+      ],
+      "required": [
+        "path",
+        "content"
+      ]
+    },
+    "delete_file": {
+      "arguments": [
+        "path"
+      ],
+      "required": [
+        "path"
+      ]
+    },
+    "send_email": {
+      "arguments": [
+        "to",
+        "subject",
+        "body"
+      ],
+      "required": [
+        "to"
+      ]
+    },
+    "shell": {
+      "arguments": [
+        "command"
+      ],
+      "required": [
+        "command"
+      ]
+    },
+    "fetch_url": {
+      "arguments": [
+        "url"
+      ],
+      "required": [
+        "url"
+      ]
+    },
+    "fs.read_file": {
+      "arguments": [
+        "path"
+      ],
+      "required": [
+        "path"
+      ]
+    },
+    "fs.write_file": {
+      "arguments": [
+        "path",
+        "content"
+      ],
+      "required": [
+        "path",
+        "content"
+      ]
+    }
+  },
+  "rules": [
+    {
+      "id": "read-workspace",
+      "tool": "read_file",
+      "effect": "allow",
+      "when": [
+        {
+          "arg": "path",
+          "op": "startswith",
+          "value": "/workspace/"
+        }
+      ]
+    },
+    {
+      "id": "write-workspace",
+      "tool": "write_file",
+      "effect": "allow",
+      "when": [
+        {
+          "arg": "path",
+          "op": "startswith",
+          "value": "/workspace/"
+        }
+      ]
+    },
+    {
+      "id": "delete-needs-ok",
+      "tool": "delete_file",
+      "effect": "require_approval",
+      "when": [
+        {
+          "arg": "path",
+          "op": "startswith",
+          "value": "/workspace/"
+        }
+      ],
+      "message": "Deleting needs a human"
+    },
+    {
+      "id": "email-colleagues",
+      "tool": "send_email",
+      "effect": "allow",
+      "when": [
+        {
+          "arg": "to",
+          "op": "endswith",
+          "value": "@example.com",
+          "ignore_case": true
+        }
+      ]
+    },
+    {
+      "id": "email-outside",
+      "tool": "send_email",
+      "effect": "require_approval",
+      "when": [
+        {
+          "arg": "to",
+          "op": "endswith",
+          "value": "@partner.org",
+          "ignore_case": true
+        }
+      ],
+      "message": "Email to partner.org needs a human"
+    },
+    {
+      "id": "no-shell",
+      "tool": "shell",
+      "effect": "deny",
+      "message": "No shell for agents"
+    },
+    {
+      "id": "fetch-allowed",
+      "tool": "fetch_url",
+      "effect": "allow",
+      "when": [
+        {
+          "arg": "url",
+          "op": "host_in",
+          "value": [
+            "api.example.com"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "mcp-read",
+      "tool": "fs.read_file",
+      "effect": "allow",
+      "when": [
+        {
+          "arg": "path",
+          "op": "startswith",
+          "value": "/workspace/"
+        }
+      ]
+    },
+    {
+      "id": "mcp-write",
+      "tool": "fs.write_file",
+      "effect": "require_approval",
+      "when": [
+        {
+          "arg": "path",
+          "op": "startswith",
+          "value": "/workspace/"
+        }
+      ]
+    }
+  ],
+  "limits": {
+    "default": {
+      "requests_per_minute": 600,
+      "max_pending_approvals": 20
+    },
+    "agents": {
+      "flood-bot": {
+        "requests_per_minute": 20,
+        "max_pending_approvals": 3
+      }
+    }
+  }
+}

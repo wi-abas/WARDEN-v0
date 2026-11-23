@@ -29,6 +29,26 @@ A pretend agent reads files, tries a path trick, emails colleagues (and tries a 
 approval and to replay it. Warden's answer to each is shown and checked. The policy it uses
 is [`examples/demo-policy.json`](https://github.com/wi-abas/agent-warden/blob/main/examples/demo-policy.json).
 
+## Install in your own project
+
+Warden is not on PyPI yet, so install it from GitHub. It needs Python 3.12 or newer.
+
+```sh
+uv add "agent-warden @ git+https://github.com/wi-abas/agent-warden"   # with uv
+pip install "git+https://github.com/wi-abas/agent-warden"              # with pip (in a virtualenv)
+```
+
+Then, from your project folder:
+
+```sh
+uv run warden init      # creates policies/default.json (a starter policy)
+uv run warden check     # validates it
+uv run warden serve     # starts Warden on http://127.0.0.1:8000
+```
+
+(With pip, drop the `uv run`.) Once released on PyPI the package will be called
+`agent-warden`; the import name stays `warden`.
+
 ## Use it from your agent
 
 Three ways, from least to most work on your side.
@@ -76,6 +96,34 @@ except NotAllowed as blocked:
 The arguments are frozen before the check and the function receives exactly what Warden
 checked, so changing them afterwards has no effect. Warden down means not allowed.
 `require_approval` raises `ApprovalPending` (or waits, with `wait_for_approval`).
+
+A few more things the SDK does (all in `warden.sdk`):
+
+```python
+from warden.sdk import WardenClient, guard, run_guarded
+
+# Point at a Warden on another port. A client you create uses only url=; it does
+# not read WARDEN_URL.
+warden = WardenClient(url="http://127.0.0.1:8790", agent_id="billing-agent")
+
+
+# The tool name Warden sees defaults to the function name ("send_invoice" above).
+# Give it explicitly when your policy uses a different name:
+@guard(tool="fs.read_file", client=warden)
+def read(path: str) -> str: ...
+
+
+# No decorator: check one call and run fn(**arguments) only on allow.
+text = run_guarded("read_file", {"path": "/workspace/a.txt"}, open_and_read, client=warden)
+```
+
+- Without `client=`, `@guard` and `run_guarded` build one at call time from `WARDEN_URL`,
+  `WARDEN_AGENT_ID` and `WARDEN_AGENT_TOKEN` (defaults: `http://127.0.0.1:8000`, `agent`,
+  no token).
+- `async def` functions work with `@guard` too; `run_guarded_async` is the async
+  `run_guarded`.
+- Arguments must be plain JSON values (text, numbers, true/false, null, lists, objects);
+  anything else raises `NotAllowed` without asking Warden.
 
 ### 3. Anything else: plain HTTP
 
@@ -137,6 +185,11 @@ uv run warden approvals list --agent A --tool T   # just one agent and tool (e.g
 
 Settings (`--policy`, `--port`, the admin key, ...): see [docs/api.md](https://github.com/wi-abas/agent-warden/blob/main/docs/api.md#settings).
 
+**Changed the port?** Clients don't follow `--port`. Tell them the URL:
+`export WARDEN_URL=http://127.0.0.1:8790` for `warden approvals` and the SDK's default
+client, `--warden-url` for `warden proxy`, `WardenClient(url=...)` in code. Details:
+[how clients find Warden](https://github.com/wi-abas/agent-warden/blob/main/docs/api.md#how-clients-find-warden).
+
 ## Speed
 
 About **1.1 ms per tool call** over HTTP on an Apple M1, including the hash-chained
@@ -146,7 +199,7 @@ directly. Measure on your machine: `uv run python scripts/benchmark.py`.
 
 ## Documentation
 
-- [Writing policies](https://github.com/wi-abas/agent-warden/blob/main/docs/policies.md): rules, argument conditions (incl. nested), tool argument lists, rate limits, `warden check`
+- [Writing policies](https://github.com/wi-abas/agent-warden/blob/main/docs/policies.md): rules, argument conditions (incl. nested), tool argument lists, common patterns, rate limits, `warden check`
 - [API and operations](https://github.com/wi-abas/agent-warden/blob/main/docs/api.md): endpoints, agent tokens, approvals, audit log, settings
 - [MCP proxy](https://github.com/wi-abas/agent-warden/blob/main/docs/mcp-proxy.md): `warden proxy` for Claude Desktop, Cursor, Claude Code
 - [Design notes](https://github.com/wi-abas/agent-warden/tree/main/docs/design): how each feature works and what it doesn't cover
@@ -187,9 +240,15 @@ Each of these is covered by tests in `tests/`.
 
 - **Agent tokens are optional.** Without `--agents`, any process on this machine can call
   `/v1/evaluate` with any `agent_id` (and dodge per-agent limits by inventing new ones).
+- **Rules apply to every agent.** A rule can't say "only billing-agent may send
+  invoices". Agent tokens give each agent an identity, its own rate limits and approvals
+  only it can use, but not its own permissions. Workaround: run one Warden (with its own
+  policy, port and audit database) per agent. Per-agent rules are planned.
 - **Warden is a checkpoint, not a sandbox.** An agent can skip asking. The MCP proxy and
   the SDK enforce the answer only for calls that go through them.
 - **Nested conditions don't search lists**, and argument lists only cover top-level names.
+- **Argument lists check names, not types.** An argument's type is only checked when a
+  rule's condition compares it.
 - **Text checks see text.** Paths and emails are checked for common tricks (`//`, `/./`,
   `/../`, backslashes; spaces, display names, recipient lists, trailing dots), but Warden
   doesn't resolve symlinks or URL-decode. Prefer "allow only..." rules for paths and emails.
