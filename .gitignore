@@ -19,3 +19,6 @@ build/
 .hypothesis/
 .coverage
 warden-agents.json
+
+# graphify output (local knowledge graph)
+graphify-out/
