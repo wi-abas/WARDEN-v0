@@ -196,10 +196,12 @@ def _no_constants(name: str) -> Any:
 
 def parse_message(line: bytes) -> Any:
     """Strict JSON: no repeated keys (parsers disagree on which copy wins), no NaN, and
-    nothing that can't be re-encoded (a lone "\\ud800" escape would crash `encode`)."""
+    nothing that can't be re-encoded (a lone "\\ud800" escape would crash `encode`).
+    Plain UTF-8 only: json.loads(bytes) would quietly accept a byte order mark or
+    UTF-16/32, so the bytes are decoded first (a BOM is then refused as invalid JSON)."""
     try:
         message = json.loads(
-            line, object_pairs_hook=no_duplicate_keys, parse_constant=_no_constants
+            line.decode("utf-8"), object_pairs_hook=no_duplicate_keys, parse_constant=_no_constants
         )
     except DuplicateKeyError:
         raise _Refused(INVALID_REQUEST, "repeated key in message (refused by Warden)") from None
