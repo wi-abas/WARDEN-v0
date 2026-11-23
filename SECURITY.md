@@ -73,10 +73,11 @@ Assuming the agent runtime calls Warden and obeys the answer:
   self-declared and anything that can reach `127.0.0.1` can ask as any agent (and dodge
   per-agent rate limits with new ids). With tokens, a program that can read an agent's
   environment or memory has its token.
-- **One agent using another agent's permissions.** Rules apply to every agent: there are
-  no per-agent rules yet (planned). Agent tokens prove *which* agent asks (for the audit
-  log, rate limits and approval binding), not *what* it may do. To give agents different
-  permissions, run one Warden, with its own policy, per agent.
+- **One agent using another agent's permissions.** Per-agent rules (`"agents": [...]`)
+  give agents different permissions, and require agent tokens: `warden serve` refuses to
+  start with a per-agent rule and no `--agents`, or with an agent name that isn't in the
+  agents file. Remaining: a stolen token is that agent, with all its per-agent
+  permissions; there are no groups or roles, so long lists repeat.
 - **Whoever can edit the policy file.** It's trusted configuration and controls every
   decision.
 - **Whoever has the admin key** (or can read the terminal it's printed in, or the

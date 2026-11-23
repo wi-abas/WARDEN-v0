@@ -240,6 +240,41 @@ uv run warden check policy.json --strict
 uv run warden test policy-tests.json
 ```
 
+## Per-agent rules
+
+Optional. A rule with `"agents"` applies only to the agents it lists; a rule without it
+applies to every agent. Here the billing agent may pay up to €500, the research agent
+may only read, and nobody else may do either:
+
+```json
+{
+  "rules": [
+    { "id": "billing-pays-small", "tool": "pay", "effect": "allow",
+      "agents": ["billing-agent"],
+      "when": [{ "arg": "amount", "op": "lte", "value": 500 }] },
+    { "id": "research-reads", "tool": "read_file", "effect": "allow",
+      "agents": ["research-agent", "billing-agent"],
+      "when": [{ "arg": "path", "op": "startswith", "value": "/workspace/" }] }
+  ]
+}
+```
+
+- **Exact, case-sensitive names.** `"billing-agent"` doesn't match `"Billing-agent"`,
+  and there are no wildcards: `"billing-*"` is not a pattern (it would hand a newly added
+  `billing-evil` the same permissions). 1 to 100 names, no duplicates. An empty list or
+  `null` is refused (leave the key out for "every agent").
+- **Most restrictive still wins**, across every rule that matches. A per-agent `allow`
+  never overrides a `deny` or `require_approval` that applies to everyone. To give one
+  agent more than the others, limit the stricter rule to the other agents.
+- **Requires agent tokens.** Without `--agents`, `agent_id` is self-declared, so any
+  local program could claim a per-agent allow or dodge a per-agent deny. `warden serve`
+  refuses to start when the policy has a per-agent rule and no agents file. It also
+  refuses to start if a rule (or `limits.agents`) names an agent that isn't in the
+  agents file: a typo in a deny rule would otherwise protect nothing.
+- Check the names before starting: `uv run warden check policy.json --agents warden-agents.json`
+  (W014, W015). Test both sides with `warden test` cases that set `"agent_id"`: one for
+  the agent that should get the allow, one for an agent that shouldn't.
+
 ## Rate limits and approval quotas
 
 Optional. Each agent gets a request budget and a cap on how many approvals it may have
@@ -299,6 +334,14 @@ do what you meant:
 | W011 | A URL prefix has no `/` after the host (`"https://api.x.com"` also matches `"https://api.x.com.evil.net"`) |
 | W012 | A deny rule blocks a URL by comparing text; use `host_in` instead |
 | W013 | A deny rule checks a nested value (`["headers", "to"]`): other keys in that object aren't checked |
+| W014 | With `--agents FILE`: a rule's `agents` (or `limits.agents`) names an agent that isn't in the file (typo?) |
+| W015 | Two agent names differ only in upper/lower case (`Billing` and `billing` are different agents) |
+
+`--agents FILE` checks the agent names that per-agent rules and `limits.agents` use.
+Without it, a policy with per-agent rules gets a note (not a warning) that
+`warden serve` will need `--agents`. W003 and W004 take `agents` into account: a deny
+for every agent makes a per-agent allow dead, but a per-agent deny doesn't kill an allow
+for everyone.
 
 Exit code `1` on errors; with `--strict`, also on warnings (useful in CI).
 
