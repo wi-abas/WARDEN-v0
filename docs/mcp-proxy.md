@@ -112,7 +112,8 @@ Desktop keeps it in its MCP log). Or list what's waiting:
 ```sh
 curl -s http://127.0.0.1:8000/v1/approvals -H "X-Warden-Admin-Key: $WARDEN_ADMIN_KEY"
 curl -s -X POST http://127.0.0.1:8000/v1/approvals/<approval_id>/approve \
-  -H "X-Warden-Admin-Key: $WARDEN_ADMIN_KEY"
+  -H "X-Warden-Admin-Key: $WARDEN_ADMIN_KEY" \
+  -H 'content-type: application/json' -d '{"action_hash": "<action_hash from the list>"}'
 ```
 
 MCP clients have their own time limit per tool call. If yours gives up before you can

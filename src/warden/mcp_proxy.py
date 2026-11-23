@@ -528,12 +528,15 @@ class McpProxy:
         if answer.decision is Decision.REQUIRE_APPROVAL:
             url = self.config.warden_url
             key = '-H "X-Warden-Admin-Key: $WARDEN_ADMIN_KEY"'
-            # Review first: approving by id alone means approving arguments unseen.
+            # Review first: approving by id alone means approving arguments unseen. The
+            # action_hash is NOT filled in: copying it from the list proves you read it.
             print(
                 f"Warden: {_safe_name(tool)} needs approval (id {approval_id}).\n"
                 f"  1. Check what it would do:  curl -s {url}/v1/approvals {key}\n"
                 f"  2. Then approve:            curl -X POST "
-                f"{url}/v1/approvals/{approval_id}/approve {key}",
+                f"{url}/v1/approvals/{approval_id}/approve {key} "
+                "-H 'content-type: application/json' "
+                """-d '{"action_hash": "<action_hash from step 1>"}'""",
                 file=sys.stderr,
             )
         if settings.mode == "error" and answer.decision is Decision.REQUIRE_APPROVAL:

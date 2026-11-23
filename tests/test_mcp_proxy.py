@@ -863,3 +863,22 @@ def test_approval_hint_says_to_review_first(
     run_session(config, warden, script)
     err = capsys.readouterr().err
     assert err.index("/v1/approvals -H") < err.index("/approve")
+
+
+def test_approval_hint_sends_the_action_hash_like_the_docs(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """docs/api.md approves with {"action_hash": ...}: proof the human listed it first.
+    The hint names the field but not the value, so it still has to be read from the list."""
+    warden = FakeWarden({"echo": [pending()]})
+    config = make_config(tmp_path, approval={"mode": "error"})
+
+    async def script(s: Session) -> None:
+        await s.roundtrip(call("echo", {}))
+
+    run_session(config, warden, script)
+    err = capsys.readouterr().err
+    approve = err[err.index("/approve") :]
+    assert "-H 'content-type: application/json'" in approve
+    assert """-d '{"action_hash": "<action_hash from step 1>"}'""" in approve
+    assert HASH not in err
