@@ -18,6 +18,9 @@ Security properties (each one is tested in tests/test_engine.py):
     or not one plain email address when the rule compares emails ("x@evil.com ", "x@evil.com.",
     "Evil <x@evil.com>", "a@x.com, b@y.com"), or, when the rule compares a host
     name like "evil.com", a trailing dot, edge spaces or brackets ("x@evil.com.").
+- A rule with `otherwise` gives `effect` when all its conditions hold and `otherwise`
+  (always stricter) when one doesn't or its argument is missing. Uncheckable arguments
+  still deny the whole request.
 - Most restrictive wins: DENY beats REQUIRE_APPROVAL, which beats ALLOW.
 - Fail closed: any unexpected error gives DENY, never ALLOW.
 - Deterministic: no network, no files, no randomness, no LLM. Rule order does not matter.
@@ -77,6 +80,7 @@ _UNCLEAN_PATH = "not a clean path: '..', '.', '//', '%', backslash or edge space
 _UNCLEAN_URL = "not a clean URL"
 _UNCLEAN_EMAIL = "not one plain email address"
 _UNCLEAN_HOST = "not a clean host name"
+_SCHEME_NOT_ALLOWED = "URL scheme not accepted by the rule"
 
 
 def _comparable(a: JsonValue, b: JsonValue) -> bool:
@@ -150,6 +154,12 @@ def _is_clean_path(text: str) -> bool:
     return not any(segment and not segment.strip(". ") for segment in segments)
 
 
+def _valid_port(port: str) -> bool:
+    """1 to 65535 in plain ASCII digits, no leading zero. Libraries disagree about what
+    ":0", ":99999" or ":0443" reach (an error, a truncated number, the default port)."""
+    return port.isascii() and port.isdigit() and not port.startswith("0") and int(port) <= 65535
+
+
 def _is_clean_url(text: str) -> bool:
     """scheme://host[:port]/clean/path, with no tricks in the host part.
 
@@ -168,11 +178,11 @@ def _is_clean_url(text: str) -> bool:
     # but don't match it as text. Allowed: name, name:port, [ipv6], [ipv6]:port.
     if host.startswith("["):
         name, bracket, after = host[1:].partition("]")
-        if not bracket or not name or (after and not (after[0] == ":" and after[1:].isdigit())):
+        if not bracket or not name or (after and not (after[0] == ":" and _valid_port(after[1:]))):
             return False
     else:
         name, colon, port = host.partition(":")
-        if colon and not port.isdigit():
+        if colon and not _valid_port(port):
             return False
         if name.endswith("."):
             return False
@@ -301,6 +311,12 @@ def _holds(condition: Condition, arguments: dict[str, JsonValue]) -> bool:
         if not isinstance(actual, str) or not isinstance(expected, list):
             raise _UncheckableArgument(condition.label)
         host = _url_host(actual, condition)
+        # Only web URLs by default: "ftp://", "gopher://" or "file://" to an allowed host
+        # is not what a host allow list means, and a deny rule must not be dodged by an
+        # odd scheme either. So another scheme is uncheckable (whole request denied).
+        scheme = actual.split("://", 1)[0]
+        if not scheme.isascii() or scheme.lower() not in condition.url_schemes:
+            raise _UncheckableArgument(condition.label, _SCHEME_NOT_ALLOWED)
         return any(
             host == entry or (entry.startswith(".") and (host == entry[1:] or host.endswith(entry)))
             for entry in expected
@@ -330,6 +346,21 @@ def _holds(condition: Condition, arguments: dict[str, JsonValue]) -> bool:
         text, affix = _fold(actual, condition), _fold(expected, condition)
         return text.startswith(affix) if op is Op.STARTSWITH else text.endswith(affix)
 
+    if op is Op.CONTAINS:
+        if not isinstance(actual, str):
+            raise _UncheckableArgument(condition.label)
+        needles = expected if isinstance(expected, list) else [expected]
+        if not all(isinstance(n, str) for n in needles):  # can't happen: loader checked it
+            raise ValueError("policy value is not text")
+        _check_unicode(actual, condition)
+        # "evil。net" is "evil.net" to URL and mail software: refuse look-alike dots
+        # when the rule looks for a dotted text. (No URL/path/email shape check: the
+        # argument is free text that merely contains something.)
+        if any("." in str(n) for n in needles) and any(d in actual for d in _LOOKALIKE_DOTS):
+            raise _UncheckableArgument(condition.label, _HIDDEN_CHARS)
+        text = _fold(actual, condition)
+        return any(_fold(str(n), condition) in text for n in needles)
+
     # eq / neq / in: the argument must have the same type as the policy value(s).
     choices = expected if isinstance(expected, list) else [expected]
     if not any(_comparable(actual, choice) for choice in choices):
@@ -343,24 +374,36 @@ def _holds(condition: Condition, arguments: dict[str, JsonValue]) -> bool:
     return found  # Op.EQ, Op.IN
 
 
-def _rule_matches(rule: Rule, request: ActionRequest) -> bool:
+def _rule_outcome(rule: Rule, request: ActionRequest) -> Decision | None:
+    """The decision this rule gives for the request, or None if it doesn't apply.
+
+    Without `otherwise`: `effect` if every condition holds, else None.
+    With `otherwise`: `effect` if every condition holds, else `otherwise` (a missing
+    argument counts as "doesn't hold": the stricter branch). Either way an uncheckable
+    argument raises _UncheckableArgument, which denies the whole request.
+    """
     if rule.tool != request.tool:
-        return False
+        return None
     # A per-agent rule only applies to the agents it lists (exact match). Checked before
     # any condition: for another agent the rule simply doesn't exist.
     if not rule.applies_to(request.agent_id):
-        return False
+        return None
     # Check every condition (no short-circuit), so an uncheckable argument is always
     # caught, whatever order the conditions are written in.
     results = [_condition_result(rule, condition, request) for condition in rule.when]
-    return all(results)
+    if all(results):
+        return rule.effect
+    return rule.otherwise
 
 
 def _condition_result(rule: Rule, condition: Condition, request: ActionRequest) -> bool:
     try:
         return _holds(condition, request.arguments)
     except _MissingArgument:
-        # Fail closed: restrictive rules still apply, allow rules don't.
+        # Fail closed: restrictive rules still apply, allow rules don't. A rule with
+        # `otherwise` takes its stricter branch ("doesn't hold").
+        if rule.otherwise is not None:
+            return False
         return rule.effect is not Decision.ALLOW
 
 
@@ -402,7 +445,8 @@ def _evaluate(
         # Sorted by id so that even the reason (which argument couldn't be checked)
         # is the same whatever order the rules are written in.
         ordered = sorted(rules, key=lambda rule: rule.id)
-        matches = [rule for rule in ordered if _rule_matches(rule, request)]
+        outcomes = [(rule, _rule_outcome(rule, request)) for rule in ordered]
+        matches = [(rule, outcome) for rule, outcome in outcomes if outcome is not None]
     except _UncheckableArgument as exc:
         # exc.arg is the argument NAME from the policy file, never its value; exc.why is
         # one of the fixed texts above.
@@ -418,13 +462,17 @@ def _evaluate(
             decision=Decision.DENY, reason="no matching rule", action_hash=action_hash
         )
 
-    # Pick the most restrictive rule. On a tie, the smallest rule id wins,
+    # Pick the most restrictive outcome. On a tie, the smallest rule id wins,
     # so the answer is the same whatever order the rules are listed in.
-    winner = min(matches, key=lambda rule: (-_RESTRICTIVENESS[rule.effect], rule.id))
+    winner, decision = min(matches, key=lambda match: (-_RESTRICTIVENESS[match[1]], match[0].id))
+    if decision is winner.effect:
+        reason = winner.message or f"matched rule '{winner.id}'"
+    else:  # the `otherwise` branch: say so, so the audit log shows which branch decided
+        reason = f"rule '{winner.id}': conditions not met"
 
     return EvaluationResult(
-        decision=winner.effect,
-        reason=winner.message or f"matched rule '{winner.id}'",
+        decision=decision,
+        reason=reason,
         matched_rule=winner.id,
         action_hash=action_hash,
     )

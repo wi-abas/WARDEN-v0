@@ -102,7 +102,9 @@ Assuming the agent runtime calls Warden and obeys the answer:
   `endswith "@mycompany.com"` can't tell two recipients in one string apart; nested
   conditions don't search lists, and argument lists only cover top-level names. A deny
   list of IP addresses can be dodged with other spellings (`http://2130706433/` is
-  127.0.0.1): use allow lists. Look-alike letters from other scripts (Cyrillic `а` in
+  127.0.0.1): use allow lists. `contains` is a tripwire, not a sandbox: `rm -fr` doesn't
+  contain `"rm -rf"` (so it's refused in allow rules). `host_in` checks names, not where
+  DNS sends them (non-http(s) schemes and odd ports are denied). Look-alike letters from other scripts (Cyrillic `а` in
   `pаypal.com`) aren't flagged in the approval list.
 - **Denial of service.** Request size, per-agent request rates, per-agent pending
   approvals and the recording of rejected requests are capped, but without agent tokens

