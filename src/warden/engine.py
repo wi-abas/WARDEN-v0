@@ -61,11 +61,22 @@ class _MissingArgument(Exception):
 
 
 class _UncheckableArgument(Exception):
-    """An argument exists but can't be compared safely (wrong type, "..", ...)."""
+    """An argument exists but can't be compared safely (wrong type, "..", ...).
 
-    def __init__(self, arg: str) -> None:
+    `why` is a FIXED description of the kind of problem (never the argument's value)."""
+
+    def __init__(self, arg: str, why: str | None = None) -> None:
         super().__init__(arg)
         self.arg = arg
+        self.why = why
+
+
+# Fixed reasons for text that is shaped to slip past a comparison. Never the value itself.
+_HIDDEN_CHARS = "hidden or look-alike characters"
+_UNCLEAN_PATH = "not a clean path: '..', '.', '//', '%', backslash or edge spaces"
+_UNCLEAN_URL = "not a clean URL"
+_UNCLEAN_EMAIL = "not one plain email address"
+_UNCLEAN_HOST = "not a clean host name"
 
 
 def _comparable(a: JsonValue, b: JsonValue) -> bool:
@@ -93,9 +104,9 @@ def _check_unicode(actual: str, condition: Condition) -> None:
       full-width "ｅ" in "ｅvil.net" becomes "e" (NFKC).
     """
     if any(unicodedata.category(ch) in {"Cf", "Cc"} for ch in actual):
-        raise _UncheckableArgument(condition.label)
+        raise _UncheckableArgument(condition.label, _HIDDEN_CHARS)
     if unicodedata.normalize("NFKC", actual) != unicodedata.normalize("NFC", actual):
-        raise _UncheckableArgument(condition.label)
+        raise _UncheckableArgument(condition.label, _HIDDEN_CHARS)
 
 
 def _looks_like_url(value: str) -> bool:
@@ -181,13 +192,13 @@ def _url_host(url: str, condition: Condition) -> str:
     different standards (IDNA2003 vs IDNA2008) and can reach DIFFERENT hosts."""
     _check_unicode(url, condition)
     if any(dot in url for dot in _LOOKALIKE_DOTS) or not _is_clean_url(url):
-        raise _UncheckableArgument(condition.label)
+        raise _UncheckableArgument(condition.label, _UNCLEAN_URL)
     try:
         host = (urlsplit(url).hostname or "").rstrip(".")
     except ValueError:
-        raise _UncheckableArgument(condition.label) from None
+        raise _UncheckableArgument(condition.label, _UNCLEAN_URL) from None
     if not host or not host.isascii():
-        raise _UncheckableArgument(condition.label)
+        raise _UncheckableArgument(condition.label, _UNCLEAN_URL)
     return host.lower()
 
 
@@ -234,17 +245,17 @@ def _check_text_shape(actual: str, expected: list[str], condition: Condition) ->
     name comparison."""
     if any(_looks_like_url(e) or _looks_like_email(e) or _looks_like_domain(e) for e in expected):
         if any(dot in actual for dot in _LOOKALIKE_DOTS):
-            raise _UncheckableArgument(condition.label)
+            raise _UncheckableArgument(condition.label, _HIDDEN_CHARS)
     if any(_looks_like_url(e) for e in expected):
         if not _is_clean_url(actual):
-            raise _UncheckableArgument(condition.label)
+            raise _UncheckableArgument(condition.label, _UNCLEAN_URL)
         return  # a URL may legitimately contain "@" in its path: skip the email check
     if any(_looks_like_domain(e) for e in expected) and not _is_clean_domain_text(actual):
-        raise _UncheckableArgument(condition.label)
+        raise _UncheckableArgument(condition.label, _UNCLEAN_HOST)
     if any(_looks_like_path(e) for e in expected) and not _is_clean_path(actual):
-        raise _UncheckableArgument(condition.label)
+        raise _UncheckableArgument(condition.label, _UNCLEAN_PATH)
     if any(_looks_like_email(e) for e in expected) and not _is_plain_email(actual):
-        raise _UncheckableArgument(condition.label)
+        raise _UncheckableArgument(condition.label, _UNCLEAN_EMAIL)
 
 
 def _same(actual: JsonValue, expected: JsonValue, condition: Condition) -> bool:
@@ -389,10 +400,12 @@ def _evaluate(
         ordered = sorted(rules, key=lambda rule: rule.id)
         matches = [rule for rule in ordered if _rule_matches(rule, request)]
     except _UncheckableArgument as exc:
-        # exc.arg is the argument NAME from the policy file, never its value.
+        # exc.arg is the argument NAME from the policy file, never its value; exc.why is
+        # one of the fixed texts above.
+        detail = f" ({exc.why})" if exc.why else ""
         return EvaluationResult(
             decision=Decision.DENY,
-            reason=f"argument '{exc.arg}' could not be checked",
+            reason=f"argument '{exc.arg}' could not be checked{detail}",
             action_hash=action_hash,
         )
 

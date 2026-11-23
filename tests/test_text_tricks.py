@@ -211,6 +211,41 @@ def test_names_with_dots_or_spaces_are_still_fine(path: str) -> None:
     assert ask(ALLOW_WORKSPACE, "read_file", path=path) == Decision.ALLOW
 
 
+def reason(rules: Any, tool: str, **arguments: object) -> str:
+    policy = Policy.model_validate_json(json.dumps({"rules": rules}))
+    request = ActionRequest.model_validate({"agent_id": "a", "tool": tool, "arguments": arguments})
+    return evaluate(request, policy.rules).reason
+
+
+def when(op: str, value: Any, arg: str = "x") -> list[dict[str, Any]]:
+    condition = {"arg": arg, "op": op, "value": value}
+    return [{"id": "r", "tool": "t", "effect": "allow", "when": [condition]}]
+
+
+@pytest.mark.parametrize(
+    ("rules", "value", "why"),
+    [
+        (when("startswith", "/workspace/"), "/workspace/SECRET/.. /etc", "not a clean path"),
+        (when("endswith", "@mycompany.com"), "SECRET@evil.net,a@mycompany.com", "not one plain"),
+        (when("startswith", "https://api.example.com/"), "https://SECRET@evil.net/", "clean URL"),
+        (when("host_in", ["example.com"]), "https://SECRET.example.com./", "not a clean URL"),
+        (when("endswith", "example.com"), "SECRET.example.com.", "not a clean host name"),
+        (when("eq", "ok"), "SECRET​", "hidden or look-alike characters"),
+        (when("endswith", "example.com"), "SECRET.example。com", "hidden or look-alike"),
+    ],
+)
+def test_trick_reasons_say_what_kind_without_echoing_the_value(
+    rules: Any, value: str, why: str
+) -> None:
+    text = reason(rules, "t", x=value)
+    assert text.startswith("argument 'x' could not be checked (") and why in text
+    assert "SECRET" not in text
+
+
+def test_wrong_type_reason_stays_plain() -> None:
+    assert reason(when("startswith", "/a/"), "t", x=5) == "argument 'x' could not be checked"
+
+
 @given(st.lists(st.sampled_from([".", " "]), min_size=1, max_size=6).map("".join))
 def test_any_dots_and_spaces_segment_is_refused(segment: str) -> None:
     for path in (f"/workspace/{segment}/etc", f"/workspace/{segment}", f"/workspace/a/{segment}"):

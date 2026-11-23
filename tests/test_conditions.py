@@ -132,7 +132,10 @@ def test_dot_dot_paths_are_denied(path: str) -> None:
     rules = [rule("r", "allow", cond("path", "startswith", "/data/"), tool="read_file")]
     result = evaluate(request("read_file", path=path), rules)
     assert result.decision == Decision.DENY
-    assert result.reason == "argument 'path' could not be checked"
+    assert result.reason == (
+        "argument 'path' could not be checked "
+        "(not a clean path: '..', '.', '//', '%', backslash or edge spaces)"
+    )
 
 
 def test_dot_dot_cannot_dodge_a_deny_rule() -> None:
