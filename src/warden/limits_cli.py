@@ -4,6 +4,9 @@ warden limits                                  show the limits that apply
 warden limits set [--agent ID] [--requests-per-minute N] [--pending N]
 warden limits reset [--agent ID]               remove one agent's values, or the defaults
 
+--policy FILE works before or after set/reset. `set --agent ID` warns if ID isn't in
+the agents file (--agents FILE, WARDEN_AGENTS or warden-agents.json).
+
 Edits only the "limits" section. The new file must pass the same checks as
 `warden check` (no errors) before it replaces the old one, atomically and with the
 same permissions, so a mistake never leaves a half-written or broken policy behind.
@@ -20,6 +23,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from warden.agents import DEFAULT_AGENTS_PATH, AgentsError, read_agents_file
 from warden.check import check_policy
 from warden.limits import Limits
 from warden.policy import DuplicateKeyError, describe_errors, no_duplicate_keys, parse_policy
@@ -51,7 +55,7 @@ def _write(path: Path, data: dict[str, Any]) -> None:
     try:
         parse_policy(text)
     except ValidationError as exc:
-        raise LimitsEditError(f"not changed: {'; '.join(describe_errors(exc))}") from exc
+        raise LimitsEditError(f"not changed: {'; '.join(describe_errors(exc, text))}") from exc
     mode = path.stat().st_mode & 0o777
     fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
     tmp = Path(tmp_name)
@@ -120,6 +124,33 @@ def change(
     return show(path)
 
 
+def agent_warning(agent: str, agents_path: Path | None, already_limited: bool) -> str | None:
+    """A warning when limits are set for an agent Warden may never see (e.g. a typo).
+
+    With an agents file, agent ids come from tokens: an id that isn't in the file never
+    reaches Warden, so its limits do nothing. Without one, ids are self-declared, so
+    only a NEW entry gets a reminder to check the spelling. A warning, not a refusal:
+    setting limits before `warden agent add` is legitimate and loosens nothing."""
+    path = agents_path or Path(os.environ.get("WARDEN_AGENTS") or DEFAULT_AGENTS_PATH)
+    if not path.exists():
+        if already_limited:
+            return None
+        return (
+            f"warning: no agents file ({path}), so agent ids are self-declared: make sure "
+            f"{agent!r} is spelled exactly as the agent sends it"
+        )
+    try:
+        known = {entry.id for entry in read_agents_file(path).agents}
+    except AgentsError as exc:
+        return f"warning: can't check agent {agent!r} against the agents file: {exc}"
+    if agent in known:
+        return None
+    return (
+        f"warning: agent {agent!r} is not in {path}; its limits have no effect until it is "
+        f"added (warden agent add {agent})"
+    )
+
+
 def run(args: argparse.Namespace) -> int:
     """`warden limits [set|reset]` from the command line."""
     try:
@@ -127,6 +158,10 @@ def run(args: argparse.Namespace) -> int:
             print(show(args.policy))
             return 0
         reset = args.action == "reset"
+        warning = None
+        if not reset and args.agent:
+            existing = Limits.model_validate(_read(args.policy).get("limits", {})).agents
+            warning = agent_warning(args.agent, args.agents, args.agent in existing)
         print(
             change(
                 args.policy,
@@ -139,4 +174,6 @@ def run(args: argparse.Namespace) -> int:
     except LimitsEditError as exc:
         print(f"warden: {exc}", file=sys.stderr)
         return 2
+    if warning:
+        print(warning, file=sys.stderr)
     return 0

@@ -149,6 +149,9 @@ class DuplicateKeyCheck:
 
     Parsers disagree on which copy wins (Python keeps the last, others the first), so the
     tool that finally runs could act on a different value than the one Warden checked.
+    For the same reason it refuses a body with a UTF-8 byte order mark, or in UTF-16/32
+    (Python's json.loads quietly accepts both, other parsers strip or fail): the body
+    must be plain UTF-8.
     Runs after BodySizeLimit, so the body it reads is at most MAX_BODY_BYTES.
     """
 
@@ -173,6 +176,12 @@ class DuplicateKeyCheck:
             if not message.get("more_body", False):
                 break
         body = b"".join(chunks)
+        # JSON in UTF-8 never holds a raw NUL byte (it must be escaped); UTF-16/32 does.
+        if body.startswith(b"\xef\xbb\xbf") or b"\x00" in body:
+            reason = "request body must be UTF-8 without a byte order mark"
+            self.on_reject(scope, 422, reason)
+            await _deny_response(422, reason)(scope, receive, send)
+            return
         try:
             json.loads(body, object_pairs_hook=no_duplicate_keys)
         except DuplicateKeyError:
@@ -281,12 +290,21 @@ IDS_QUERY_PATTERN = rf"^{_ID}(,{_ID}){{0,{MAX_GROUP - 1}}}$"
 
 class SingleDecision(BaseModel):
     """Optional body of POST /v1/approvals/{id}/approve|deny: the action_hash the human
-    was shown. When sent, it must match the approval (proof they looked at it)."""
+    was shown. When sent, it must match the approval (proof they looked at it).
+    `{}` (and no body at all) means "no action_hash"; any other key is refused."""
 
     # mutation-ok: strict/frozen can't matter: one string field, JSON never coerces to it
     model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
 
-    action_hash: ActionHash
+    action_hash: ActionHash | None = None
+
+    @field_validator("action_hash", mode="before")
+    @classmethod
+    def not_null(cls, value: object) -> object:
+        # Only runs for a SENT value: an explicit null is a mistake, not "no hash".
+        if value is None:
+            raise ValueError("action_hash can't be null (leave it out instead)")
+        return value
 
 
 class GroupDecision(BaseModel):

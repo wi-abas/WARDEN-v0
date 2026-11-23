@@ -26,6 +26,7 @@ from warden.mcp_proxy import (
     ProxyConfig,
     load_config,
     read_line,
+    recover_id,
     stdin_reader,
 )
 from warden.models import Decision
@@ -217,6 +218,21 @@ def test_warden_unreachable_is_deny(tmp_path: Path) -> None:
     assert calls_seen(session) == []
 
 
+def test_too_large_call_says_too_large_not_unreachable(tmp_path: Path) -> None:
+    # Nothing listens on port 9: the size check answers before anything is sent.
+    checker = WardenClient("http://127.0.0.1:9", timeout=0.5)
+
+    async def script(s: Session) -> None:
+        reply = await s.roundtrip(call("echo", {"blob": "x" * 100_000}))
+        assert reply["result"]["isError"] is True
+        assert reply["result"]["content"][0]["text"] == (
+            "Blocked by Warden: request too large for Warden (limit 64 KB)"
+        )
+
+    session, _ = run_session(make_config(tmp_path), checker, script)
+    assert calls_seen(session) == []
+
+
 # --- Approvals ------------------------------------------------------------------------
 
 
@@ -393,6 +409,48 @@ def test_refused_messages_are_never_forwarded(tmp_path: Path, line: bytes, code:
     session, _ = run_session(make_config(tmp_path), warden, script)
     assert session.server_saw() == []
     assert warden.asked == []
+
+
+@pytest.mark.parametrize(
+    ("line", "expected_id"),
+    [
+        # The id is unambiguous: the client gets its error under its own request id.
+        (b'{"jsonrpc":"2.0","id":7,"method":"tools/call","method":"ping"}', 7),
+        (b'{"jsonrpc":"2.0","id":"a","method":"tools/call","params":{"n":1,"n":2}}', "a"),
+        (b'{"jsonrpc":"2.0","params":{"id":1,"id":2},"id":null,"method":"x","method":"y"}', None),
+        # Ambiguous or unusable: answered with id null, as before.
+        (b'{"jsonrpc":"2.0","id":1,"id":2,"method":"ping"}', None),
+        (b'{"jsonrpc":"2.0","id":1.5,"method":"ping","method":"x"}', None),
+        (b'{"jsonrpc":"2.0","id":{"k":1},"method":"ping","method":"x"}', None),
+        (b'{"jsonrpc":"2.0","id":"\\ud800","method":"ping","method":"x"}', None),
+        (b'{"jsonrpc":"2.0","method":"ping","method":"x","params":{"id":3}}', None),
+        (b'[{"id":1,"id":1}]', None),
+    ],
+)
+def test_duplicate_key_refusal_answers_with_the_request_id(
+    tmp_path: Path, line: bytes, expected_id: Any
+) -> None:
+    warden = FakeWarden()
+
+    async def script(s: Session) -> None:
+        s.send_raw(line + b"\n")
+        reply = await s.recv()
+        assert reply["error"] == {
+            "code": -32600,
+            "message": "repeated key in message (refused by Warden)",
+        }
+        assert reply["id"] == expected_id
+
+    session, _ = run_session(make_config(tmp_path), warden, script)
+    assert session.server_saw() == []
+    assert warden.asked == []
+
+
+def test_recover_id_on_garbage_is_none() -> None:
+    assert recover_id(b"not json") is None
+    assert recover_id(b"\xff") is None
+    assert recover_id(b'"text"') is None
+    assert recover_id(b"[" * 100_000) is None
 
 
 @pytest.mark.parametrize(
@@ -805,3 +863,22 @@ def test_approval_hint_says_to_review_first(
     run_session(config, warden, script)
     err = capsys.readouterr().err
     assert err.index("/v1/approvals -H") < err.index("/approve")
+
+
+def test_approval_hint_sends_the_action_hash_like_the_docs(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """docs/api.md approves with {"action_hash": ...}: proof the human listed it first.
+    The hint names the field but not the value, so it still has to be read from the list."""
+    warden = FakeWarden({"echo": [pending()]})
+    config = make_config(tmp_path, approval={"mode": "error"})
+
+    async def script(s: Session) -> None:
+        await s.roundtrip(call("echo", {}))
+
+    run_session(config, warden, script)
+    err = capsys.readouterr().err
+    approve = err[err.index("/approve") :]
+    assert "-H 'content-type: application/json'" in approve
+    assert """-d '{"action_hash": "<action_hash from step 1>"}'""" in approve
+    assert HASH not in err

@@ -202,6 +202,38 @@ def test_kwargs_are_checked_by_name() -> None:
 # --- Approvals ------------------------------------------------------------------------
 
 
+def test_approval_pending_keeps_the_rules_message() -> None:
+    """The re-ask answers "waiting for a human to approve"; the rule's own message (why
+    approval is needed) must not be lost from the exception."""
+    rule = Answer(Decision.REQUIRE_APPROVAL, "Payments over 500 need finance", APPROVAL, HASH)
+    waiting = Answer(Decision.REQUIRE_APPROVAL, "waiting for a human to approve", APPROVAL, HASH)
+    client = FakeClient(rule, waiting)
+
+    @guard(client=client)
+    def pay(amount: int) -> None:
+        raise AssertionError("must not run")
+
+    with pytest.raises(ApprovalPending) as info:
+        pay(900)
+    assert str(info.value) == "Payments over 500 need finance (waiting for a human to approve)"
+    assert info.value.answer.reason == str(info.value)
+    assert info.value.approval_id == APPROVAL
+
+
+def test_approval_pending_from_a_real_server_has_the_rules_reason(tmp_path: Path) -> None:
+    app = create_app(BASIC_POLICY, audit_log=SQLiteAuditLog(tmp_path / "a.db"), admin_key=ADMIN_KEY)
+    with live_server(app) as url:
+
+        @guard(client=WardenClient(url, "sdk-agent"))
+        def send_email(to: str) -> None:
+            raise AssertionError("must not run")
+
+        with pytest.raises(ApprovalPending) as info:
+            send_email("boss@example.com")
+    assert str(info.value).startswith("matched rule '")
+    assert str(info.value).endswith("(waiting for a human to approve)")
+
+
 def test_approval_pending_raises_with_id() -> None:
     client = FakeClient(pending())
 

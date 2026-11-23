@@ -51,6 +51,50 @@ def test_invalid_json_still_reported_as_invalid(tmp_path: Path) -> None:
     assert (response.status_code, response.json()["reason"]) == (422, "invalid request")
 
 
+GOOD = '{"agent_id":"a","tool":"read_file","arguments":{}}'
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        b"\xef\xbb\xbf" + GOOD.encode(),  # UTF-8 byte order mark
+        GOOD.encode("utf-16"),  # Python's json.loads(bytes) would quietly accept these
+        GOOD.encode("utf-16-le"),
+        GOOD.encode("utf-32"),
+        GOOD.encode("utf-32-be"),
+    ],
+)
+def test_bom_and_non_utf8_bodies_are_refused(body: bytes, tmp_path: Path) -> None:
+    """Parsers disagree on a BOM or UTF-16/32 (some strip, some fail): refuse them, like
+    repeated keys, so nothing downstream reads the body differently from Warden."""
+    c, log = client(tmp_path)
+    response = c.post("/v1/evaluate", content=body, headers={"content-type": "application/json"})
+    assert response.status_code == 422
+    assert response.json()["decision"] == "deny"
+    assert response.json()["reason"] == "request body must be UTF-8 without a byte order mark"
+    assert log.recent() == []
+    assert log.recent_events()[0].reason == "request body must be UTF-8 without a byte order mark"
+
+
+def test_bom_refused_on_admin_endpoints_too(tmp_path: Path) -> None:
+    c, _ = client(tmp_path)
+    response = c.post(
+        "/v1/approvals/decide",
+        content=b"\xef\xbb\xbf{}",
+        headers={"X-Warden-Admin-Key": KEY, "content-type": "application/json"},
+    )
+    assert response.status_code == 422
+
+
+def test_non_ascii_utf8_still_works(tmp_path: Path) -> None:
+    c, _ = client(tmp_path)
+    body = '{"agent_id":"a","tool":"read_file","arguments":{"name":"café \U0001f600"}}'
+    response = c.post(
+        "/v1/evaluate", content=body.encode(), headers={"content-type": "application/json"}
+    )
+    assert response.json()["decision"] == "allow"
+
+
 def test_admin_posts_without_a_body_still_work(tmp_path: Path) -> None:
     c, _ = client(tmp_path)
     approval_id = c.post(

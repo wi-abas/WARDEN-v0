@@ -206,7 +206,7 @@ def test_reject_and_approve_still_work_during_a_flood(
 ) -> None:
     url, flood, good = flooded
     code, out, _ = cli(capsys, monkeypatch, "reject", "--yes", flood[0], "--warden-url", url)
-    assert code == 0 and "Rejected 1 actions." in out
+    assert code == 0 and "Rejected 1 action." in out
     assert "\\u200b" in out  # the reviewer still saw the hidden characters, escaped
     code, out, _ = cli(capsys, monkeypatch, "approve", "--yes", *good, "--warden-url", url)
     assert code == 0 and "Approved 2 actions." in out

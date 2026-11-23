@@ -164,6 +164,35 @@ def test_lone_surrogate_is_refused_and_the_session_survives(tmp_path: Path, line
     assert warden.asked == [("echo", {"e": "\U0001f600"}, None)]
 
 
+@pytest.mark.parametrize(
+    "line",
+    [
+        b'\xef\xbb\xbf{"jsonrpc":"2.0","id":1,"method":"ping"}',
+        b'\xef\xbb\xbf{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"echo"}}',
+        '{"jsonrpc":"2.0","id":1,"method":"ping"}'.encode("utf-16-le"),
+    ],
+)
+def test_bom_or_non_utf8_message_is_refused(tmp_path: Path, line: bytes) -> None:
+    """Python's json.loads(bytes) quietly accepts a BOM or UTF-16: refuse, like the API."""
+    warden = FakeWarden()
+
+    async def script(s: Session) -> None:
+        s.send_raw(line + b"\n")
+        error = (await s.recv())["error"]
+        assert (error["code"], error["message"]) == (-32700, "invalid JSON")
+        assert (await s.roundtrip({"jsonrpc": "2.0", "id": 2, "method": "ping"}))["id"] == 2
+
+    session, _ = run_session(make_config(tmp_path), warden, script)
+    assert [m.get("id") for m in session.server_saw()] == [2]
+    assert warden.asked == []
+
+
+@pytest.mark.parametrize("prefix", [b"\xef\xbb\xbf", b"\xff\xfe"])
+def test_parse_message_refuses_bom(prefix: bytes) -> None:
+    with pytest.raises(Exception, match="invalid JSON"):
+        parse_message(prefix + b'{"jsonrpc":"2.0"}')
+
+
 def test_allowed_meta_keys_are_configurable(tmp_path: Path) -> None:
     config = make_config(tmp_path, allow_meta_keys=["progressToken", "io.example/trace"])
 

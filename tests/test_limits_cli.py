@@ -147,3 +147,100 @@ def test_policy_from_environment(
     monkeypatch.setenv("WARDEN_POLICY", str(path))
     assert main(["limits"]) == 0
     assert "default: 9 requests/minute" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("action", [["set", "--requests-per-minute", "7"], ["reset"]])
+def test_policy_flag_also_works_after_the_subcommand(tmp_path: Path, action: list[str]) -> None:
+    """`warden limits set --policy F` used to fail; only `warden limits --policy F set` worked."""
+    path = write(tmp_path, {"limits": {"default": {"requests_per_minute": 9}}})
+    assert main(["limits", action[0], "--policy", str(path), *action[1:]]) == 0
+    expected = {"default": {"requests_per_minute": 7}} if action[0] == "set" else None
+    assert limits_of(path) == expected
+
+
+def test_policy_flag_after_the_subcommand_wins_over_the_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = write(tmp_path)
+    other = tmp_path / "other.json"
+    monkeypatch.setenv("WARDEN_POLICY", str(other))
+    assert main(["limits", "set", "--policy", str(path), "--pending", "5"]) == 0
+    assert limits_of(path) == {"default": {"max_pending_approvals": 5}}
+    assert not other.exists()
+
+
+def agents_file(tmp_path: Path, *ids: str) -> Path:
+    from warden.agents import add_agent
+
+    path = tmp_path / "agents.json"
+    for agent_id in ids:
+        add_agent(path, agent_id)
+    return path
+
+
+def test_set_for_an_agent_missing_from_the_agents_file_warns(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = write(tmp_path)
+    agents = agents_file(tmp_path, "billing")
+    flags = ["--agents", str(agents), "--requests-per-minute", "30"]
+    assert main(["limits", "--policy", str(path), "set", "--agent", "biling", *flags]) == 0
+    err = capsys.readouterr().err
+    assert "warning: agent 'biling' is not in" in err
+    assert "have no effect until it is added (warden agent add biling)" in err
+    assert limits_of(path) == {"agents": {"biling": {"requests_per_minute": 30}}}  # still set
+
+
+def test_set_for_a_known_agent_does_not_warn(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = write(tmp_path)
+    agents = agents_file(tmp_path, "billing")
+    flags = ["--agents", str(agents), "--requests-per-minute", "30"]
+    assert main(["limits", "--policy", str(path), "set", "--agent", "billing", *flags]) == 0
+    assert "warning" not in capsys.readouterr().err
+
+
+def test_agents_file_from_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = write(tmp_path)
+    monkeypatch.setenv("WARDEN_AGENTS", str(agents_file(tmp_path, "billing")))
+    assert main(["limits", "--policy", str(path), "set", "--agent", "x", "--pending", "1"]) == 0
+    assert "warning: agent 'x' is not in" in capsys.readouterr().err
+
+
+def test_without_an_agents_file_a_new_agent_gets_a_spelling_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.chdir(tmp_path)  # no warden-agents.json here
+    monkeypatch.delenv("WARDEN_AGENTS", raising=False)
+    path = write(tmp_path)
+    assert main(["limits", "--policy", str(path), "set", "--agent", "x", "--pending", "1"]) == 0
+    assert "warning: no agents file" in capsys.readouterr().err
+    # Changing an agent that already has limits: no warning.
+    assert main(["limits", "--policy", str(path), "set", "--agent", "x", "--pending", "2"]) == 0
+    assert "warning" not in capsys.readouterr().err
+
+
+def test_unreadable_agents_file_warns_but_changes_the_limits(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = write(tmp_path)
+    bad = tmp_path / "agents.json"
+    bad.write_text("{not json")
+    flags = ["--agents", str(bad), "--pending", "1"]
+    assert main(["limits", "--policy", str(path), "set", "--agent", "x", *flags]) == 0
+    assert "warning: can't check agent 'x'" in capsys.readouterr().err
+    assert limits_of(path) == {"agents": {"x": {"max_pending_approvals": 1}}}
+
+
+def test_defaults_never_warn_about_agents(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = write(tmp_path)
+    agents = agents_file(tmp_path, "billing")
+    flags = ["--agents", str(agents), "--pending", "3"]
+    assert main(["limits", "--policy", str(path), "set", *flags]) == 0
+    assert main(["limits", "--policy", str(path), "set", "--pending", "3"]) == 0
+    assert "warning" not in capsys.readouterr().err

@@ -45,7 +45,46 @@ def test_invalid_rule_error_says_where(tmp_path: Path) -> None:
         write(tmp_path, {"rules": [r("a", "t", "allow", {"arg": "x", "op": "regex", "value": 1})]})
     )
     assert len(report.errors) == 1
-    assert report.errors[0].startswith("rules.0.when.0.op:")
+    assert report.errors[0].startswith("rule 'a' (rules.0).when.0.op:")
+
+
+def test_error_location_names_the_rule_id(tmp_path: Path) -> None:
+    bad = {"arg": "amount", "op": "lt", "value": "500"}  # text, not a number
+    report = check_policy(
+        write(
+            tmp_path,
+            {"rules": [r("ok", "t", "allow"), r("pay-small", "pay", "allow", bad)]},
+        )
+    )
+    assert len(report.errors) == 1
+    assert report.errors[0].startswith("rule 'pay-small' (rules.1).when.0")
+
+
+@pytest.mark.parametrize(
+    "rule",
+    [
+        {"id": "Not A Valid Id", "tool": "t", "effect": "maybe"},  # invalid id: not shown
+        {"id": 5, "tool": "t", "effect": "maybe"},
+        {"tool": "t", "effect": "maybe"},
+        "not an object",
+    ],
+)
+def test_error_location_without_a_usable_rule_id(tmp_path: Path, rule: object) -> None:
+    report = check_policy(write(tmp_path, {"rules": [rule]}))
+    assert report.errors and all(e.startswith("rules.0") for e in report.errors)
+    assert "Not A Valid Id" not in " ".join(report.errors)
+
+
+def test_describe_errors_without_rules_or_json() -> None:
+    from pydantic import ValidationError
+
+    from warden.policy import Policy, describe_errors
+
+    for raw in ("{bad json", '{"rules": 5}', "[1]"):
+        try:
+            Policy.model_validate_json(raw)
+        except ValidationError as exc:
+            assert not any("rule '" in e for e in describe_errors(exc, raw))
 
 
 def test_errors_never_echo_file_contents(tmp_path: Path) -> None:

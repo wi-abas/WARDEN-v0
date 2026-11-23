@@ -178,15 +178,17 @@ def main_phase() -> None:
     batch = [call(17, "read_file", {"path": "/workspace/a"}), call(18, "run_cmd", {"cmd": "id"})]
     check("mcp: batch refused (-32600)", error_code(proxy.ask(batch, None)) == -32600)
     start = '{"jsonrpc":"2.0","id":19,"method":"tools/call","params":{"name":'
-    for raw, label, code in [
+    # A duplicate-key refusal carries the request's id (one valid top-level id);
+    # unparsable input can't be matched to a request, so its id stays null.
+    for raw, label, code, reply_id in [
         (start + '"read_file","arguments":{"path":"/etc/passwd","path":"/workspace/a"}}}',
-         "duplicate key in arguments", -32600),
+         "duplicate key in arguments", -32600, 19),
         (start + '"run_cmd","name":"read_file","arguments":{"path":"/workspace/a"}}}',
-         "duplicate name key", -32600),
-        (start + '"read_file","arguments":{"path":"/workspace/a","x":NaN}}}', "NaN", -32700),
-        ('{"jsonrpc":"2.0","id":22,', "invalid JSON", -32700),
+         "duplicate name key", -32600, 19),
+        (start + '"read_file","arguments":{"path":"/workspace/a","x":NaN}}}', "NaN", -32700, None),
+        ('{"jsonrpc":"2.0","id":22,', "invalid JSON", -32700, None),
     ]:  # fmt: skip
-        reply = proxy.ask(raw, None)
+        reply = proxy.ask(raw, reply_id)
         check(f"mcp: {label} refused ({code})", error_code(reply) == code, reply)
     resources = {
         "jsonrpc": "2.0",

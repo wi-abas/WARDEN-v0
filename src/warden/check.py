@@ -196,7 +196,7 @@ def check_policy(path: Path) -> Report:
         report.errors.append(str(exc))
         return report
     except ValidationError as exc:
-        report.errors.extend(describe_errors(exc))
+        report.errors.extend(describe_errors(exc, raw))
         return report
     report.rules = len(policy.rules)
     report.tools = len({r.tool for r in policy.rules} | set(policy.tools))

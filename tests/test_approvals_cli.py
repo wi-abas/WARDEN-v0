@@ -128,6 +128,19 @@ def test_approve_with_yes(
     assert all(store._items[i].status is Status.APPROVED for i in ids)
 
 
+@pytest.mark.parametrize(("verb", "done"), [("approve", "Approved"), ("reject", "Rejected")])
+def test_one_action_is_singular(
+    server: tuple[str, TestClient], capsys: Any, monkeypatch: Any, verb: str, done: str
+) -> None:
+    url, client = server
+    ids = queue(client, 1)
+    code, out, _ = cli(capsys, monkeypatch, verb, *ids, "--warden-url", url, answer="y\n")
+    assert code == 0
+    assert f"{verb.capitalize()} this action? [y/N]" in out
+    assert f"{done} 1 action." in out
+    assert "1 actions" not in out
+
+
 def test_answer_no_changes_nothing(
     server: tuple[str, TestClient], store: ApprovalStore, capsys: Any, monkeypatch: Any
 ) -> None:
@@ -338,7 +351,7 @@ def test_dash_ids_work_after_double_dash(
     store._items[dashed] = store._items.pop(approval_id)
     store._items[dashed].approval_id = dashed
     code, out, _ = cli(capsys, monkeypatch, "approve", "--yes", "--warden-url", url, "--", dashed)
-    assert code == 0 and "Approved 1 actions." in out
+    assert code == 0 and "Approved 1 action." in out
 
 
 def test_non_json_answer_from_a_real_server(capsys: Any, monkeypatch: Any) -> None:

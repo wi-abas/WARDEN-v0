@@ -110,4 +110,4 @@ def test_invalid_file_log_says_where_the_problem_is(
     path = write_policy(tmp_path, json.dumps({"rules": [rule_json(effect="maybe")]}))
     with caplog.at_level(logging.ERROR):
         load_rules(path)
-    assert "rules.0.effect" in caplog.text
+    assert "rule 'allow-read' (rules.0).effect" in caplog.text

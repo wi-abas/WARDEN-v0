@@ -98,10 +98,19 @@ def main(argv: list[str] | None = None) -> int:
     limits_actions = limits.add_subparsers(dest="action")
     for name, help_text in [("set", "set limits"), ("reset", "remove limits")]:
         sub = limits_actions.add_parser(name, help=help_text)
+        # Also accepted after the subcommand (`warden limits set --policy F`). SUPPRESS:
+        # when left out here, the value given before the subcommand (or the default) stays.
+        sub.add_argument("--policy", type=Path, default=argparse.SUPPRESS, help="policy file")
         sub.add_argument("--agent", help="one agent (default: every agent)")
         if name == "set":
             sub.add_argument("--requests-per-minute", type=int, help="1 to 100000")
             sub.add_argument("--pending", type=int, help="max pending approvals, 0 to 1000")
+            sub.add_argument(
+                "--agents",
+                type=Path,
+                help="agents file, to warn about unknown agents "
+                f"(default WARDEN_AGENTS or {DEFAULT_AGENTS_PATH})",
+            )
     proxy = commands.add_parser("proxy", help="run an MCP server behind Warden")
     proxy.add_argument("--config", type=Path, help="proxy config file (JSON)")
     proxy.add_argument("--warden-url", help="default http://127.0.0.1:8000")
