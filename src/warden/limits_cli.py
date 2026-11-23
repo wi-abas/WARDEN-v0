@@ -55,7 +55,7 @@ def _write(path: Path, data: dict[str, Any]) -> None:
     try:
         parse_policy(text)
     except ValidationError as exc:
-        raise LimitsEditError(f"not changed: {'; '.join(describe_errors(exc))}") from exc
+        raise LimitsEditError(f"not changed: {'; '.join(describe_errors(exc, text))}") from exc
     mode = path.stat().st_mode & 0o777
     fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
     tmp = Path(tmp_name)

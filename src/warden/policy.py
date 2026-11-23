@@ -10,13 +10,14 @@ decision. Protect it with file permissions.
 
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Annotated, Self
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from warden.limits import Limits
-from warden.models import TOOL_NAME_PATTERN, Rule, ToolSpec
+from warden.models import RULE_ID_PATTERN, TOOL_NAME_PATTERN, Rule, ToolSpec
 
 logger = logging.getLogger(__name__)
 
@@ -84,15 +85,40 @@ def parse_policy(raw: str) -> Policy:
     return Policy.model_validate_json(raw)
 
 
-def describe_errors(exc: ValidationError) -> list[str]:
+def describe_errors(exc: ValidationError, raw: str | None = None) -> list[str]:
     """Where each problem is, e.g. "rules.2.when.0.op: Input should be ...".
 
-    Never echoes the file's contents (include_input=False).
+    With the policy text `raw`, a problem inside a rule also names the rule:
+    "rule 'pay-small' (rules.2).when.0.op: ...". Only an id that is a VALID rule id is
+    shown; otherwise the file's contents are never echoed (include_input=False).
     """
-    return [
-        f"{'.'.join(str(part) for part in error['loc']) or 'file'}: {error['msg']}"
-        for error in exc.errors(include_input=False)
-    ]
+    ids = _rule_ids(raw) if raw is not None else {}
+    out = []
+    for error in exc.errors(include_input=False):
+        loc = [str(part) for part in error["loc"]]
+        where = ".".join(loc) or "file"
+        if len(loc) >= 2 and loc[0] == "rules" and loc[1] in ids:
+            where = ".".join([f"rule '{ids[loc[1]]}' (rules.{loc[1]})", *loc[2:]])
+        out.append(f"{where}: {error['msg']}")
+    return out
+
+
+def _rule_ids(raw: str) -> dict[str, str]:
+    """Index (as text) -> id, for rules whose id is a valid rule id. Empty on any problem."""
+    try:
+        data = json.loads(raw)
+    except (ValueError, RecursionError):
+        return {}
+    rules = data.get("rules") if isinstance(data, dict) else None
+    if not isinstance(rules, list):
+        return {}
+    return {
+        str(index): rule["id"]
+        for index, rule in enumerate(rules)
+        if isinstance(rule, dict)
+        and isinstance(rule.get("id"), str)
+        and re.fullmatch(RULE_ID_PATTERN, rule["id"])
+    }
 
 
 def load_rules(path: Path = DEFAULT_POLICY_PATH) -> tuple[Rule, ...]:
@@ -108,7 +134,7 @@ def load_policy(path: Path = DEFAULT_POLICY_PATH) -> Policy:
     except DuplicateKeyError as exc:
         logger.error("invalid policy file %s, denying everything: %s", path, exc)
     except ValidationError as exc:
-        problems = "; ".join(describe_errors(exc))
+        problems = "; ".join(describe_errors(exc, raw))
         logger.error("invalid policy file %s, denying everything: %s", path, problems)
     except Exception as exc:
         logger.error(
