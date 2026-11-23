@@ -1,4 +1,6 @@
-# WARDEN — Project Instructions
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Product
 
@@ -32,6 +34,24 @@ It is an early MVP and **not production-secure**. Never claim otherwise.
   `mcp_proxy.py` (`warden proxy`: stdio MCP proxy checking every `tools/call`).
 - **CLI** (`cli.py`): `serve`, `check`, `init`, `schema`, `agent`, `audit verify|head`,
   `limits`, `approvals` (`approvals_cli.py`: group decisions, all or nothing), `proxy`.
+- **Supporting modules**: `models.py` (strict, frozen Pydantic request/decision shapes),
+  `policy.py` (loads the policy; any error gives an EMPTY policy, so everything is denied),
+  `fingerprint.py` (the SHA-256 `action_hash` that approvals are bound to), `settings.py`
+  (flag, then env var, then default), `check.py` (`warden check` warnings W001…),
+  `policy_tests.py` (`warden test`), `audit_checkpoint.py` (`audit head`/`--expect`),
+  `limits_cli.py`.
+
+## How one request flows
+
+`/v1/evaluate` (api.py): host check, size limit, duplicate-key refusal, strict model
+parse → agent identity from the bearer token (agents.py) → rate limit (limits.py) →
+`engine.evaluate` against the loaded policy → `apply_approval` (approvals.py): for
+`require_approval`, use a matching approval for this `action_hash` (fingerprint.py) or
+create a pending one, within the agent's pending quota → write the audit entry (never the
+arguments). If the audit write fails, the answer is a 503 deny and a just-used approval
+is restored. Any unexpected exception becomes a deny.
+Clients (client.py, sdk.py, mcp_proxy.py) treat every non-`allow` answer, or any
+failure to reach Warden, as "don't run the tool".
 
 ## Technology
 
