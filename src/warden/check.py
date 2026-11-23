@@ -6,7 +6,8 @@ Warnings: the policy loads, but probably doesn't do what you meant:
 - W001  deny-list risk: a tool is allowed, has "deny when..." rules, but no argument
         list, so an argument no rule mentions (e.g. "bcc") is never checked.
 - W002  no rules at all: every request is denied.
-- W003  dead rule: an unconditional, stricter rule for the same tool always wins.
+- W003  dead rule: an unconditional, stricter rule for the same tool always wins (a
+        rule with "otherwise" also always applies, giving at least its "effect").
 - W004  duplicate rule: same tool, effect and conditions as another rule.
 - W005  path prefix without a trailing "/": "/data" also matches "/database".
 - W006  tool has an argument list but no rules: it's always denied.
@@ -28,6 +29,11 @@ Warnings: the policy loads, but probably doesn't do what you meant:
         file (--agents FILE): probably a typo, and `warden serve` refuses to start.
 - W015  two agent names differ only in upper/lower case ("Billing" and "billing"):
         agent ids are case-sensitive, so these are two different agents.
+- W016  a rule with "otherwise" uses neq or missing in "when": a double negative
+        ("allow unless the value isn't X") is hard to read and easy to get backwards.
+- W017  two host_in conditions on the same argument of the same tool accept different
+        URL schemes: a URL outside either list is uncheckable for that rule and denies
+        the whole request, even if the other rule would allow it.
 - W008  an email-domain check ("...@example.com") is case-sensitive, so
         "x@EXAMPLE.com" slips past it. Add "ignore_case": true.
 
@@ -60,12 +66,13 @@ class Report:
     tools: int = 0
 
 
-_CondKey = frozenset[tuple[tuple[str, ...], str, str, bool]]
+_CondKey = frozenset[tuple[tuple[str, ...], str, str, bool, tuple[str, ...] | None]]
 
 
 def _conditions_key(rule: Rule) -> _CondKey:
     return frozenset(
-        (c.path, c.op.value, json.dumps(c.value, sort_keys=True), c.ignore_case) for c in rule.when
+        (c.path, c.op.value, json.dumps(c.value, sort_keys=True), c.ignore_case, c.schemes)
+        for c in rule.when
     )
 
 
@@ -124,10 +131,13 @@ def _warnings(policy: Policy) -> list[str]:
 
         for rule in tool_rules:
             for other in tool_rules:
+                # `other` always applies (no conditions, or an `otherwise` branch) and
+                # always gives at least its effect; `rule` gives at most its strictest branch.
+                rule_max = rule.otherwise or rule.effect
                 if (
-                    not other.when
+                    (not other.when or other.otherwise is not None)
                     and other.id != rule.id
-                    and _STRICTNESS[other.effect] > _STRICTNESS[rule.effect]
+                    and _STRICTNESS[other.effect] > _STRICTNESS[rule_max]
                     and _covers(other, rule)
                 ):
                     out.append(
@@ -136,14 +146,9 @@ def _warnings(policy: Policy) -> list[str]:
                     )
                     break
 
-        seen: dict[
-            tuple[
-                Decision, frozenset[tuple[tuple[str, ...], str, str, bool]], frozenset[str] | None
-            ],
-            str,
-        ] = {}
+        seen: dict[tuple[Decision, Decision | None, _CondKey, frozenset[str] | None], str] = {}
         for rule in tool_rules:
-            key = (rule.effect, _conditions_key(rule), _agents_key(rule))
+            key = (rule.effect, rule.otherwise, _conditions_key(rule), _agents_key(rule))
             if key in seen:
                 out.append(f'W004: rule "{rule.id}" duplicates rule "{seen[key]}".')
             else:
@@ -175,7 +180,7 @@ def _warnings(policy: Policy) -> list[str]:
                 )
             texts = c.value if isinstance(c.value, list) else [c.value]
             if (
-                c.op in {Op.EQ, Op.NEQ, Op.IN, Op.ENDSWITH}
+                c.op in {Op.EQ, Op.NEQ, Op.IN, Op.ENDSWITH, Op.CONTAINS}
                 and not c.ignore_case
                 and any(isinstance(t, str) and "@" in t for t in texts)
             ):
@@ -190,7 +195,7 @@ def _warnings(policy: Policy) -> list[str]:
             )
             if (
                 looser_exists
-                and c.op in {Op.EQ, Op.IN, Op.STARTSWITH, Op.ENDSWITH}
+                and c.op in {Op.EQ, Op.IN, Op.STARTSWITH, Op.ENDSWITH, Op.CONTAINS}
                 and not c.ignore_case
                 and any(isinstance(t, str) and (t.startswith("/") or "://" in t) for t in texts)
             ):
@@ -202,7 +207,7 @@ def _warnings(policy: Policy) -> list[str]:
                 )
             if (
                 rule.effect is not Decision.ALLOW
-                and c.op in {Op.EQ, Op.IN, Op.STARTSWITH, Op.ENDSWITH}
+                and c.op in {Op.EQ, Op.IN, Op.STARTSWITH, Op.ENDSWITH, Op.CONTAINS}
                 and any(isinstance(t, str) and "://" in t for t in texts)
             ):
                 out.append(
@@ -216,6 +221,12 @@ def _warnings(policy: Policy) -> list[str]:
                     f'on "{c.label}"); anything nobody thought of is allowed. Prefer listing '
                     f"what is allowed (eq, in, startswith, endswith)."
                 )
+            if rule.otherwise is not None and c.op in {Op.NEQ, Op.MISSING}:
+                out.append(
+                    f'W016: rule "{rule.id}" has "otherwise" and uses {c.op.value} on '
+                    f'"{c.label}": a double negative, easy to get backwards. Prefer a '
+                    f"positive condition (eq, in, exists, ...)."
+                )
             if len(c.path) > 1 and rule.effect is not Decision.ALLOW:
                 out.append(
                     f'W013: rule "{rule.id}" checks "{c.label}" inside "{c.path[0]}"; other '
@@ -228,11 +239,34 @@ def _warnings(policy: Policy) -> list[str]:
                     f'the argument list for "{rule.tool}" (typo?).'
                 )
 
+    out += _scheme_warnings(by_tool)
+
     for tool in sorted(policy.tools):
         if tool not in by_tool:
             out.append(
                 f'W006: tool "{tool}" has an argument list but no rules, so it\'s always denied.'
             )
+    return out
+
+
+def _scheme_warnings(by_tool: dict[str, list[Rule]]) -> list[str]:
+    """W017: host_in conditions on one argument of one tool with different schemes."""
+    out: list[str] = []
+    for tool, tool_rules in sorted(by_tool.items()):
+        seen: dict[tuple[str, ...], tuple[str, tuple[str, ...]]] = {}
+        for rule in tool_rules:
+            for c in rule.when:
+                if c.op is not Op.HOST_IN:
+                    continue
+                schemes = tuple(sorted(c.url_schemes))
+                first = seen.setdefault(c.path, (rule.id, schemes))
+                if first[1] != schemes:
+                    out.append(
+                        f'W017: rules "{first[0]}" and "{rule.id}" check "{c.label}" of '
+                        f'"{tool}" with host_in but accept different URL schemes '
+                        f"({', '.join(first[1])} vs {', '.join(schemes)}); a URL outside "
+                        f"either list denies the whole request. Use the same 'schemes'."
+                    )
     return out
 
 

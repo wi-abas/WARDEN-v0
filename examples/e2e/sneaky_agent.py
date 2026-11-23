@@ -98,9 +98,14 @@ BAD_URLS = [
     "//api.example.com",
     "https://[::1]/",
     "https://api.example.com%2eevil.net/",
-    # TODO: "javascript://api.example.com/...", "file://api.example.com/etc/passwd" and
-    # "https://api.example.com:99999/" are currently allowed by host_in (it checks the
-    # host only). Add them once the scheme/port handling is decided and fixed.
+    # Schemes other than http/https, and odd ports, make the URL uncheckable (deny).
+    "javascript://api.example.com/%0aalert(1)",
+    "file://api.example.com/etc/passwd",
+    "ftp://api.example.com/x",
+    "gopher://api.example.com:25/_HELO",
+    "https://api.example.com:99999/",
+    "https://api.example.com:0/",
+    "https://api.example.com:0443/",
 ]
 
 
@@ -162,6 +167,17 @@ def main() -> None:
     )
     for url in BAD_URLS:
         expect(f"url {url!r} not allowed", ev("fetch_url", {"url": url}), "notallow")
+    for url in BAD_URLS[-7:]:
+        expect(f"url {url!r} denied outright", ev("fetch_url", {"url": url}), "deny")
+
+    print("--- otherwise")
+    ours = ev("web_get", {"url": "https://docs.example.com/x"})
+    expect("otherwise: our domain -> allow", ours, "allow")
+    other = ev("web_get", {"url": "https://elsewhere.org/x"})
+    expect("otherwise: other domain -> require_approval", other, "require_approval")
+    expect("otherwise: missing url -> denied by the tool spec", ev("web_get", {}), "deny")
+    odd = ev("web_get", {"url": "ftp://docs.example.com/x"})
+    expect("otherwise: odd scheme -> deny (not the otherwise branch)", odd, "deny")
 
     print("--- JSON tricks")
     read_json = b'{"tool":"read_file","arguments":{"path":"/workspace/a"'
