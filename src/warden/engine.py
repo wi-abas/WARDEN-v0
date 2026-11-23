@@ -333,6 +333,21 @@ def _holds(condition: Condition, arguments: dict[str, JsonValue]) -> bool:
         text, affix = _fold(actual, condition), _fold(expected, condition)
         return text.startswith(affix) if op is Op.STARTSWITH else text.endswith(affix)
 
+    if op is Op.CONTAINS:
+        if not isinstance(actual, str):
+            raise _UncheckableArgument(condition.label)
+        needles = expected if isinstance(expected, list) else [expected]
+        if not all(isinstance(n, str) for n in needles):  # can't happen: loader checked it
+            raise ValueError("policy value is not text")
+        _check_unicode(actual, condition)
+        # "evil。net" is "evil.net" to URL and mail software: refuse look-alike dots
+        # when the rule looks for a dotted text. (No URL/path/email shape check: the
+        # argument is free text that merely contains something.)
+        if any("." in str(n) for n in needles) and any(d in actual for d in _LOOKALIKE_DOTS):
+            raise _UncheckableArgument(condition.label, _HIDDEN_CHARS)
+        text = _fold(actual, condition)
+        return any(_fold(str(n), condition) in text for n in needles)
+
     # eq / neq / in: the argument must have the same type as the policy value(s).
     choices = expected if isinstance(expected, list) else [expected]
     if not any(_comparable(actual, choice) for choice in choices):

@@ -176,7 +176,7 @@ def _warnings(policy: Policy) -> list[str]:
                 )
             texts = c.value if isinstance(c.value, list) else [c.value]
             if (
-                c.op in {Op.EQ, Op.NEQ, Op.IN, Op.ENDSWITH}
+                c.op in {Op.EQ, Op.NEQ, Op.IN, Op.ENDSWITH, Op.CONTAINS}
                 and not c.ignore_case
                 and any(isinstance(t, str) and "@" in t for t in texts)
             ):
@@ -191,7 +191,7 @@ def _warnings(policy: Policy) -> list[str]:
             )
             if (
                 looser_exists
-                and c.op in {Op.EQ, Op.IN, Op.STARTSWITH, Op.ENDSWITH}
+                and c.op in {Op.EQ, Op.IN, Op.STARTSWITH, Op.ENDSWITH, Op.CONTAINS}
                 and not c.ignore_case
                 and any(isinstance(t, str) and (t.startswith("/") or "://" in t) for t in texts)
             ):
@@ -203,7 +203,7 @@ def _warnings(policy: Policy) -> list[str]:
                 )
             if (
                 rule.effect is not Decision.ALLOW
-                and c.op in {Op.EQ, Op.IN, Op.STARTSWITH, Op.ENDSWITH}
+                and c.op in {Op.EQ, Op.IN, Op.STARTSWITH, Op.ENDSWITH, Op.CONTAINS}
                 and any(isinstance(t, str) and "://" in t for t in texts)
             ):
                 out.append(

