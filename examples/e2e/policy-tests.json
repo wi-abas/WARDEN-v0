@@ -17,5 +17,9 @@
  {"name":"email percent route","request":{"tool":"send_email","arguments":{"to":"x%evil.net@example.com"}},"expect":"deny"},
  {"name":"shell","request":{"tool":"shell","arguments":{"command":"ls"}},"expect":"deny","rule":"no-shell"},
  {"name":"fetch ok","request":{"tool":"fetch_url","arguments":{"url":"HTTPS://API.EXAMPLE.COM:443/x"}},"expect":"allow"},
- {"name":"fetch userinfo trick","request":{"tool":"fetch_url","arguments":{"url":"https://api.example.com@evil.net/"}},"expect":"deny"}
+ {"name":"fetch userinfo trick","request":{"tool":"fetch_url","arguments":{"url":"https://api.example.com@evil.net/"}},"expect":"deny"},
+ {"name":"fetch other scheme","request":{"tool":"fetch_url","arguments":{"url":"ftp://api.example.com/x"}},"expect":"deny"},
+ {"name":"fetch bad port","request":{"tool":"fetch_url","arguments":{"url":"https://api.example.com:99999/x"}},"expect":"deny"},
+ {"name":"web_get our domain","request":{"tool":"web_get","arguments":{"url":"https://docs.example.com/x"}},"expect":"allow","rule":"web-get-our-domain"},
+ {"name":"web_get other domain","request":{"tool":"web_get","arguments":{"url":"https://elsewhere.org/x"}},"expect":"require_approval","rule":"web-get-our-domain"}
 ]}

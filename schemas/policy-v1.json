@@ -32,6 +32,18 @@
           "default": false,
           "title": "Ignore Case",
           "type": "boolean"
+        },
+        "schemes": {
+          "default": null,
+          "items": {
+            "pattern": "^[a-z][a-z0-9+.\\-]{0,31}$",
+            "type": "string"
+          },
+          "maxItems": 10,
+          "minItems": 1,
+          "title": "Schemes",
+          "type": "array",
+          "uniqueItems": true
         }
       },
       "required": [
@@ -140,14 +152,15 @@
         "endswith",
         "exists",
         "missing",
-        "host_in"
+        "host_in",
+        "contains"
       ],
       "title": "Op",
       "type": "string"
     },
     "Rule": {
       "additionalProperties": false,
-      "description": "One policy rule: when an agent asks for `tool` (and every `when` condition\nholds), the answer is `effect`.",
+      "description": "One policy rule: when an agent asks for `tool` (and every `when` condition\nholds), the answer is `effect`. With `otherwise`, the answer is `otherwise` when the\nconditions don't all hold (it must be stricter than `effect`).",
       "properties": {
         "id": {
           "pattern": "^[a-z0-9_.\\-]{1,64}$",
@@ -195,6 +208,14 @@
           "title": "Agents",
           "type": "array",
           "uniqueItems": true
+        },
+        "otherwise": {
+          "default": null,
+          "enum": [
+            "require_approval",
+            "deny"
+          ],
+          "title": "Otherwise"
         }
       },
       "required": [

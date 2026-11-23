@@ -299,7 +299,7 @@ new URL too. `warden approvals` doesn't see `WARDEN_PORT` and keeps trying `:800
 | `warden approvals` | `--warden-url URL`, then `WARDEN_URL` | `http://127.0.0.1:8000` |
 | SDK `@guard` / `run_guarded` **without** `client=` | `WARDEN_URL` (also `WARDEN_AGENT_ID`, `WARDEN_AGENT_TOKEN`), read at call time | `http://127.0.0.1:8000`, agent `agent` |
 | SDK `WardenClient(...)` you create yourself | its `url=` argument only (**not** `WARDEN_URL`) | `http://127.0.0.1:8000` |
-| `warden proxy` | `--warden-url URL`, then `warden_url` in the `--config` file (**not** `WARDEN_URL`) | `http://127.0.0.1:8000` |
+| `warden proxy` | `--warden-url URL`, then `warden_url` in the `--config` file, then `WARDEN_URL` | `http://127.0.0.1:8000` |
 | Your own HTTP code | whatever URL you wrote | |
 
 `warden limits`, `warden check`, `warden test` and `warden audit` don't talk to the server
@@ -309,9 +309,9 @@ So, for Warden on port 8790:
 
 ```sh
 uv run warden serve --port 8790
-export WARDEN_URL=http://127.0.0.1:8790        # for warden approvals and default SDK clients
+export WARDEN_URL=http://127.0.0.1:8790        # warden approvals, warden proxy, default SDK clients
 uv run warden approvals list --group           # or: --warden-url http://127.0.0.1:8790
-uv run warden proxy --warden-url http://127.0.0.1:8790 -- COMMAND [ARGS...]
+uv run warden proxy -- COMMAND [ARGS...]       # a warden_url in its config file still wins
 ```
 ```python
 warden = WardenClient(url="http://127.0.0.1:8790", agent_id="billing-agent")

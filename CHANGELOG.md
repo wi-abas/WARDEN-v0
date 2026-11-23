@@ -17,6 +17,13 @@
   `warden approvals approve|reject ID`, which does both (unchanged for CLI users). The
   MCP proxy and `examples/agent.py` now print `warden approvals list` / `approve`
   instead of a bodiless curl; they never print the hash.
+- **`host_in` only accepts `http` and `https` URLs by default.** A URL with another
+  scheme (`ftp://`, `gopher://`, `file://`, `ws://`, `git://`, ...) can't be checked and
+  denies the whole request, for allow and deny rules alike (no protocol smuggling to an
+  allowed host, no dodging a deny rule). Add `"schemes": [...]` to the condition if a
+  tool really needs other schemes. Run `warden test` with such URLs before upgrading.
+- **URLs with a port outside 1–65535 or with a leading zero** (`:0`, `:99999`, `:080`)
+  are now denied wherever a rule compares URLs (`host_in` and text ops on URLs).
 
 ### Added
 - **Approval hygiene**: `GET /v1/approvals` items carry `age_seconds`;
@@ -26,6 +33,21 @@
 - `warden approvals approve` warns when the chosen ids span separate runs (asked more
   than 2 minutes apart), prints each run and asks about all of them; with `--yes` it
   refuses unless `--across-runs` is also given. Rejecting is never blocked.
+- **`otherwise` on a rule**: one rule, two outcomes. `effect` when every `when`
+  condition holds, `otherwise` when one doesn't or its argument is missing. It must be
+  stricter than `effect` and needs a non-empty `when` (load errors), so it can never
+  loosen an answer; an uncheckable argument still denies the whole request. The reason
+  says which branch decided (`rule 'x': conditions not met`).
+- **`contains` op**: the text argument contains a text (or any of 1–100 texts), with
+  `ignore_case`. A tripwire for deny / require_approval rules; refused in allow rules
+  (load error), since it compares text, not meaning.
+- **`schemes` on a `host_in` condition**: the full list of URL schemes it accepts.
+- `warden check`: W016 (`neq`/`missing` in a rule with `otherwise`), W017 (`host_in`
+  conditions on one argument with different `schemes`). W003 knows a rule with
+  `otherwise` always applies; W008/W009/W012 cover `contains`.
+- `warden proxy` reads `WARDEN_URL`: `--warden-url`, then `warden_url` in the config
+  file, then `WARDEN_URL`, then the default.
+- Schema: `otherwise` on a rule, `contains`, `schemes` (still `policy-v1`, a superset).
 - **Sticky rejections**: after a human rejects (or revokes) an approval, the same agent
   asking for the exact same action within `limits.rejection_window_seconds` (default
   900, `0` = off, max 7 days; per agent) gets `deny` ("rejected by a human; this exact

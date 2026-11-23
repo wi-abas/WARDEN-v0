@@ -70,6 +70,14 @@
         "path",
         "content"
       ]
+    },
+    "web_get": {
+      "arguments": [
+        "url"
+      ],
+      "required": [
+        "url"
+      ]
     }
   },
   "rules": [
@@ -171,6 +179,21 @@
           ]
         }
       ]
+    },
+    {
+      "id": "web-get-our-domain",
+      "tool": "web_get",
+      "effect": "allow",
+      "when": [
+        {
+          "arg": "url",
+          "op": "host_in",
+          "value": [
+            ".example.com"
+          ]
+        }
+      ],
+      "otherwise": "require_approval"
     },
     {
       "id": "mcp-read",
