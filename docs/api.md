@@ -22,10 +22,10 @@ curl -s -X POST http://127.0.0.1:8000/v1/evaluate \
 |---|---|
 | `GET /health` | `{"status": "ok", "rules_loaded": 4}`, or HTTP 503 `"degraded"` when no rules loaded (broken or empty policy file: everything is denied). |
 | `POST /v1/evaluate` | Send an action, get a decision. With agent tokens, needs `Authorization: Bearer <token>` (401/403 otherwise). Over the agent's rate limit: 429 with `Retry-After`. |
-| `GET /v1/approvals` | Admin: list pending approvals, with their arguments. |
+| `GET /v1/approvals` | Admin: pending approvals, with their arguments, as a JSON list. |
 | `POST /v1/approvals/{id}/approve` | Admin: approve one (once). |
 | `POST /v1/approvals/{id}/deny` | Admin: deny one (once). |
-| `GET /v1/approvals?group=true` | Admin: the same list, grouped by agent and tool. |
+| `GET /v1/approvals?group=true` | Admin: the same, grouped by agent and tool: `{"groups": [...]}`. |
 | `GET /v1/approvals?ids=A,B&agent_id=X&tool=Y` | Admin: only those approvals (any filter can be left out; up to 100 ids). Narrows what is shown, never what is decided. |
 | `POST /v1/approvals/decide` | Admin: approve or reject several by id, all or nothing. |
 
@@ -49,6 +49,18 @@ tool and arguments, checked via `action_hash`), and **expires after 15 minutes**
 never turn a `deny` into `allow`. Each approval can be decided only once, with one
 exception: an approved approval the agent hasn't used yet can still be **revoked** with
 `/deny`.
+
+Plain `GET /v1/approvals` answers with a **list**, one item per pending approval:
+
+```json
+[{"approval_id": "JSr4DnD0vXhHMGkgs8llrFvinrli1d1a", "agent_id": "agent-1", "tool": "write_file",
+  "arguments": {"path": "/workspace/a.txt", "content": "hi"}, "warnings": [],
+  "action_hash": "dc3a4297...", "expires_in_seconds": 899}]
+```
+
+With `?group=true` the same items come wrapped in an **object**, `{"groups": [...]}`, one
+group per agent and tool (see [Several at once](#several-at-once-group-approvals)).
+Nothing pending: `[]` or `{"groups": []}`.
 
 The body `{"action_hash": "..."}` on `/approve` and `/deny` is optional: when sent, it
 must be the approval's `action_hash` (409 otherwise), which proves you listed it first.
@@ -151,6 +163,12 @@ token from `WARDEN_AGENT_TOKEN`. Approvals can only be used by the agent that as
 default `warden-agents.json`, mode 600). To rotate a token: remove, add, restart Warden.
 Changes take effect on restart. Design: [design/agent-tokens.md](design/agent-tokens.md).
 
+**Tokens are identity, not permissions.** Every rule in the policy applies to every
+agent; a token can't give one agent more or fewer rights than another (per-agent rules
+are planned). For different permissions today, run one Warden per agent, each with its
+own policy, port and audit database, and point each agent at its own Warden
+(see [How clients find Warden](#how-clients-find-warden)).
+
 **Migrating:** nothing changes until you pass `--agents`. Add every agent, hand out the
 tokens, then restart with `--agents`.
 
@@ -208,3 +226,38 @@ Warden** if they shouldn't be able to approve their own actions.
 
 An invalid setting, or a policy file that is invalid or has no rules, stops Warden with a
 clear message instead of starting a server that would deny everything. The host is always `127.0.0.1`.
+
+### How clients find Warden
+
+The settings above are for the **server** (`warden serve`). Clients don't read them: if
+you start Warden on another port (`--port 8790` or `WARDEN_PORT`), tell each client the
+new URL too. `warden approvals` doesn't see `WARDEN_PORT` and keeps trying `:8000`.
+
+| Client | Where it gets the URL (first one set wins) | Default |
+|---|---|---|
+| `warden approvals` | `--warden-url URL`, then `WARDEN_URL` | `http://127.0.0.1:8000` |
+| SDK `@guard` / `run_guarded` **without** `client=` | `WARDEN_URL` (also `WARDEN_AGENT_ID`, `WARDEN_AGENT_TOKEN`), read at call time | `http://127.0.0.1:8000`, agent `agent` |
+| SDK `WardenClient(...)` you create yourself | its `url=` argument only (**not** `WARDEN_URL`) | `http://127.0.0.1:8000` |
+| `warden proxy` | `--warden-url URL`, then `warden_url` in the `--config` file (**not** `WARDEN_URL`) | `http://127.0.0.1:8000` |
+| Your own HTTP code | whatever URL you wrote | |
+
+`warden limits`, `warden check`, `warden test` and `warden audit` don't talk to the server
+at all; they read files.
+
+So, for Warden on port 8790:
+
+```sh
+uv run warden serve --port 8790
+export WARDEN_URL=http://127.0.0.1:8790        # for warden approvals and default SDK clients
+uv run warden approvals list --group           # or: --warden-url http://127.0.0.1:8790
+uv run warden proxy --warden-url http://127.0.0.1:8790 -- COMMAND [ARGS...]
+```
+```python
+warden = WardenClient(url="http://127.0.0.1:8790", agent_id="billing-agent")
+```
+
+A client URL must be `http://` with host `127.0.0.1`, `localhost` or `::1` and an explicit
+port, and nothing else (no path, user, query or fragment). Anything else is refused:
+`warden approvals` and `warden proxy` exit with code 2, and the SDK raises
+`ClientConfigError` instead of calling Warden. Clients also ignore `HTTP_PROXY` settings,
+so tool arguments and the admin key never go to a proxy.

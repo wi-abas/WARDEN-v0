@@ -134,7 +134,111 @@ rule runs, so an agent can't slip in an argument no rule checks (like `bcc`):
 - An argument not in `arguments` → deny (`"unexpected argument"`; the name isn't echoed,
   since it comes from the agent).
 - A name in `required` that's missing → deny (`"missing required argument 'to'"`).
-- Tools without an entry work as before. Names only for now, not types.
+- Tools without an entry work as before.
+- **Argument lists check names, not types.** `"subject": {"x": [1, 2]}` or `"body": 5`
+  passes the list above. A value's type is only checked when a rule's condition compares
+  that argument (a wrong type there denies the request). So every argument whose value
+  matters needs a condition. Types in argument lists are planned.
+
+## Common patterns
+
+One policy with five everyday patterns. It passes `warden check --strict`, and every
+behaviour described below was checked with `warden test`. Each tool has an argument
+list, so an agent can't add an argument no rule looks at (like `bcc`).
+
+```json
+{
+  "tools": {
+    "run_command": { "arguments": ["command"], "required": ["command"] },
+    "send_email": { "arguments": ["to", "subject", "body"], "required": ["to"] },
+    "send_external_email": { "arguments": ["to", "subject", "body"], "required": ["to"] },
+    "pay_invoice": { "arguments": ["vendor", "amount"], "required": ["vendor", "amount"] },
+    "read_file": { "arguments": ["path"], "required": ["path"] }
+  },
+  "rules": [
+    { "id": "safe-commands", "tool": "run_command", "effect": "allow",
+      "when": [ { "arg": "command", "op": "in", "value": ["git status", "git diff", "ls", "pytest"] } ] },
+
+    { "id": "email-colleagues", "tool": "send_email", "effect": "allow",
+      "when": [ { "arg": "to", "op": "endswith", "value": "@mycompany.com", "ignore_case": true } ] },
+    { "id": "email-outside", "tool": "send_external_email", "effect": "require_approval",
+      "message": "Email outside the company needs a human to approve" },
+
+    { "id": "pay-small", "tool": "pay_invoice", "effect": "allow",
+      "when": [ { "arg": "amount", "op": "gte", "value": 0 },
+                { "arg": "amount", "op": "lte", "value": 100 } ] },
+    { "id": "pay-medium", "tool": "pay_invoice", "effect": "require_approval",
+      "when": [ { "arg": "amount", "op": "gt", "value": 100 },
+                { "arg": "amount", "op": "lte", "value": 5000 } ] },
+    { "id": "pay-large", "tool": "pay_invoice", "effect": "deny",
+      "when": [ { "arg": "amount", "op": "gt", "value": 5000 } ] },
+
+    { "id": "read-project", "tool": "read_file", "effect": "allow",
+      "when": [ { "arg": "path", "op": "startswith", "value": "/home/me/project/" } ] }
+  ]
+}
+```
+
+**Allowlist of commands** (`safe-commands`). `in` compares the **whole** value, so
+`"git status"` is allowed but `"git status; rm -rf /"`, `"ls -la"` and `["ls"]` (a list, not
+text) are denied. Anything not listed falls through to "no matching rule": deny.
+
+**Email only to your own domain** (`email-colleagues`). `endswith` with `ignore_case`
+allows `Ann@MyCompany.com` and denies `bob@gmail.com` and the look-alike
+`ann@mycompany.com.evil.net`. A `bcc` is denied by the argument list.
+
+**External email needs approval** (`email-outside`). Give the agent a second tool,
+`send_external_email`, that always needs a human. Why a second tool: conditions have no
+`not` (there's no "doesn't end with") and rules have no "otherwise", so one tool can't
+say "allow inside the domain, ask for everything else". A `not`/else form is planned.
+Until then, `send_email` to an outsider is simply denied, and the agent uses the other
+tool when it means to write outside.
+
+**Payment thresholds** (`pay-*`). Up to 100: allow. 101 to 5000: approval. Over 5000:
+deny. Note the `gte 0` on the allow rule: without it, `-500` is "less than 100" and
+would be allowed. `"amount": "50"` (text, not a number) denies the whole request. Where
+ranges overlap, the most restrictive rule wins.
+
+**Path confined to a folder** (`read-project`). End the prefix with `/` (otherwise
+`/home/me/project-secrets/` also matches; `warden check` warns, W005). `..` in the path
+is denied, so `/home/me/project/../.ssh/id_rsa` can't escape. Warden doesn't resolve
+symlinks: a symlink inside the folder that points outside it still passes.
+
+Test your own version the same way (`policy` is relative to the test file):
+
+```json
+{
+  "policy": "policy.json",
+  "cases": [
+    { "name": "listed command",
+      "request": { "tool": "run_command", "arguments": { "command": "git status" } },
+      "expect": "allow", "rule": "safe-commands" },
+    { "name": "command with extra",
+      "request": { "tool": "run_command", "arguments": { "command": "git status; rm -rf /" } },
+      "expect": "deny" },
+    { "name": "look-alike domain",
+      "request": { "tool": "send_email", "arguments": { "to": "ann@mycompany.com.evil.net" } },
+      "expect": "deny" },
+    { "name": "outsider via the external tool",
+      "request": { "tool": "send_external_email", "arguments": { "to": "bob@gmail.com" } },
+      "expect": "require_approval", "rule": "email-outside" },
+    { "name": "medium payment",
+      "request": { "tool": "pay_invoice", "arguments": { "vendor": "acme", "amount": 101 } },
+      "expect": "require_approval", "rule": "pay-medium" },
+    { "name": "negative payment",
+      "request": { "tool": "pay_invoice", "arguments": { "vendor": "acme", "amount": -500 } },
+      "expect": "deny", "rule": null },
+    { "name": "escape with ..",
+      "request": { "tool": "read_file", "arguments": { "path": "/home/me/project/../.ssh/id_rsa" } },
+      "expect": "deny" }
+  ]
+}
+```
+
+```sh
+uv run warden check policy.json --strict
+uv run warden test policy-tests.json
+```
 
 ## Rate limits and approval quotas
 
