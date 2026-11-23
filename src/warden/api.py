@@ -281,12 +281,21 @@ IDS_QUERY_PATTERN = rf"^{_ID}(,{_ID}){{0,{MAX_GROUP - 1}}}$"
 
 class SingleDecision(BaseModel):
     """Optional body of POST /v1/approvals/{id}/approve|deny: the action_hash the human
-    was shown. When sent, it must match the approval (proof they looked at it)."""
+    was shown. When sent, it must match the approval (proof they looked at it).
+    `{}` (and no body at all) means "no action_hash"; any other key is refused."""
 
     # mutation-ok: strict/frozen can't matter: one string field, JSON never coerces to it
     model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
 
-    action_hash: ActionHash
+    action_hash: ActionHash | None = None
+
+    @field_validator("action_hash", mode="before")
+    @classmethod
+    def not_null(cls, value: object) -> object:
+        # Only runs for a SENT value: an explicit null is a mistake, not "no hash".
+        if value is None:
+            raise ValueError("action_hash can't be null (leave it out instead)")
+        return value
 
 
 class GroupDecision(BaseModel):
