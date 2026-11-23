@@ -97,6 +97,34 @@ The arguments are frozen before the check and the function receives exactly what
 checked, so changing them afterwards has no effect. Warden down means not allowed.
 `require_approval` raises `ApprovalPending` (or waits, with `wait_for_approval`).
 
+A few more things the SDK does (all in `warden.sdk`):
+
+```python
+from warden.sdk import WardenClient, guard, run_guarded
+
+# Point at a Warden on another port. A client you create uses only url=; it does
+# not read WARDEN_URL.
+warden = WardenClient(url="http://127.0.0.1:8790", agent_id="billing-agent")
+
+
+# The tool name Warden sees defaults to the function name ("send_invoice" above).
+# Give it explicitly when your policy uses a different name:
+@guard(tool="fs.read_file", client=warden)
+def read(path: str) -> str: ...
+
+
+# No decorator: check one call and run fn(**arguments) only on allow.
+text = run_guarded("read_file", {"path": "/workspace/a.txt"}, open_and_read, client=warden)
+```
+
+- Without `client=`, `@guard` and `run_guarded` build one at call time from `WARDEN_URL`,
+  `WARDEN_AGENT_ID` and `WARDEN_AGENT_TOKEN` (defaults: `http://127.0.0.1:8000`, `agent`,
+  no token).
+- `async def` functions work with `@guard` too; `run_guarded_async` is the async
+  `run_guarded`.
+- Arguments must be plain JSON values (text, numbers, true/false, null, lists, objects);
+  anything else raises `NotAllowed` without asking Warden.
+
 ### 3. Anything else: plain HTTP
 
 Ask Warden before every tool call, and run the tool **only** on `allow`. Standard library
