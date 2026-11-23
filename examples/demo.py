@@ -91,7 +91,10 @@ def run() -> bool:
             f"  Human checks the queue: {len(pending)} pending, "
             f"{pending[0]['tool']} {pending[0]['arguments']}"
         )
-        client.post(f"/v1/approvals/{approval_id}/approve", headers=d.admin)
+        # Approving needs the action_hash the human was shown in the list.
+        shown = next(a for a in pending if a["approval_id"] == approval_id)
+        body = {"action_hash": shown["action_hash"]}
+        client.post(f"/v1/approvals/{approval_id}/approve", headers=d.admin, json=body)
         print("  Human approves it.\n")
 
         d.ask(

@@ -181,7 +181,12 @@ export WARDEN_ADMIN_KEY=<key>
 uv run warden approvals list --group          # every pending action, in full
 uv run warden approvals approve ID1 ID2       # shows them again, then asks [y/N]
 uv run warden approvals list --agent A --tool T   # just one agent and tool (e.g. during a flood)
+uv run warden approvals list --max-age 5      # only those asked for in the last 5 minutes
 ```
+
+Approving ids from separate agent runs (asked more than 2 minutes apart) gets a warning;
+with `--yes` it is refused unless you add `--across-runs`. Over HTTP, `/approve` needs
+the `action_hash` from the list (since v0.4; see docs/api.md).
 
 Settings (`--policy`, `--port`, the admin key, ...): see [docs/api.md](https://github.com/wi-abas/agent-warden/blob/main/docs/api.md#settings).
 

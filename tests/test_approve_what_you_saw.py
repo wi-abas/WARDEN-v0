@@ -1,7 +1,8 @@
 """Approving needs proof the human looked: the action_hash they were shown.
 
-Required for group approvals; optional (but checked when sent) for single ones, which
-keep working without it for existing clients."""
+Required for group approvals (approve and, since v0.4, reject) and for single ones
+(approve, and deny of a pending approval); only revoking works without it. See
+tests/test_required_action_hash.py and docs/design/approval-hygiene.md."""
 
 from pathlib import Path
 from typing import Any
@@ -62,13 +63,13 @@ def test_group_approve_needs_hashes(client: TestClient, store: ApprovalStore) ->
     assert response.status_code == 422 and pending(store, ids)
 
 
-def test_group_reject_without_hashes_works(client: TestClient, store: ApprovalStore) -> None:
+def test_group_reject_without_hashes_is_refused(client: TestClient, store: ApprovalStore) -> None:
     ids = queue(client, 2)
     response = client.post(
         "/v1/approvals/decide", json={"ids": ids, "approve": False}, headers=ADMIN
     )
-    assert response.status_code == 200
-    assert all(store._items[i].status is Status.DENIED for i in ids)
+    assert response.status_code == 422
+    assert pending(store, ids)
 
 
 def test_swapped_hashes_change_nothing(
@@ -167,9 +168,10 @@ def test_single_with_a_wrong_hash(
     assert failed.reason == MISMATCH and failed.approval_id == approval_id
 
 
-def test_single_without_a_body_still_works(client: TestClient, store: ApprovalStore) -> None:
+def test_single_without_a_body_is_refused(client: TestClient, store: ApprovalStore) -> None:
     [approval_id] = queue(client, 1)
-    assert client.post(f"/v1/approvals/{approval_id}/approve", headers=ADMIN).status_code == 200
+    assert client.post(f"/v1/approvals/{approval_id}/approve", headers=ADMIN).status_code == 422
+    assert pending(store, [approval_id])
 
 
 @pytest.mark.parametrize(

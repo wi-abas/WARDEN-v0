@@ -79,7 +79,17 @@ def approvals() -> None:
     revoke = {"path": "/workspace/revoke-me.txt"}
     response = ev("delete_file", revoke)
     aid2, hash2 = response[1]["approval_id"], response[1]["action_hash"]
-    admin("POST", f"/v1/approvals/{aid2}/approve", {"action_hash": hash2})
+    # v0.4: deciding a pending approval needs the action_hash the human was shown.
+    for verb in ("approve", "deny"):
+        empty: dict[str, str] = {}
+        for body in (None, empty):
+            status = admin("POST", f"/v1/approvals/{aid2}/{verb}", body)[0]
+            check(f"{verb} a pending approval without action_hash -> 422", status == 422, status)
+    group = {"ids": [aid2], "approve": False}
+    status = admin("POST", "/v1/approvals/decide", group)[0]
+    check("group reject without action_hashes -> 422", status == 422, status)
+    status = admin("POST", f"/v1/approvals/{aid2}/approve", {"action_hash": hash2})[0]
+    check("approve with the shown action_hash -> 200 (still pending before)", status == 200)
     status = admin("POST", f"/v1/approvals/{aid2}/deny", {})[0]
     check("revoke an approved, unused approval with a {} body -> 200", status == 200, status)
     response = ev("delete_file", revoke, approval_id=aid2)

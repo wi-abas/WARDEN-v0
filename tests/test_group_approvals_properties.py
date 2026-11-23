@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi.testclient import TestClient
-from helpers import BASIC_POLICY, shown_hashes
+from helpers import BASIC_POLICY, shown, shown_hashes
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
@@ -69,7 +69,11 @@ def test_group_and_single_decisions_stay_consistent(steps: list[tuple[Any, ...]]
                     allows[ids[step[1]]] = allows.get(ids[step[1]], 0) + 1
             elif kind == "single" and step[1] in ids:
                 action = "approve" if step[2] else "deny"
-                client.post(f"/v1/approvals/{ids[step[1]]}/{action}", headers=ADMIN)
+                client.post(
+                    f"/v1/approvals/{ids[step[1]]}/{action}",
+                    headers=ADMIN,
+                    json=shown(client, ids[step[1]], ADMIN),
+                )
             elif kind == "group":
                 chosen = list(dict.fromkeys(ids[n] for n in step[1] if n in ids))
                 if chosen:

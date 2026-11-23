@@ -12,7 +12,7 @@ from typing import Any
 import pytest
 import uvicorn
 from fastapi.testclient import TestClient
-from helpers import ADMIN_KEY, BASIC_POLICY, live_server
+from helpers import ADMIN_KEY, BASIC_POLICY, live_server, shown
 
 import warden.agents
 import warden.api
@@ -234,7 +234,14 @@ def test_approval_cant_be_used_by_another_agent(client: TestClient, tokens: dict
     approval_id = first["approval_id"]
     items = client.get("/v1/approvals", headers=ADMIN).json()
     assert items[0]["agent_id"] == "agent-a"
-    assert client.post(f"/v1/approvals/{approval_id}/approve", headers=ADMIN).status_code == 200
+    assert (
+        client.post(
+            f"/v1/approvals/{approval_id}/approve",
+            headers=ADMIN,
+            json=shown(client, approval_id, ADMIN),
+        ).status_code
+        == 200
+    )
 
     stolen = client.post(
         "/v1/evaluate", json={**body, "approval_id": approval_id}, headers=bearer(tokens["agent-b"])

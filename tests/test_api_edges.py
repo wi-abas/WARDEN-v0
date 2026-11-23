@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 import uvicorn
 from fastapi.testclient import TestClient
-from helpers import BASIC_POLICY, shown_hashes
+from helpers import BASIC_POLICY, shown, shown_hashes
 from pydantic import ValidationError
 
 import warden.api
@@ -131,7 +131,11 @@ def test_failed_audit_is_not_reported_as_not_applied(tmp_path: Path, group: bool
             "/v1/approvals/decide", json={**body, "approve": True}, headers=ADMIN
         )
     else:
-        response = client.post(f"/v1/approvals/{approval_id}/approve", headers=ADMIN)
+        response = client.post(
+            f"/v1/approvals/{approval_id}/approve",
+            headers=ADMIN,
+            json=shown(client, approval_id, ADMIN),
+        )
     assert response.status_code == 503
     assert store._items[approval_id].status is Status.PENDING
     assert not_applied(log) == []
@@ -157,16 +161,20 @@ def test_not_applied_event_records_503(
         body = {"ids": [approval_id], "action_hashes": shown_hashes(store, [approval_id])}
         client.post("/v1/approvals/decide", json={**body, "approve": True}, headers=ADMIN)
     else:
-        client.post(f"/v1/approvals/{approval_id}/approve", headers=ADMIN)
+        client.post(
+            f"/v1/approvals/{approval_id}/approve",
+            headers=ADMIN,
+            json=shown(client, approval_id, ADMIN),
+        )
     [event] = not_applied(log)
     assert event.http_status == 503
 
 
 def test_group_decision_is_strict_and_frozen(tmp_path: Path) -> None:
     client = app_with(SQLiteAuditLog(tmp_path / "a.db"))
-    # Rejecting needs no hashes, so only strictness can refuse these (lax: -> False).
+    # With hashes, only strictness can refuse these (lax: -> False).
     for approve in ("false", "no", 0):
-        body = {"ids": ["a" * 32], "approve": approve}
+        body = {"ids": ["a" * 32], "action_hashes": ["0" * 64], "approve": approve}
         assert client.post("/v1/approvals/decide", json=body, headers=ADMIN).status_code == 422
     decision = GroupDecision(ids=["a" * 32], approve=False)
     with pytest.raises(ValidationError):

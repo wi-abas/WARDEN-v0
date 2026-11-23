@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
-from helpers import BASIC_POLICY
+from helpers import BASIC_POLICY, shown
 
 from warden.api import create_app
 from warden.audit import SQLiteAuditLog
@@ -100,5 +100,9 @@ def test_admin_posts_without_a_body_still_work(tmp_path: Path) -> None:
     approval_id = c.post(
         "/v1/evaluate", json={"agent_id": "a", "tool": "send_email", "arguments": {"to": "x"}}
     ).json()["approval_id"]
-    response = c.post(f"/v1/approvals/{approval_id}/approve", headers={"X-Warden-Admin-Key": KEY})
+    response = c.post(
+        f"/v1/approvals/{approval_id}/approve",
+        headers={"X-Warden-Admin-Key": KEY},
+        json=shown(c, approval_id, {"X-Warden-Admin-Key": KEY}),
+    )
     assert response.status_code == 200

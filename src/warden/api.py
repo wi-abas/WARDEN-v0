@@ -7,8 +7,9 @@ Endpoints:
 
 Admin only (header "X-Warden-Admin-Key", printed in the terminal at startup):
 - GET  /v1/approvals                  -> pending approvals, with their arguments
-- POST /v1/approvals/{id}/approve     -> approve one (once)
-- POST /v1/approvals/{id}/deny        -> deny one (once)
+- POST /v1/approvals/{id}/approve     -> approve one (once); body {"action_hash": ...}
+- POST /v1/approvals/{id}/deny        -> deny one (once); body {"action_hash": ...},
+                                         or no body to revoke an approved, unused one
 - GET  /v1/approvals?group=true       -> the same, grouped by (agent_id, tool)
 - POST /v1/approvals/decide           -> approve or deny several by id, all or nothing
 - GET  /v1/approvals?ids=A,B&agent_id=X&tool=Y -> only those (narrows the view only)
@@ -294,10 +295,17 @@ _ID = APPROVAL_ID_PATTERN.strip("^$")
 IDS_QUERY_PATTERN = rf"^{_ID}(,{_ID}){{0,{MAX_GROUP - 1}}}$"
 
 
+HASH_REQUIRED = "action_hash required: list the approvals and send the action_hash you were shown"
+HASHES_REQUIRED = (
+    "action_hashes required: list the approvals and send the action_hash you were shown for each"
+)
+
+
 class SingleDecision(BaseModel):
-    """Optional body of POST /v1/approvals/{id}/approve|deny: the action_hash the human
-    was shown. When sent, it must match the approval (proof they looked at it).
-    `{}` (and no body at all) means "no action_hash"; any other key is refused."""
+    """Body of POST /v1/approvals/{id}/approve|deny: the action_hash the human was shown,
+    which must match the approval (proof the list was fetched). Required to approve and
+    to reject a pending approval; revoking an approved one works without it (no body, or
+    `{}`; checked if sent). `{}` means "no action_hash"; any other key is refused."""
 
     # mutation-ok: strict/frozen can't matter: one string field, JSON never coerces to it
     model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
@@ -314,9 +322,9 @@ class SingleDecision(BaseModel):
 
 
 class GroupDecision(BaseModel):
-    """Body of POST /v1/approvals/decide: the exact approvals the human decides, and,
-    to approve, the action_hash shown for each (same order): you can't approve a group
-    you haven't listed."""
+    """Body of POST /v1/approvals/decide: the exact approvals the human decides, and the
+    action_hash shown for each (same order): you can't approve or reject a group you
+    haven't listed."""
 
     model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
 
@@ -335,8 +343,7 @@ class GroupDecision(BaseModel):
 
     @model_validator(mode="after")
     def hashes_fit(self) -> "GroupDecision":
-        if self.approve and self.action_hashes is None:
-            raise ValueError("approving needs action_hashes")
+        # Missing action_hashes is refused in decide_group, with a clear message.
         if self.action_hashes is not None and len(self.action_hashes) != len(self.ids):
             raise ValueError("one action_hash per id")
         return self
@@ -614,12 +621,15 @@ class _Warden:
                 approve,
                 before_commit=audit_first,
                 expected_hash=body.action_hash if body is not None else None,
+                require_hash=True,
             )
         except DecideError as exc:
-            code = 404 if exc.not_found else 409
+            code = 404 if exc.not_found else 422 if exc.hash_required else 409
             reason = (
                 "approval not found"
                 if exc.not_found
+                else HASH_REQUIRED
+                if exc.hash_required
                 else "arguments not available yet (Warden restarted): approve after the "
                 "agent asks again"
                 if exc.no_arguments
@@ -726,6 +736,18 @@ class _Warden:
 
     def decide_group(self, body: GroupDecision, request: Request) -> JSONResponse:
         """Approve or deny several approvals of one agent and tool, all or nothing."""
+        if body.action_hashes is None:  # approving AND rejecting need what was shown
+            if self._within_rejection_limit():  # a flood of bad calls can't fill the disk
+                self._emit(
+                    AuditEvent.now(
+                        EventKind.APPROVAL_DECIDE_FAILED,
+                        f"group decision refused: {HASHES_REQUIRED}",
+                        http_status=422,
+                        method=request.method,
+                        path=request.url.path,
+                    )
+                )
+            return JSONResponse(status_code=422, content={"error": HASHES_REQUIRED})
         audited = False
 
         def audit_first(approvals: list[Approval], new_status: Status) -> None:

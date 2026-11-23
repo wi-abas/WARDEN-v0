@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-from helpers import BASIC_POLICY, shown_hashes
+from helpers import BASIC_POLICY, shown, shown_hashes
 
 from warden.api import create_app
 from warden.approvals import ApprovalDB, ApprovalStore, Status
@@ -175,11 +175,11 @@ def test_one_bad_id_changes_nothing(
     ids = queue(client, 3)
     bad = ask(client, email("bad@example.com"))["approval_id"] if problem != "unknown" else "z" * 32
     if problem != "unknown":
-        client.post(f"/v1/approvals/{bad}/approve", headers=ADMIN)
+        client.post(f"/v1/approvals/{bad}/approve", headers=ADMIN, json=shown(client, bad, ADMIN))
     if problem == "used":
         assert ask(client, email("bad@example.com", approval_id=bad))["decision"] == "allow"
     if problem in {"denied", "revoked"}:
-        client.post(f"/v1/approvals/{bad}/deny", headers=ADMIN)
+        client.post(f"/v1/approvals/{bad}/deny", headers=ADMIN, json=shown(client, bad, ADMIN))
     before = client.get("/v1/approvals", headers=ADMIN).json()
     approved_before = len(events(log, EventKind.APPROVAL_APPROVED))
     response = decide(client, [ids[0], bad, ids[1], ids[2]])

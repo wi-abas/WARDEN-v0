@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-from helpers import ADMIN_KEY, BASIC_POLICY, live_server
+from helpers import ADMIN_KEY, BASIC_POLICY, live_server, shown
 from pydantic import JsonValue
 
 from warden.api import create_app
@@ -396,7 +396,15 @@ def test_end_to_end_approval_is_single_use(real: tuple[WardenClient, TestClient]
     with pytest.raises(ApprovalPending) as info:
         send_email("boss@example.com")
     approval_id = info.value.approval_id
-    assert admin.post(f"/v1/approvals/{approval_id}/approve", headers=headers).status_code == 200
+    assert approval_id is not None
+    assert (
+        admin.post(
+            f"/v1/approvals/{approval_id}/approve",
+            headers=headers,
+            json=shown(admin, approval_id, headers),
+        ).status_code
+        == 200
+    )
 
     # A DIFFERENT action can't use the approval.
     with pytest.raises(ApprovalPending):
@@ -415,7 +423,11 @@ def test_end_to_end_waiting_for_a_human(real: tuple[WardenClient, TestClient]) -
         for _ in range(200):
             items = admin.get("/v1/approvals", headers=headers).json()
             if items:
-                admin.post(f"/v1/approvals/{items[0]['approval_id']}/approve", headers=headers)
+                admin.post(
+                    f"/v1/approvals/{items[0]['approval_id']}/approve",
+                    headers=headers,
+                    json=shown(admin, items[0]["approval_id"], headers),
+                )
                 return
             time.sleep(0.02)
 

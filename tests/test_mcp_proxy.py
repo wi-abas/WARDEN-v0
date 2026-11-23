@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-from helpers import ADMIN_KEY, live_server
+from helpers import ADMIN_KEY, live_server, shown
 from pydantic import JsonValue
 
 from warden import cli
@@ -600,6 +600,7 @@ def test_end_to_end_with_real_warden(tmp_path: Path, warden_url: tuple[str, Test
                 admin.post(
                     f"/v1/approvals/{items[0]['approval_id']}/approve",
                     headers={"X-Warden-Admin-Key": ADMIN_KEY},
+                    json=shown(admin, items[0]["approval_id"], {"X-Warden-Admin-Key": ADMIN_KEY}),
                 )
                 return
             time.sleep(0.02)
@@ -862,14 +863,17 @@ def test_approval_hint_says_to_review_first(
 
     run_session(config, warden, script)
     err = capsys.readouterr().err
-    assert err.index("/v1/approvals -H") < err.index("/approve")
+    assert err.index("warden approvals list --agent mcp-proxy") < err.index(
+        "warden approvals approve"
+    )
 
 
-def test_approval_hint_sends_the_action_hash_like_the_docs(
+def test_approval_hint_never_prints_the_action_hash(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """docs/api.md approves with {"action_hash": ...}: proof the human listed it first.
-    The hint names the field but not the value, so it still has to be read from the list."""
+    """Approving needs the action_hash from the list (docs/api.md). The hint points to
+    `warden approvals approve`, which lists, shows and sends it; the hint never prints
+    the hash, so the human gets it from the list, not from the agent's side."""
     warden = FakeWarden({"echo": [pending()]})
     config = make_config(tmp_path, approval={"mode": "error"})
 
@@ -878,7 +882,7 @@ def test_approval_hint_sends_the_action_hash_like_the_docs(
 
     run_session(config, warden, script)
     err = capsys.readouterr().err
-    approve = err[err.index("/approve") :]
-    assert "-H 'content-type: application/json'" in approve
-    assert """-d '{"action_hash": "<action_hash from step 1>"}'""" in approve
+    assert f"warden approvals approve {pending().approval_id} --warden-url " in err
+    assert "docs/mcp-proxy.md" in err
+    assert "/approve" not in err  # no bodiless curl to copy
     assert HASH not in err

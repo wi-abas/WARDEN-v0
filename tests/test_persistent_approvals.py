@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 import uvicorn
 from fastapi.testclient import TestClient
-from helpers import ADMIN_KEY, BASIC_POLICY
+from helpers import ADMIN_KEY, BASIC_POLICY, shown
 
 import warden.api
 from warden.api import create_app
@@ -57,7 +57,11 @@ class Warden:
         return self.client.post("/v1/evaluate", json=body).json()
 
     def decide(self, approval_id: str, action: str = "approve") -> Any:
-        return self.client.post(f"/v1/approvals/{approval_id}/{action}", headers=ADMIN)
+        return self.client.post(
+            f"/v1/approvals/{approval_id}/{action}",
+            headers=ADMIN,
+            json=shown(self.client, approval_id, ADMIN),
+        )
 
     def pending(self) -> Any:
         return self.client.get("/v1/approvals", headers=ADMIN).json()

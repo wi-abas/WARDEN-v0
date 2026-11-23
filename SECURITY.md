@@ -63,6 +63,15 @@ Assuming the agent runtime calls Warden and obeys the answer:
   approval, the same agent asking for the same action is denied for the rejection window
   (default 15 minutes) instead of getting a new pending approval. Lifting one early needs
   the admin key and is audited before it takes effect.
+- **Approving an id without having seen it** (v0.4): approving, rejecting a pending
+  approval, and group rejects need the `action_hash` from the list, so an id pasted from
+  an agent's message can't be decided without listing it. Only revoking an approved,
+  unused approval works without it (it can only make things stricter). The MCP proxy
+  hint never prints the hash.
+- **Stale approvals swept in**: the approvals list shows only pending, unexpired
+  approvals, each with its age (`list --max-age` narrows it). `warden approvals approve`
+  warns when the chosen ids span separate runs (asked more than 2 minutes apart) and,
+  with `--yes`, refuses unless `--across-runs` is given.
 - **Approval loss or replay across restarts**: approval state is persisted (without
   arguments) and `used` is saved before an allow is returned. After a restart nothing
   can be approved until the human can see its arguments again.
@@ -97,7 +106,10 @@ Assuming the agent runtime calls Warden and obeys the answer:
   `agent_id`) is a new approval. Rate limits and pending quotas bound how often.
 - **A reviewer who doesn't read.** Group approvals make a careful review possible, not
   certain: similar-looking actions in one group must still be compared, and a script
-  with the admin key (or `--yes`) can decide ids nobody looked at.
+  with the admin key (or `--yes`) can decide ids nobody looked at. A required
+  `action_hash` proves the list was fetched, not that it was read. The "separate runs"
+  check is a timing heuristic in the CLI only: one slow run can look like two, two quick
+  runs like one, and the HTTP API doesn't apply it.
 - **Things the rules don't express.** Text checks see text, not meaning:
   `endswith "@mycompany.com"` can't tell two recipients in one string apart; nested
   conditions don't search lists, and argument lists only cover top-level names. A deny

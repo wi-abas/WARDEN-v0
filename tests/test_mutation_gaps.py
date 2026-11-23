@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-from helpers import ADMIN_KEY, BASIC_POLICY
+from helpers import ADMIN_KEY, BASIC_POLICY, shown
 from pydantic import ValidationError
 
 from warden.api import create_app
@@ -89,8 +89,16 @@ def test_already_decided_message(tmp_path: Path) -> None:
     body = {"agent_id": "a", "tool": "send_email", "arguments": {"to": "x"}}
     approval_id = client.post("/v1/evaluate", json=body).json()["approval_id"]
     headers = {"X-Warden-Admin-Key": ADMIN_KEY}
-    client.post(f"/v1/approvals/{approval_id}/deny", headers=headers)
-    again = client.post(f"/v1/approvals/{approval_id}/approve", headers=headers)
+    client.post(
+        f"/v1/approvals/{approval_id}/deny",
+        headers=headers,
+        json=shown(client, approval_id, headers),
+    )
+    again = client.post(
+        f"/v1/approvals/{approval_id}/approve",
+        headers=headers,
+        json=shown(client, approval_id, headers),
+    )
     assert again.status_code == 409 and again.json() == {"error": "approval already decided"}
 
 
