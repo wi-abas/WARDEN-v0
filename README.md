@@ -240,6 +240,10 @@ Each of these is covered by tests in `tests/`.
 
 - **Agent tokens are optional.** Without `--agents`, any process on this machine can call
   `/v1/evaluate` with any `agent_id` (and dodge per-agent limits by inventing new ones).
+- **Rules apply to every agent.** A rule can't say "only billing-agent may send
+  invoices". Agent tokens give each agent an identity, its own rate limits and approvals
+  only it can use, but not its own permissions. Workaround: run one Warden (with its own
+  policy, port and audit database) per agent. Per-agent rules are planned.
 - **Warden is a checkpoint, not a sandbox.** An agent can skip asking. The MCP proxy and
   the SDK enforce the answer only for calls that go through them.
 - **Nested conditions don't search lists**, and argument lists only cover top-level names.
