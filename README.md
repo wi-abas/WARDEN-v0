@@ -319,6 +319,10 @@ Done in v0.3.0 (alpha): MCP proxy, Python SDK, agent tokens, rate limits, persis
 approvals, group approvals (`warden approvals`), tamper-evident audit log with
 checkpoints, policy tests (`warden test`), nested argument conditions.
 
+Done in v0.4.0 (alpha): per-agent rules, sticky rejections, `otherwise` and `contains`
+in rules, `host_in` limited to http/https with port checks, approvals need the
+`action_hash` you were shown and warn about separate runs.
+
 Next, shaped by feedback from early users:
 
 1. Argument types in tool argument lists

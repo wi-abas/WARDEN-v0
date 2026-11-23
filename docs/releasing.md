@@ -24,8 +24,8 @@ is pushed. Nobody uploads from their own computer, and there's no PyPI token to 
    under the new version. Commit to `main` (through a pull request, CI green).
 2. Tag and push:
    ```sh
-   git tag -a v0.3.0 -m "v0.3.0"
-   git push origin v0.3.0
+   git tag -a v0.4.0 -m "v0.4.0"
+   git push origin v0.4.0
    ```
 3. The workflow checks that the tag matches the version, runs every check, builds,
    writes an SBOM, attests the files, then waits for your approval in the `pypi`
@@ -36,8 +36,8 @@ is pushed. Nobody uploads from their own computer, and there's no PyPI token to 
 ## Verifying a release
 
 ```sh
-pip download agent-warden==0.3.0 --no-deps -d check/
-gh attestation verify check/agent_warden-0.3.0-py3-none-any.whl --repo wi-abas/agent-warden
+pip download agent-warden==0.4.0 --no-deps -d check/
+gh attestation verify check/agent_warden-0.4.0-py3-none-any.whl --repo wi-abas/agent-warden
 ```
 
 The attestation proves the file was built by this repository's release workflow from
