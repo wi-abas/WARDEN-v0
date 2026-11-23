@@ -26,6 +26,10 @@ from warden.models import APPROVAL_ID_PATTERN, Decision
 DEFAULT_URL = "http://127.0.0.1:8000"
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
 MAX_RESPONSE_BYTES = 64 * 1024
+# Warden refuses bodies over this (api.MAX_BODY_BYTES; a test keeps them equal). Checked
+# here first: the server refuses before reading, so sending it anyway usually ends in a
+# reset connection, which would look like "Warden unreachable".
+MAX_REQUEST_BYTES = 64 * 1024
 
 
 # Never through a proxy: urllib follows HTTP_PROXY / http_proxy even for 127.0.0.1, which
@@ -149,6 +153,8 @@ class WardenClient:
         if approval_id is not None:
             body["approval_id"] = approval_id
         data = json.dumps(body, allow_nan=False).encode("utf-8")
+        if len(data) > MAX_REQUEST_BYTES:
+            return _deny(f"request too large for Warden (limit {MAX_REQUEST_BYTES // 1024} KB)")
         request = urllib.request.Request(  # noqa: S310 (check_url: local http only)
             f"{self.url}/v1/evaluate",
             data=data,

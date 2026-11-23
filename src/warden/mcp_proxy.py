@@ -184,10 +184,11 @@ class Checker(Protocol):
 class _Refused(Exception):
     """A client message that must not be forwarded."""
 
-    def __init__(self, code: int, message: str) -> None:
+    def __init__(self, code: int, message: str, *, duplicate_key: bool = False) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
+        self.duplicate_key = duplicate_key
 
 
 def _no_constants(name: str) -> Any:
@@ -204,7 +205,9 @@ def parse_message(line: bytes) -> Any:
             line.decode("utf-8"), object_pairs_hook=no_duplicate_keys, parse_constant=_no_constants
         )
     except DuplicateKeyError:
-        raise _Refused(INVALID_REQUEST, "repeated key in message (refused by Warden)") from None
+        raise _Refused(
+            INVALID_REQUEST, "repeated key in message (refused by Warden)", duplicate_key=True
+        ) from None
     except ValueError:
         raise _Refused(PARSE_ERROR, "invalid JSON") from None
     except RecursionError:  # e.g. 100,000 nested "[": would crash the relay
@@ -216,6 +219,35 @@ def parse_message(line: bytes) -> Any:
     except RecursionError:
         raise _Refused(INVALID_REQUEST, "message nested too deeply (refused by Warden)") from None
     return message
+
+
+def recover_id(line: bytes) -> JsonValue:
+    """The id of a message refused for a repeated key, so the client's request gets its
+    error answer instead of hanging. Only when it is unambiguous: the top level has
+    exactly one "id", and it is a valid id. Otherwise None (an answer with id null)."""
+    try:
+        top = json.loads(
+            line.decode("utf-8"),
+            object_pairs_hook=lambda pairs: pairs,
+            parse_constant=_no_constants,
+        )
+    except (ValueError, RecursionError):
+        return None
+    # A top-level object comes back as a list of (key, value) TUPLES. JSON arrays are
+    # lists, never tuples, so a batch or any other shape finds no "id" here.
+    if not isinstance(top, list):
+        return None
+    ids = [pair[1] for pair in top if isinstance(pair, tuple) and pair[0] == "id"]
+    if len(ids) != 1:
+        return None
+    found = ids[0]
+    if not (found is None or isinstance(found, str) or type(found) is int):  # _valid_id
+        return None
+    try:
+        encode(found)
+    except UnicodeEncodeError:  # a lone surrogate can't be sent back
+        return None
+    return found
 
 
 def encode(message: Any) -> bytes:
@@ -372,7 +404,8 @@ class McpProxy:
             if not isinstance(message, dict):
                 raise _Refused(INVALID_REQUEST, "batches and non-object messages not supported")
         except _Refused as refused:
-            self._reply(rpc_error(None, refused.code, refused.message))
+            request_id = recover_id(line) if refused.duplicate_key else None
+            self._reply(rpc_error(request_id, refused.code, refused.message))
             return
 
         has_id = "id" in message

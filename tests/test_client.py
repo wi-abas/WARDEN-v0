@@ -8,9 +8,10 @@ from pathlib import Path
 import pytest
 from helpers import ADMIN_KEY, BASIC_POLICY, live_server
 
-from warden.api import create_app
+from warden.api import MAX_BODY_BYTES, create_app
 from warden.audit import SQLiteAuditLog
 from warden.client import (
+    MAX_REQUEST_BYTES,
     Answer,
     ClientConfigError,
     WardenClient,
@@ -53,6 +54,22 @@ def test_unreachable_is_deny() -> None:
 def test_unserializable_arguments_are_deny(url: str) -> None:
     answer = WardenClient(url, "a").evaluate("read_file", {"x": float("nan")})
     assert answer.decision is Decision.DENY
+
+
+def test_too_large_request_says_so_not_unreachable(url: str) -> None:
+    """Over Warden's body limit: a clear reason (still a deny), never "unreachable"."""
+    # Big enough that, sent anyway, the server's early refusal resets the connection.
+    answer = WardenClient(url, "a").evaluate("read_file", {"blob": "x" * (15 * 1024 * 1024)})
+    assert answer == Answer(Decision.DENY, "request too large for Warden (limit 64 KB)")
+
+
+def test_request_size_limit_matches_the_server() -> None:
+    assert MAX_REQUEST_BYTES == MAX_BODY_BYTES
+
+
+def test_request_just_under_the_limit_is_still_sent(url: str) -> None:
+    answer = WardenClient(url, "a").evaluate("read_file", {"blob": "x" * 60_000})
+    assert answer.allowed
 
 
 @pytest.mark.parametrize(
