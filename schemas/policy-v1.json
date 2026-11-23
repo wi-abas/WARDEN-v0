@@ -147,7 +147,7 @@
     },
     "Rule": {
       "additionalProperties": false,
-      "description": "One policy rule: when an agent asks for `tool` (and every `when` condition\nholds), the answer is `effect`.",
+      "description": "One policy rule: when an agent asks for `tool` (and every `when` condition\nholds), the answer is `effect`. With `otherwise`, the answer is `otherwise` when the\nconditions don't all hold (it must be stricter than `effect`).",
       "properties": {
         "id": {
           "pattern": "^[a-z0-9_.\\-]{1,64}$",
@@ -195,6 +195,14 @@
           "title": "Agents",
           "type": "array",
           "uniqueItems": true
+        },
+        "otherwise": {
+          "default": null,
+          "enum": [
+            "require_approval",
+            "deny"
+          ],
+          "title": "Otherwise"
         }
       },
       "required": [

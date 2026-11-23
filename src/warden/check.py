@@ -6,7 +6,8 @@ Warnings: the policy loads, but probably doesn't do what you meant:
 - W001  deny-list risk: a tool is allowed, has "deny when..." rules, but no argument
         list, so an argument no rule mentions (e.g. "bcc") is never checked.
 - W002  no rules at all: every request is denied.
-- W003  dead rule: an unconditional, stricter rule for the same tool always wins.
+- W003  dead rule: an unconditional, stricter rule for the same tool always wins (a
+        rule with "otherwise" also always applies, giving at least its "effect").
 - W004  duplicate rule: same tool, effect and conditions as another rule.
 - W005  path prefix without a trailing "/": "/data" also matches "/database".
 - W006  tool has an argument list but no rules: it's always denied.
@@ -28,6 +29,8 @@ Warnings: the policy loads, but probably doesn't do what you meant:
         file (--agents FILE): probably a typo, and `warden serve` refuses to start.
 - W015  two agent names differ only in upper/lower case ("Billing" and "billing"):
         agent ids are case-sensitive, so these are two different agents.
+- W016  a rule with "otherwise" uses neq or missing in "when": a double negative
+        ("allow unless the value isn't X") is hard to read and easy to get backwards.
 - W008  an email-domain check ("...@example.com") is case-sensitive, so
         "x@EXAMPLE.com" slips past it. Add "ignore_case": true.
 
@@ -124,10 +127,13 @@ def _warnings(policy: Policy) -> list[str]:
 
         for rule in tool_rules:
             for other in tool_rules:
+                # `other` always applies (no conditions, or an `otherwise` branch) and
+                # always gives at least its effect; `rule` gives at most its strictest branch.
+                rule_max = rule.otherwise or rule.effect
                 if (
-                    not other.when
+                    (not other.when or other.otherwise is not None)
                     and other.id != rule.id
-                    and _STRICTNESS[other.effect] > _STRICTNESS[rule.effect]
+                    and _STRICTNESS[other.effect] > _STRICTNESS[rule_max]
                     and _covers(other, rule)
                 ):
                     out.append(
@@ -136,14 +142,9 @@ def _warnings(policy: Policy) -> list[str]:
                     )
                     break
 
-        seen: dict[
-            tuple[
-                Decision, frozenset[tuple[tuple[str, ...], str, str, bool]], frozenset[str] | None
-            ],
-            str,
-        ] = {}
+        seen: dict[tuple[Decision, Decision | None, _CondKey, frozenset[str] | None], str] = {}
         for rule in tool_rules:
-            key = (rule.effect, _conditions_key(rule), _agents_key(rule))
+            key = (rule.effect, rule.otherwise, _conditions_key(rule), _agents_key(rule))
             if key in seen:
                 out.append(f'W004: rule "{rule.id}" duplicates rule "{seen[key]}".')
             else:
@@ -215,6 +216,12 @@ def _warnings(policy: Policy) -> list[str]:
                     f'W010: rule "{rule.id}" allows everything except one value ({c.op.value} '
                     f'on "{c.label}"); anything nobody thought of is allowed. Prefer listing '
                     f"what is allowed (eq, in, startswith, endswith)."
+                )
+            if rule.otherwise is not None and c.op in {Op.NEQ, Op.MISSING}:
+                out.append(
+                    f'W016: rule "{rule.id}" has "otherwise" and uses {c.op.value} on '
+                    f'"{c.label}": a double negative, easy to get backwards. Prefer a '
+                    f"positive condition (eq, in, exists, ...)."
                 )
             if len(c.path) > 1 and rule.effect is not Decision.ALLOW:
                 out.append(

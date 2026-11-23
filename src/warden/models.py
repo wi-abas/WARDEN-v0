@@ -251,9 +251,13 @@ class Condition(BaseModel):
         return self
 
 
+_STRICTNESS = {Decision.ALLOW: 0, Decision.REQUIRE_APPROVAL: 1, Decision.DENY: 2}
+
+
 class Rule(BaseModel):
     """One policy rule: when an agent asks for `tool` (and every `when` condition
-    holds), the answer is `effect`."""
+    holds), the answer is `effect`. With `otherwise`, the answer is `otherwise` when the
+    conditions don't all hold (it must be stricter than `effect`)."""
 
     model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
 
@@ -279,6 +283,33 @@ class Rule(BaseModel):
             }
         ),
     ] = Field(default=None, min_length=1, max_length=MAX_RULE_AGENTS)
+    # Optional: the answer when the `when` conditions don't all hold (or an argument they
+    # look at is missing). Must be stricter than `effect`, so it can never loosen anything.
+    otherwise: Annotated[
+        Decision | None,
+        WithJsonSchema(
+            {"enum": [Decision.REQUIRE_APPROVAL.value, Decision.DENY.value], "title": "Otherwise"}
+        ),
+    ] = None
+
+    @field_validator("otherwise", mode="before")
+    @classmethod
+    def otherwise_not_null(cls, value: object) -> object:
+        if value is None:
+            raise ValueError("'otherwise' must be require_approval or deny (or left out)")
+        return value
+
+    @model_validator(mode="after")
+    def otherwise_is_stricter(self) -> "Rule":
+        if self.otherwise is not None:
+            if not self.when:
+                raise ValueError("'otherwise' needs at least one 'when' condition")
+            if _STRICTNESS[self.otherwise] <= _STRICTNESS[self.effect]:
+                raise ValueError(
+                    f"'otherwise' must be stricter than 'effect' ({self.effect.value}): "
+                    f"allow -> require_approval or deny, require_approval -> deny"
+                )
+        return self
 
     @field_validator("agents", mode="before")
     @classmethod
