@@ -15,6 +15,11 @@ never written to disk. With an ApprovalDB, approval STATE (id, agent, tool,
 action_hash, status, expiry) survives a restart; arguments come back when the agent
 asks again with the same action, and until then the approval can't be approved
 (see docs/design/persistent-approvals.md). Without one, a restart drops everything.
+
+Sticky rejections (docs/design/sticky-rejections.md): when a human rejects (or revokes)
+an approval, the row stays as a REJECTION for the agent's rejection window. While it
+lasts, the same agent asking for the same action (same action_hash) is denied instead
+of getting a new pending approval, so "no" sticks. An admin can lift it.
 """
 
 import os
@@ -30,6 +35,7 @@ from pathlib import Path
 
 from pydantic import JsonValue
 
+from warden.limits import DEFAULT_REJECTION_WINDOW_SECONDS
 from warden.models import ActionRequest, Decision, EvaluationResult
 
 APPROVAL_TTL_SECONDS = 15 * 60
@@ -55,6 +61,7 @@ class Approval:
     expires_at: float  # seconds on the store's clock
     status: Status = Status.PENDING
     created_at: float = 0.0  # store's clock; only used to sort lists
+    decided_at: float | None = None  # store's clock; when a human last decided it
 
 
 class DecideError(Exception):
@@ -107,7 +114,8 @@ CREATE TABLE IF NOT EXISTS approvals (
     action_hash  TEXT NOT NULL,
     status       TEXT NOT NULL,
     expires_at   REAL NOT NULL,
-    created_at   REAL
+    created_at   REAL,
+    decided_at   REAL
 )
 """
 
@@ -127,6 +135,8 @@ class ApprovalDB:
             columns = {row[1] for row in conn.execute("PRAGMA table_info(approvals)")}
             if "created_at" not in columns:  # a database from before group approvals
                 conn.execute("ALTER TABLE approvals ADD COLUMN created_at REAL")
+            if "decided_at" not in columns:  # a database from before sticky rejections
+                conn.execute("ALTER TABLE approvals ADD COLUMN decided_at REAL")
 
     def _connect(self) -> sqlite3.Connection:
         return sqlite3.connect(self.path, timeout=5)
@@ -138,7 +148,7 @@ class ApprovalDB:
             conn.execute("DELETE FROM approvals WHERE expires_at <= ?", (now,))
             rows = conn.execute(
                 "SELECT approval_id, agent_id, tool, action_hash, status, expires_at, "
-                "created_at FROM approvals ORDER BY expires_at"
+                "created_at, decided_at FROM approvals ORDER BY expires_at"
             ).fetchall()
         return [
             Approval(
@@ -150,6 +160,7 @@ class ApprovalDB:
                 expires_at=r[5],
                 status=Status(r[4]),
                 created_at=r[6] if r[6] is not None else r[5] - ttl,
+                decided_at=r[7],
             )
             for r in rows
         ]
@@ -162,9 +173,10 @@ class ApprovalDB:
         with closing(self._connect()) as conn, conn:
             conn.executemany(
                 "INSERT INTO approvals (approval_id, agent_id, tool, action_hash, status, "
-                "expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?) "
+                "expires_at, created_at, decided_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(approval_id) DO UPDATE "
-                "SET status = excluded.status, expires_at = excluded.expires_at",
+                "SET status = excluded.status, expires_at = excluded.expires_at, "
+                "decided_at = excluded.decided_at",
                 [
                     (
                         a.approval_id,
@@ -174,6 +186,7 @@ class ApprovalDB:
                         a.status.value,
                         a.expires_at,
                         a.created_at,
+                        a.decided_at,
                     )
                     for a in approvals
                 ],
@@ -188,6 +201,15 @@ class ApprovalDB:
 
 class PendingQuotaExceeded(Exception):
     """This agent already has as many pending approvals as it may have."""
+
+
+class Rejected(Exception):
+    """A human rejected this exact action recently: the rejection still stands."""
+
+    def __init__(self, approval_id: str, seconds_left: float) -> None:
+        super().__init__("rejected by a human")
+        self.approval_id = approval_id
+        self.seconds_left = seconds_left
 
 
 def _new_approval_id() -> str:
@@ -212,8 +234,14 @@ class ApprovalStore:
         max_pending: int = MAX_PENDING,
         clock: Callable[[], float] | None = None,
         db: ApprovalDB | None = None,
+        rejection_window: Callable[[str], float] | None = None,
     ) -> None:
         self._ttl = ttl_seconds
+        # agent_id -> seconds a rejection sticks (0 = off). The server sets it from the
+        # policy's limits; without one, every agent gets the default.
+        self.rejection_window: Callable[[str], float] = rejection_window or (
+            lambda agent_id: DEFAULT_REJECTION_WINDOW_SECONDS
+        )
         self._max_pending = max_pending
         # Monotonic (immune to clock changes) in memory; the wall clock when persisted,
         # because the monotonic clock starts over with every process.
@@ -246,16 +274,33 @@ class ApprovalStore:
         if approval.arguments is None and arguments is not None:
             approval.arguments = arguments
 
+    def _sticky(self, approval: Approval) -> bool:
+        """True if this is a rejection that still refuses the action (not lifted, not
+        expired: expired ones are purged first)."""
+        return approval.status is Status.DENIED and self.rejection_window(approval.agent_id) > 0
+
+    def _denied_until(self, approval: Approval, now: float) -> float:
+        """Expiry for a rejection decided now: the whole rejection window (0 = off: the
+        rest of its current window, as before sticky rejections)."""
+        window = self.rejection_window(approval.agent_id)
+        return now + window if window > 0 else approval.expires_at
+
     def request(
         self, action: ActionRequest, action_hash: str, agent_limit: int | None = None
     ) -> str | None:
         """Create (or reuse) a pending approval. None = too many pending overall.
 
         Raises PendingQuotaExceeded if the agent already has `agent_limit` pending
-        (checked under the lock, so racing requests can't overshoot)."""
+        (checked under the lock, so racing requests can't overshoot). Raises Rejected if
+        a human rejected this exact action and the rejection still stands (checked
+        first: a rejection beats everything)."""
         with self._lock:
             now = self._clock()
             self._purge_expired(now)
+            for a in self._items.values():
+                # The hash covers the agent id: only the same agent, same action.
+                if self._sticky(a) and secrets.compare_digest(a.action_hash, action_hash):
+                    raise Rejected(a.approval_id, a.expires_at - now)
             for a in self._items.values():
                 if a.status in {Status.PENDING, Status.APPROVED} and a.action_hash == action_hash:
                     # Same action asked again (maybe the agent lost the id): hand back
@@ -329,12 +374,51 @@ class ApprovalStore:
             new_status = Status.APPROVED if approve else Status.DENIED
             before_commit(approval, new_status)
             # The agent gets a full window from the moment of approval, not
-            # whatever was left of the window from when it first asked.
-            expires_at = now + self._ttl if approve else approval.expires_at
-            self._save(replace(approval, status=new_status, expires_at=expires_at))
+            # whatever was left of the window from when it first asked. A rejection
+            # (or revoke) sticks for the agent's rejection window.
+            expires_at = now + self._ttl if approve else self._denied_until(approval, now)
+            self._save(replace(approval, status=new_status, expires_at=expires_at, decided_at=now))
             approval.status = new_status
             approval.expires_at = expires_at
+            approval.decided_at = now
             return new_status
+
+    def rejections(self) -> list[tuple[Approval, float, float]]:
+        """Rejections that still stand: (approval, seconds left, seconds since the
+        rejection), soonest to expire first."""
+        with self._lock:
+            now = self._clock()
+            self._purge_expired(now)
+            items = sorted(
+                (a for a in self._items.values() if self._sticky(a)), key=lambda a: a.expires_at
+            )
+            return [
+                (a, a.expires_at - now, now - (a.decided_at if a.decided_at is not None else now))
+                for a in items
+            ]
+
+    def lift(
+        self,
+        approval_id: str,
+        before_commit: Callable[[Approval], None] = lambda a: None,
+    ) -> None:
+        """Lift a rejection (a human rejected by mistake): the agent may ASK again, and
+        gets an ordinary pending approval that a human must approve after seeing it.
+
+        Raises DecideError(not_found=True) if unknown or expired, DecideError otherwise
+        if it isn't a rejection. `before_commit` (the audit) runs under the lock first;
+        if it raises, nothing changes. Deleted from the database before from memory."""
+        with self._lock:
+            self._purge_expired(self._clock())
+            approval = self._items.get(approval_id)
+            if approval is None:
+                raise DecideError(not_found=True)
+            if approval.status is not Status.DENIED:
+                raise DecideError(not_found=False)
+            before_commit(approval)
+            if self._db is not None:
+                self._db.delete([approval_id])
+            del self._items[approval_id]
 
     def pending_groups(self) -> list[tuple[tuple[str, str], list[tuple[Approval, float]]]]:
         """Pending approvals grouped by (agent_id, tool), groups sorted by that key,
@@ -402,10 +486,14 @@ class ApprovalStore:
                 raise GroupDecideError(failed)
             new_status = Status.APPROVED if approve else Status.DENIED
             before_commit(found, new_status)
-            # Approved: a full window from now, as for single decisions.
+            # Approved: a full window from now; rejected: each sticks for its agent's
+            # rejection window. As for single decisions.
             updated = [
                 replace(
-                    a, status=new_status, expires_at=now + self._ttl if approve else a.expires_at
+                    a,
+                    status=new_status,
+                    expires_at=now + self._ttl if approve else self._denied_until(a, now),
+                    decided_at=now,
                 )
                 for a in found
             ]
@@ -414,6 +502,7 @@ class ApprovalStore:
             for approval, new in zip(found, updated, strict=True):
                 approval.status = new.status
                 approval.expires_at = new.expires_at
+                approval.decided_at = new.decided_at
             return found
 
     def use(
@@ -482,6 +571,18 @@ def apply_approval(
     if action.approval_id is None:
         try:
             approval_id = store.request(action, result.action_hash, agent_limit)
+        except Rejected as exc:
+            # No arguments in the reason, as always: only when, and which approval.
+            until = time.strftime(
+                "%Y-%m-%d %H:%M:%S UTC", time.gmtime(time.time() + exc.seconds_left)
+            )
+            return EvaluationResult(
+                decision=Decision.DENY,
+                reason=f"rejected by a human; this exact action is refused until {until} "
+                f"(approval {exc.approval_id})",
+                matched_rule=result.matched_rule,
+                action_hash=result.action_hash,
+            )
         except PendingQuotaExceeded:
             return EvaluationResult(
                 decision=Decision.DENY,

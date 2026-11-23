@@ -9,7 +9,7 @@ from pathlib import Path
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from warden.approvals import ApprovalStore, DecideError, Status
+from warden.approvals import ApprovalStore, DecideError, Rejected, Status
 from warden.audit import AuditEntry, AuditEvent, EventKind, SQLiteAuditLog, verify_chain
 from warden.limits import Limits, RateLimiter
 from warden.models import ActionRequest, Decision
@@ -137,7 +137,10 @@ def test_each_approval_grants_at_most_one_allow_per_approval(ops: list[tuple[str
     grants: dict[str, int] = {}
     for op, i in ops:
         if op == "request":
-            approval_id = store.request(actions[i], hashes[i])
+            try:
+                approval_id = store.request(actions[i], hashes[i])
+            except Rejected:
+                continue  # a human rejected this exact action: it stays refused
             assert approval_id is not None
             ids[i] = approval_id
         elif op == "tick":

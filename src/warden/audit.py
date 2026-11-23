@@ -84,6 +84,8 @@ class EventKind(StrEnum):
     APPROVAL_DECIDE_FAILED = "approval_decide_failed"  # unknown, expired or already decided
     # One human decision on several approvals (each also gets its own event).
     APPROVAL_GROUP_DECIDED = "approval_group_decided"
+    # A human lifted a sticky rejection: the agent may ask for that action again.
+    APPROVAL_REJECTION_LIFTED = "approval_rejection_lifted"
     REQUEST_REJECTED = "request_rejected"  # 401, 411, 413, 422, 500
     AUDIT_PURGED = "audit_purged"  # old entries deleted by retention
     # Written once, when an old database gets the hash columns: rows up to these ids

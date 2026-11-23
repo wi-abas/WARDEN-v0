@@ -106,9 +106,22 @@ def retry() -> None:
     got = outcome(lambda: delete_file("/workspace/other.txt"))
     check("changed delete is not approved", got == "pending", got)
     got = outcome(lambda: send_email("ann@partner.org", "q", "GOODSECRET-partner-789"))
-    check("rejected email does not run (re-queued)", got == "pending", got)
+    # Sticky rejection: asking again for the rejected action is refused, not re-queued.
+    check(
+        "rejected email does not run (sticky: refused, not re-queued)",
+        got.startswith("blocked: rejected by a human; this exact action is refused until")
+        and "GOODSECRET" not in got,
+        got,
+    )
     check("retry: only the approved delete ran", RAN == [("delete_file", "/workspace/old.txt")])
 
 
+def ask_again() -> None:
+    # After the human lifted the rejection, asking again is an ordinary pending approval.
+    got = outcome(lambda: send_email("ann@partner.org", "q", "GOODSECRET-partner-789"))
+    check("lifted rejection: asking again creates a new pending approval", got == "pending", got)
+    check("ask_again: nothing ran", RAN == [], RAN)
+
+
 if __name__ == "__main__":
-    {"first": first, "retry": retry}[sys.argv[1]]()
+    {"first": first, "retry": retry, "ask_again": ask_again}[sys.argv[1]]()

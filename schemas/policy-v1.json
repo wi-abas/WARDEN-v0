@@ -82,6 +82,20 @@
           ],
           "default": null,
           "title": "Max Pending Approvals"
+        },
+        "rejection_window_seconds": {
+          "anyOf": [
+            {
+              "maximum": 604800,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rejection Window Seconds"
         }
       },
       "title": "LimitSpec",
@@ -94,7 +108,8 @@
           "$ref": "#/$defs/LimitSpec",
           "default": {
             "requests_per_minute": null,
-            "max_pending_approvals": null
+            "max_pending_approvals": null,
+            "rejection_window_seconds": null
           }
         },
         "agents": {
@@ -259,7 +274,8 @@
       "default": {
         "default": {
           "requests_per_minute": null,
-          "max_pending_approvals": null
+          "max_pending_approvals": null,
+          "rejection_window_seconds": null
         },
         "agents": {}
       }

@@ -15,7 +15,7 @@ from urllib.parse import unquote, urlsplit
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
-from warden.approvals import ApprovalStore
+from warden.approvals import ApprovalStore, Rejected
 from warden.engine import evaluate
 from warden.fingerprint import fingerprint
 from warden.models import ActionRequest, Decision, EvaluationResult, Rule
@@ -225,7 +225,14 @@ def test_approvals_match_the_model(steps: list[tuple[str, int, int]]) -> None:
         if op == "tick":
             now[0] += dt
         elif op == "request":
-            approval_id = store.request(actions[i], hashes[i])
+            # A standing rejection of this exact action refuses it (sticky rejections).
+            rejected = i in ids and live(ids[i]) and model[ids[i]][0] == "denied"
+            try:
+                approval_id = store.request(actions[i], hashes[i])
+            except Rejected:
+                assert rejected
+                continue
+            assert not rejected
             assert approval_id is not None
             if not live(approval_id):
                 model[approval_id] = ["pending", now[0] + 900]
@@ -244,8 +251,8 @@ def test_approvals_match_the_model(steps: list[tuple[str, int, int]]) -> None:
             assert ok == expected
             if ok:
                 state[0] = "approved" if op == "approve" else "denied"
-                if op == "approve":
-                    state[1] = now[0] + 900
+                # Approved: a fresh TTL; rejected: the rejection window (default 900).
+                state[1] = now[0] + 900
         elif i in ids and op in {"use", "use-wrong"}:
             approval_id = ids[i]
             wrong = op == "use-wrong"

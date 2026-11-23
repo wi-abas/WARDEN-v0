@@ -59,6 +59,10 @@ Assuming the agent runtime calls Warden and obeys the answer:
   `action_hash` the human was shown, never mixes agents or
   tools, is all or nothing under one lock, and is audited before it takes effect. The
   CLI shows every action in full, escaped, before asking.
+- **Approval fatigue** (sticky rejections): after a human rejects or revokes an
+  approval, the same agent asking for the same action is denied for the rejection window
+  (default 15 minutes) instead of getting a new pending approval. Lifting one early needs
+  the admin key and is audited before it takes effect.
 - **Approval loss or replay across restarts**: approval state is persisted (without
   arguments) and `used` is saved before an allow is returned. After a restart nothing
   can be approved until the human can see its arguments again.
@@ -88,6 +92,9 @@ Assuming the agent runtime calls Warden and obeys the answer:
   rewrites every later hash too (or cuts off the newest rows) is only caught by comparing
   with checkpoints kept elsewhere (`warden audit head`, `warden audit verify --expect`). They can also change approval state
   stored in the same file.
+- **Re-asking with a slightly different action.** A sticky rejection covers the exact
+  action only: one changed character in the arguments (or, without agent tokens, a new
+  `agent_id`) is a new approval. Rate limits and pending quotas bound how often.
 - **A reviewer who doesn't read.** Group approvals make a careful review possible, not
   certain: similar-looking actions in one group must still be compared, and a script
   with the admin key (or `--yes`) can decide ids nobody looked at.

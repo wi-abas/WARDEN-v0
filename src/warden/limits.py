@@ -2,11 +2,12 @@
 
 The policy file may have a "limits" section:
     "limits": {
-      "default": {"requests_per_minute": 1200, "max_pending_approvals": 100},
+      "default": {"requests_per_minute": 1200, "max_pending_approvals": 100,
+                  "rejection_window_seconds": 900},
       "agents": {"billing-agent": {"requests_per_minute": 30}}
     }
 A value set for the agent wins, then "default", then the built-in defaults below.
-See docs/design/rate-limits.md.
+See docs/design/rate-limits.md and docs/design/sticky-rejections.md.
 """
 
 import threading
@@ -20,6 +21,10 @@ from warden.models import AGENT_ID_PATTERN
 
 DEFAULT_REQUESTS_PER_MINUTE = 1200
 DEFAULT_MAX_PENDING_APPROVALS = 100
+# After a human rejects an action, the same agent asking for the same action is refused
+# for this long (0 = off: it gets a new pending approval at once).
+DEFAULT_REJECTION_WINDOW_SECONDS = 900
+MAX_REJECTION_WINDOW_SECONDS = 7 * 24 * 3600
 MAX_TRACKED_AGENTS = 10_000
 
 
@@ -29,6 +34,10 @@ class LimitSpec(BaseModel):
     requests_per_minute: int | None = Field(default=None, ge=1, le=100_000)
     # 0 = this agent may never wait for approval (require_approval becomes deny).
     max_pending_approvals: int | None = Field(default=None, ge=0, le=1000)
+    # 0 = rejections don't stick (see docs/design/sticky-rejections.md).
+    rejection_window_seconds: int | None = Field(
+        default=None, ge=0, le=MAX_REJECTION_WINDOW_SECONDS
+    )
 
 
 class Limits(BaseModel):
@@ -50,6 +59,13 @@ class Limits(BaseModel):
             return own
         fallback = self.default.max_pending_approvals
         return fallback if fallback is not None else DEFAULT_MAX_PENDING_APPROVALS
+
+    def rejection_window_seconds(self, agent_id: str) -> int:
+        own = self.agents.get(agent_id, LimitSpec()).rejection_window_seconds
+        if own is not None:
+            return own
+        fallback = self.default.rejection_window_seconds
+        return fallback if fallback is not None else DEFAULT_REJECTION_WINDOW_SECONDS
 
 
 class _Bucket:

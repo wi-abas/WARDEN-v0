@@ -4,6 +4,8 @@ warden approvals list [--group]              every pending action, in full
 warden approvals list --agent A --tool T     only those (when an agent floods the queue)
 warden approvals approve ID [ID ...] [--yes] approve exactly these (all or nothing)
 warden approvals reject ID [ID ...] [--yes]  reject exactly these (all or nothing)
+warden approvals list --rejected             rejections that still stand
+warden approvals lift ID [--yes]             lift one: the agent may ask again
 
 Put options before `--` and ids after it if an id starts with "-" (older ids could):
 warden approvals approve --yes -- -abc...
@@ -145,6 +147,55 @@ def _pending(
     return data
 
 
+def _rejections(url: str, key: str, ids: list[str] | None = None) -> list[Any]:
+    query = {"status": "rejected"}
+    if ids:
+        query["ids"] = ",".join(ids)
+    status, data = _call(url, key, "GET", "/v1/approvals?" + urllib.parse.urlencode(query))
+    if status == 401:
+        raise PermissionError("WARDEN_ADMIN_KEY is wrong (Warden refused it)")
+    if status != 200:
+        raise _Unreachable(f"Warden answered HTTP {status}")
+    if not isinstance(data, list) or not all(isinstance(i, dict) for i in data):
+        raise _Unreachable("unexpected answer from Warden")
+    return data
+
+
+def _print_rejection(item: Any, out: TextIO) -> None:
+    print(
+        f"  {_text(item.get('approval_id'))}  agent {_text(item.get('agent_id'))}, "
+        f"tool {_text(item.get('tool'))}, rejected {_text(item.get('rejected_at'))} "
+        f"(stands for {_text(item.get('expires_in_seconds'))}s more)",
+        file=out,
+    )
+    print(f"      action_hash: {_text(item.get('action_hash'))}", file=out)
+
+
+def _lift(
+    url: str, key: str, approval_id: str, yes: bool, stdin: TextIO, out: TextIO, err: TextIO
+) -> int:
+    """Show the rejection, ask, then lift it. The agent may then ask again, which
+    creates an ordinary pending approval that a human must still approve."""
+    found = _rejections(url, key, [approval_id])
+    if not found:
+        print(f"not a standing rejection (unknown or expired): {approval_id}", file=err)
+        print("warden approvals: nothing changed", file=err)
+        return 1
+    _print_rejection(found[0], out)
+    if not yes and not _confirm("Lift this rejection?", stdin, out):
+        print("Nothing changed.", file=out)
+        return 1
+    status, data = _call(url, key, "POST", f"/v1/approvals/{approval_id}/lift")
+    if status == 200:
+        print("Lifted. The agent may ask for this action again.", file=out)
+        return 0
+    if status == 401:
+        raise PermissionError("WARDEN_ADMIN_KEY is wrong (Warden refused it)")
+    error = data.get("error") if isinstance(data, dict) else None
+    print(f"warden approvals: {_text(error or f'HTTP {status}, nothing changed')}", file=err)
+    return 1
+
+
 def _confirm(question: str, stdin: TextIO, out: TextIO) -> bool:
     print(f"{question} [y/N] ", end="", file=out, flush=True)  # mutation-ok: flush
     answer = stdin.readline()  # "" at end of input: no
@@ -172,6 +223,13 @@ def run(
     agent, tool = getattr(args, "agent", None), getattr(args, "tool", None)
     if args.action != "list" and (agent or tool):
         print("warden approvals: --agent and --tool are for `list`", file=err)
+        return 2
+    rejected = getattr(args, "rejected", False)
+    if rejected and (args.action != "list" or args.group):
+        print("warden approvals: --rejected is for `list` (without --group)", file=err)
+        return 2
+    if args.action == "lift" and len(ids) > 1:
+        print("warden approvals lift: takes one id", file=err)
         return 2
     if (agent and not re.fullmatch(AGENT_ID_PATTERN, agent)) or (
         tool and not re.fullmatch(TOOL_NAME_PATTERN, tool)
@@ -202,6 +260,20 @@ def run(
         )
         return 2
     try:
+        if args.action == "list" and rejected:
+            items = [
+                i
+                for i in _rejections(url, key)
+                if (agent is None or i.get("agent_id") == agent)
+                and (tool is None or i.get("tool") == tool)
+            ]
+            if not items:
+                print("No standing rejections.", file=out)
+            for item in items:
+                _print_rejection(item, out)
+            return 0
+        if args.action == "lift":
+            return _lift(url, key, ids[0], args.yes, stdin, out, err)
         if args.action == "list":
             items = _pending(url, key, group=args.group, agent=agent, tool=tool)
             if not items:
