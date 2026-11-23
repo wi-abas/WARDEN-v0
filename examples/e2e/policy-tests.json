@@ -1,0 +1,18 @@
+{ "policy": "policy.json", "cases": [
+ {"name":"read workspace","request":{"tool":"read_file","arguments":{"path":"/workspace/a.txt"}},"expect":"allow","rule":"read-workspace"},
+ {"name":"read dotdot","request":{"tool":"read_file","arguments":{"path":"/workspace/../etc/passwd"}},"expect":"deny"},
+ {"name":"read pct","request":{"tool":"read_file","arguments":{"path":"/workspace/%2e%2e/etc/passwd"}},"expect":"deny"},
+ {"name":"read prefix trick","request":{"tool":"read_file","arguments":{"path":"/workspace-evil/x"}},"expect":"deny"},
+ {"name":"write workspace","request":{"tool":"write_file","arguments":{"path":"/workspace/o.txt","content":"hi"}},"expect":"allow"},
+ {"name":"write missing content","request":{"tool":"write_file","arguments":{"path":"/workspace/o.txt"}},"expect":"deny"},
+ {"name":"delete needs ok","request":{"tool":"delete_file","arguments":{"path":"/workspace/o.txt"}},"expect":"require_approval","reason":"Deleting needs a human"},
+ {"name":"delete outside","request":{"tool":"delete_file","arguments":{"path":"/etc/hosts"}},"expect":"deny","rule":null},
+ {"name":"email colleague","request":{"tool":"send_email","arguments":{"to":"Bob@Example.COM","subject":"s"}},"expect":"allow"},
+ {"name":"email partner","request":{"tool":"send_email","arguments":{"to":"ann@PARTNER.org"}},"expect":"require_approval"},
+ {"name":"email elsewhere","request":{"tool":"send_email","arguments":{"to":"x@evil.net"}},"expect":"deny"},
+ {"name":"email bcc","request":{"tool":"send_email","arguments":{"to":"bob@example.com","bcc":"x@evil.net"}},"expect":"deny"},
+ {"name":"email percent route","request":{"tool":"send_email","arguments":{"to":"x%evil.net@example.com"}},"expect":"deny"},
+ {"name":"shell","request":{"tool":"shell","arguments":{"command":"ls"}},"expect":"deny","rule":"no-shell"},
+ {"name":"fetch ok","request":{"tool":"fetch_url","arguments":{"url":"HTTPS://API.EXAMPLE.COM:443/x"}},"expect":"allow"},
+ {"name":"fetch userinfo trick","request":{"tool":"fetch_url","arguments":{"url":"https://api.example.com@evil.net/"}},"expect":"deny"}
+]}
