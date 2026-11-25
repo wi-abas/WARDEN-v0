@@ -18,7 +18,7 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from helpers import ADMIN_KEY, BASIC_POLICY, live_server, shown
-from proof import Proving, http_answer, raw_impostor, read_message, serving
+from proof import Proving, http_answer, raw_impostor, read_message, serving, valid_hello
 
 import warden.api
 from warden import identity
@@ -101,18 +101,12 @@ def test_impostor_that_always_allows(run: Callable[[str, list[str]], None]) -> N
     assert nothing_secret(received)
 
 
-def valid_hello(sock: socket.socket) -> bytes:
-    asked = json.loads(read_message(sock).partition(b"\r\n\r\n")[2])
-    ends = (identity.address(sock.getsockname()), identity.address(sock.getpeername()))
-    return json.dumps({"mac": identity.hello_mac(KEY, asked["nonce"], *ends)}).encode()
-
-
 BAD_HELLOS: dict[str, Callable[[socket.socket], bytes]] = {
     "404": lambda s: http_answer(b'{"decision": "deny"}', "404 Not Found"),
     "401": lambda s: http_answer(b"{}", "401 Unauthorized"),
     "429": lambda s: http_answer(b"{}", "429 Too Many", "Retry-After: 1"),
-    "500": lambda s: http_answer(valid_hello(s), "500 Oops"),
-    "201": lambda s: http_answer(valid_hello(s), "201 Created"),
+    "500": lambda s: http_answer(valid_hello(s, TOKEN), "500 Oops"),
+    "201": lambda s: http_answer(valid_hello(s, TOKEN), "201 Created"),
     "302": lambda s: http_answer(b"", "302 Found", "Location: /v1/hello"),
     "not http": lambda s: b"garbage\r\n\r\n",
     "no json": lambda s: http_answer(b"<html>"),
@@ -121,9 +115,9 @@ BAD_HELLOS: dict[str, Callable[[socket.socket], bytes]] = {
     "null": lambda s: http_answer(b'{"mac": null}'),
     "number": lambda s: http_answer(b'{"mac": 5}'),
     "wrong": lambda s: http_answer(b'{"mac": "%s"}' % (b"0" * 64)),
-    "uppercase": lambda s: http_answer(valid_hello(s).upper().replace(b"MAC", b"mac")),
-    "truncated": lambda s: http_answer(valid_hello(s)[:-3] + b'"}'),
-    "oversized": lambda s: http_answer(valid_hello(s) + b" " * MAX_HELLO_BYTES),
+    "uppercase": lambda s: http_answer(valid_hello(s, TOKEN).upper().replace(b"MAC", b"mac")),
+    "truncated": lambda s: http_answer(valid_hello(s, TOKEN)[:-3] + b'"}'),
+    "oversized": lambda s: http_answer(valid_hello(s, TOKEN) + b" " * MAX_HELLO_BYTES),
     "bad length": lambda s: b"HTTP/1.1 200 OK\r\nContent-Length: 999999\r\n\r\n{",
     "deep": lambda s: http_answer(b"[" * 4000),
     "header flood": lambda s: b"HTTP/1.1 200 OK\r\n" + b"x: y\r\n" * 200 + b"\r\n",
@@ -148,7 +142,7 @@ def test_the_raw_impostor_could_have_passed() -> None:
     """The cases above differ from this one only in their one mistake."""
 
     def act(sock: socket.socket) -> None:
-        sock.sendall(http_answer(valid_hello(sock)))
+        sock.sendall(http_answer(valid_hello(sock, TOKEN)))
 
     with raw_impostor(act) as (port, received):
         ask(f"http://127.0.0.1:{port}", timeout=0.5)
@@ -175,7 +169,7 @@ def test_slow_hello_ends_at_the_timeout(how: str) -> None:
 
 def test_hello_and_answer_share_the_timeout() -> None:
     def act(sock: socket.socket) -> None:
-        hello = http_answer(valid_hello(sock))
+        hello = http_answer(valid_hello(sock, TOKEN))
         time.sleep(0.6)
         sock.sendall(hello)
         read_message(sock)
@@ -501,7 +495,7 @@ def test_exact_limits() -> None:
     for extra in (0, 1):
 
         def act(sock: socket.socket, extra: int = extra) -> None:
-            hello = valid_hello(sock)
+            hello = valid_hello(sock, TOKEN)
             sock.sendall(http_answer(hello + b" " * (MAX_HELLO_BYTES - len(hello) + extra)))
             read_message(sock)
             sock.close()
@@ -668,7 +662,7 @@ def test_port_taken_between_hello_and_question() -> None:
         def warden_then_impostor() -> None:
             sock, _ = listener.accept()
             with sock:
-                sock.sendall(http_answer(valid_hello(sock), "200 OK", "Connection: close"))
+                sock.sendall(http_answer(valid_hello(sock, TOKEN), "200 OK", "Connection: close"))
             handed_over.set()
 
         thread = threading.Thread(target=warden_then_impostor)
@@ -685,7 +679,7 @@ def test_port_taken_between_hello_and_question() -> None:
 @pytest.mark.parametrize("reset", [False, True])
 def test_connection_lost_after_the_hello(reset: bool) -> None:
     def act(sock: socket.socket) -> None:
-        sock.sendall(http_answer(valid_hello(sock)))
+        sock.sendall(http_answer(valid_hello(sock, TOKEN)))
         read_message(sock)
         if reset:
             linger = b"\x01\x00\x00\x00\x00\x00\x00\x00"

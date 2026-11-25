@@ -7,10 +7,11 @@ import io
 import socket
 import threading
 from collections.abc import Iterator
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import ThreadingHTTPServer
 from typing import Any
 
 import pytest
+from proof import Proving, http_answer, valid_hello
 
 from warden import approvals_cli
 
@@ -93,17 +94,12 @@ def test_exactly_100_ids_pass_the_usage_check(monkeypatch: pytest.MonkeyPatch) -
     assert code == 1 and "not pending" in err  # got as far as asking the server
 
 
-class _Fixed(BaseHTTPRequestHandler):
+class _Fixed(Proving):
+    secrets = (KEY,)
     body = b""
 
-    def do_GET(self) -> None:  # noqa: N802 (http.server naming)
-        self.send_response(200)
-        self.send_header("content-length", str(len(self.body)))
-        self.end_headers()
-        self.wfile.write(self.body)
-
-    def log_message(self, *a: Any) -> None:
-        pass
+    def answer(self) -> None:
+        self.reply(200, self.body)
 
 
 @pytest.fixture
@@ -137,21 +133,20 @@ def test_one_byte_over_32_mb_is_refused(fixed_server: tuple[str, type[_Fixed]]) 
 
 @pytest.fixture
 def raw_server() -> Iterator[tuple[str, list[bytes]]]:
-    """Sends whatever bytes the test puts in the list, then closes the connection."""
-    answer: list[bytes] = []
+    """Proves itself, sends whatever bytes the test puts in the list, then closes."""
+    answers: list[bytes] = []
 
-    class Raw(BaseHTTPRequestHandler):
-        def do_GET(self) -> None:  # noqa: N802 (http.server naming)
-            self.wfile.write(answer[0])
+    class Raw(Proving):
+        secrets = (KEY,)
+
+        def answer(self) -> None:
+            self.wfile.write(answers[0])
             self.close_connection = True
-
-        def log_message(self, *a: Any) -> None:
-            pass
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Raw)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
-        yield f"http://127.0.0.1:{server.server_address[1]}", answer
+        yield f"http://127.0.0.1:{server.server_address[1]}", answers
     finally:
         server.shutdown()
         server.server_close()
@@ -202,7 +197,8 @@ def test_a_slow_answer_says_so_and_not_unreachable(
         def accept() -> None:
             connection, _ = server.accept()
             accepted.append(connection)
-            if started:
+            if started:  # Warden, but slow
+                connection.sendall(http_answer(valid_hello(connection, KEY)))
                 connection.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\n[")
 
         thread = threading.Thread(target=accept)

@@ -25,7 +25,7 @@ class Proving(BaseHTTPRequestHandler):
 
     protocol_version = "HTTP/1.1"  # keeps the connection open after the hello
     secrets: tuple[str, ...] = ()
-    body = b""
+    request_body = b""
     _key = b""
 
     def ends(self) -> tuple[str, str]:
@@ -35,7 +35,7 @@ class Proving(BaseHTTPRequestHandler):
         )
 
     def _handle(self) -> None:
-        self.body = self.rfile.read(int(self.headers.get("content-length") or 0))
+        self.request_body = self.rfile.read(int(self.headers.get("content-length") or 0))
         if self.path == identity.HELLO_PATH:
             self.hello()
         else:
@@ -44,7 +44,7 @@ class Proving(BaseHTTPRequestHandler):
     do_GET = do_POST = _handle  # noqa: N815 (http.server naming)
 
     def hello(self) -> None:
-        asked = json.loads(self.body)
+        asked = json.loads(self.request_body)
         keys = {identity.key_id(k): k for k in map(identity.proof_key, self.secrets)}
         self._key = keys[asked["key_id"]]
         mac = identity.hello_mac(self._key, asked["nonce"], *self.ends())
@@ -61,7 +61,7 @@ class Proving(BaseHTTPRequestHandler):
             "client": client,
             "method": self.command,
             "target": self.path.encode(),
-            "request_sha256": hashlib.sha256(self.body).hexdigest(),
+            "request_sha256": hashlib.sha256(self.request_body).hexdigest(),
             "status": status,
             "retry_after": headers.get("Retry-After", "").encode(),
             "body": body,
@@ -169,6 +169,14 @@ def raw_impostor(
 def http_answer(body: bytes, status: str = "200 OK", *headers: str) -> bytes:
     lines = [f"HTTP/1.1 {status}", f"Content-Length: {len(body)}", *headers]
     return "\r\n".join(lines).encode() + b"\r\n\r\n" + body
+
+
+def valid_hello(sock: socket.socket, secret: str) -> bytes:
+    """Read a hello from `sock`; the body that answers it correctly."""
+    asked = json.loads(read_message(sock).partition(b"\r\n\r\n")[2])
+    ends = (identity.address(sock.getsockname()), identity.address(sock.getpeername()))
+    mac = identity.hello_mac(identity.proof_key(secret), asked["nonce"], *ends)
+    return json.dumps({"mac": mac}).encode()
 
 
 def read_message(sock: socket.socket) -> bytes:

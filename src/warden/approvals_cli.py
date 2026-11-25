@@ -13,7 +13,9 @@ warden approvals approve --yes -- -abc...
 
 Talks to the running server over HTTP (local URLs only, like warden.client). The admin
 key comes from the WARDEN_ADMIN_KEY environment variable only: never a flag (flags end
-up in shell history and process lists) and never printed.
+up in shell history and process lists) and never printed. It is only sent after the server
+has proven that it is Warden, and only its signed answers count (always: no flag turns
+that off; see docs/design/server-identity.md).
 
 Before deciding, every named action is fetched again and printed in full, then the
 human is asked "Approve these N actions? [y/N]". `--yes` skips the question (scripts).
@@ -36,21 +38,26 @@ import json
 import os
 import re
 import sys
-import urllib.error
 import urllib.parse
-import urllib.request
 from typing import Any, TextIO
 
 from warden.approvals import MAX_GROUP
-from warden.client import DEFAULT_URL, ClientConfigError, check_url, open_local
+from warden.client import (
+    DEFAULT_URL,
+    AnswerTooLarge,
+    ClientConfigError,
+    NotProven,
+    ProofTimeout,
+    ask_proven,
+    check_url,
+)
+from warden.identity import proof_key
 from warden.models import AGENT_ID_PATTERN, APPROVAL_ID_PATTERN, TOOL_NAME_PATTERN
 
 # 100 approvals (the most one decision fetches) of the largest request Warden accepts,
 # every character escaped, stay under this.
 MAX_RESPONSE_BYTES = 32 * 1024 * 1024
 TIMEOUT_SECONDS = 10  # mutation-ok: timeout
-# One byte more than allowed, to tell "too large" from "exactly the limit".
-_READ_LIMIT = MAX_RESPONSE_BYTES + 1  # mutation-ok: reading 2 more changes nothing
 # Approvals asked for more than this many seconds apart count as separate runs.
 RUN_GAP_SECONDS = 120
 MAX_AGE_MINUTES = 7 * 24 * 60  # the server's limit for max_age_seconds, in minutes
@@ -71,36 +78,45 @@ def _text(value: Any) -> str:
 
 def _call(url: str, key: str, method: str, path: str, body: Any = None) -> tuple[int, Any]:
     data = None if body is None else json.dumps(body).encode()
-    request = urllib.request.Request(  # noqa: S310 (check_url: local http only)
-        url + path,
-        data=data,
-        headers={"X-Warden-Admin-Key": key, "content-type": "application/json"},
-        method=method,
-    )
+    # Checked here: http.client would refuse such a header, with a message that shows it.
+    if not all(" " <= ch <= "~" or "\xa0" <= ch <= "\xff" for ch in key):
+        raise _Unreachable("WARDEN_ADMIN_KEY contains characters that can't be sent")
     try:
-        try:
-            with open_local(request, timeout=TIMEOUT_SECONDS) as response:
-                status, raw = response.status, response.read(_READ_LIMIT)
-        except urllib.error.HTTPError as error:
-            with error:
-                status, raw = error.code, error.read(_READ_LIMIT)
-    except ValueError:  # http.client refuses the header; its message would show the key
-        raise _Unreachable("WARDEN_ADMIN_KEY contains characters that can't be sent") from None
-    except (OSError, http.client.HTTPException) as exc:  # OSError includes URLError
-        if isinstance(exc, TimeoutError) or isinstance(getattr(exc, "reason", None), TimeoutError):
-            raise _Unreachable(
-                f"Warden at {url} didn't answer within {TIMEOUT_SECONDS} seconds. It may be "
-                "busy: list less at once with --agent, --tool or --max-age. A decision just "
-                "sent may still take effect: list again to see"
-            ) from None
+        reply = ask_proven(
+            url,
+            proof_key(key),
+            method,
+            path,
+            data,
+            {"X-Warden-Admin-Key": key, "content-type": "application/json"},
+            timeout=TIMEOUT_SECONDS,
+            limit=MAX_RESPONSE_BYTES,
+        )
+    except (TimeoutError, ProofTimeout):
+        raise _Unreachable(
+            f"Warden at {url} didn't answer within {TIMEOUT_SECONDS} seconds. It may be "
+            "busy: list less at once with --agent, --tool or --max-age. A decision just "
+            "sent may still take effect: list again to see"
+        ) from None
+    except (OSError, http.client.HTTPException) as exc:
         raise _Unreachable(f"can't reach Warden at {url} ({type(exc).__name__})") from None
-    if len(raw) > MAX_RESPONSE_BYTES:
+    except NotProven as exc:
+        if exc.unknown_key:
+            raise PermissionError(
+                f"WARDEN_ADMIN_KEY is wrong, or what listens at {url} isn't Warden "
+                "(the key was not sent)"
+            ) from None
+        raise _Unreachable(
+            f"{exc}: don't trust what listens at {url}. If you were deciding, list the "
+            "approvals again once Warden is running"
+        ) from None
+    except AnswerTooLarge:
         raise _Unreachable(
             "answer from Warden too large: narrow the list with --agent and --tool "
             "(approve and reject still work: they fetch only the ids you name)"
-        )
+        ) from None
     try:
-        return status, json.loads(raw)
+        return reply.status, json.loads(reply.body)
     except (ValueError, RecursionError):  # not JSON, or nested too deeply to parse
         raise _Unreachable(f"Warden at {url} sent something that isn't JSON") from None
 

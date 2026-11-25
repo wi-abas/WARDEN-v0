@@ -159,6 +159,8 @@ TARGETS: dict[str, list[str]] = {
     "approvals_cli": [
         "test_approvals_cli.py",
         "test_approvals_cli_edges.py",
+        "test_approvals_cli_proof.py",
+        "test_client_redirects.py",
         "test_approvals_flood.py",
         "test_approval_hygiene.py",
         "test_required_action_hash.py",
