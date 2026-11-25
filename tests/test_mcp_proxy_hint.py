@@ -1,7 +1,7 @@
 """`warden proxy`: the approval hint must not name an agent the approval doesn't belong to.
 
-With an agent token, Warden takes the agent id from the token, so the proxy's own
-`agent_id` is ignored and `approvals list --agent <that>` would show nothing."""
+With an agent token, Warden takes the agent id from the token, and the proxy's own
+`agent_id` may only be a default: `approvals list --agent <that>` would show nothing."""
 
 import asyncio
 import io
@@ -9,6 +9,7 @@ import json
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 from helpers import ADMIN_KEY, live_server
@@ -17,8 +18,9 @@ from test_mcp_proxy import FakeWarden, call, make_config, pending
 from warden.agents import add_agent, load_agents
 from warden.api import create_app
 from warden.audit import SQLiteAuditLog
+from warden.cli import main as cli_main
 from warden.client import WardenClient
-from warden.mcp_proxy import McpProxy, serve_stdio
+from warden.mcp_proxy import McpProxy, ProxyConfig, serve_stdio
 
 
 def hint(tmp_path: Path, capsys: pytest.CaptureFixture[str], *, token: bool) -> str:
@@ -87,7 +89,7 @@ def test_end_to_end_hint_with_agent_tokens(
     monkeypatch.setenv("WARDEN_AGENT_TOKEN", token)
     with live_server(app) as url:
         config = make_config(
-            tmp_path, warden_url=url, agent_id="from-config", approval={"mode": "error"}
+            tmp_path, warden_url=url, agent_id="token-agent", approval={"mode": "error"}
         )
         assert serve_stdio(config) == 0
         approval_id = WardenClient(url, token=token).evaluate("echo", {}).approval_id
@@ -95,3 +97,44 @@ def test_end_to_end_hint_with_agent_tokens(
     assert approval_id is not None and f"approvals approve {approval_id} " in err
     assert "approvals list --warden-url" in err and "--agent" not in err
     assert token not in err
+
+
+@pytest.mark.parametrize(
+    ("extra", "sent"),
+    [({}, None), ({"agent_id": "billing"}, "billing"), ({"agent_id": "mcp-proxy"}, "mcp-proxy")],
+)
+def test_with_a_token_only_a_chosen_agent_id_is_sent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, extra: dict[str, str], sent: str | None
+) -> None:
+    made: list[WardenClient] = []
+
+    def record(*args: Any, **kwargs: Any) -> WardenClient:
+        made.append(WardenClient(*args, **kwargs))
+        return made[-1]
+
+    monkeypatch.setattr("warden.mcp_proxy.WardenClient", record)
+    monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO()))
+    monkeypatch.setattr(sys, "stdout", io.TextIOWrapper(io.BytesIO()))
+    monkeypatch.setenv("WARDEN_AGENT_TOKEN", "wdn_x")
+    serve_stdio(make_config(tmp_path, **extra))
+    monkeypatch.delenv("WARDEN_AGENT_TOKEN")
+    serve_stdio(make_config(tmp_path, **extra))
+    assert [c.agent_id for c in made] == [sent, sent or "mcp-proxy"]
+
+
+@pytest.mark.parametrize("chosen", [False, True])
+def test_cli_keeps_default_and_chosen_agent_ids_apart(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, chosen: bool
+) -> None:
+    data = {"server": {"command": "x"}, **({"agent_id": "billing"} if chosen else {})}
+    path = tmp_path / "proxy.json"
+    path.write_text(json.dumps(data))
+    seen: list[ProxyConfig] = []
+
+    def serve(config: ProxyConfig) -> int:
+        seen.append(config)
+        return 0
+
+    monkeypatch.setattr("warden.mcp_proxy.serve_stdio", serve)
+    assert cli_main(["proxy", "--config", str(path)]) == 0
+    assert ("agent_id" in seen[0].model_fields_set) is chosen

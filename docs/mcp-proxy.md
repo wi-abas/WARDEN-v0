@@ -105,7 +105,8 @@ Remove the server's direct entry: the proxy only protects calls that go through 
 If Warden uses agent tokens (`--agents`), give the proxy its token through the
 environment, never the config file: in Claude Desktop / Cursor add
 `"env": {"WARDEN_AGENT_TOKEN": "wdn_..."}` next to `"args"`. The agent id then comes from
-the token, and `agent_id` in the config is not used.
+the token. Leave `agent_id` out of the config, or set it to the token's agent: if they
+don't match, every call is denied.
 
 ## Approving
 
@@ -139,7 +140,7 @@ same call after you approve goes through (once).
 
 If the client disconnects (closes the proxy's input) while a call waits for approval, the
 call is refused and never runs, even if you approve it later. The approval itself stays
-in Warden until it expires: the same agent asking for the same action again could use it.
+in Warden until it expires (or is used up, if it was just being used): the same agent asking for the same action again could use it.
 
 If Warden restarts during a wait, the proxy keeps asking until the approval timeout.
 

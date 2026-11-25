@@ -221,8 +221,9 @@ uv run warden serve --agents warden-agents.json
 The agent sends `Authorization: Bearer <token>` with every `/v1/evaluate` call
 (`agent_id` in the body becomes optional; if present it must match the token, else 403).
 No token or a wrong one: 401 with `"decision": "deny"`. The SDK and the MCP proxy read the
-token from `WARDEN_AGENT_TOKEN`; with a token they don't send their `agent_id`
-(`WARDEN_AGENT_ID`, `agent_id=`, the proxy's `agent_id`): the token alone decides. Approvals can only be used by the agent that asked.
+token from `WARDEN_AGENT_TOKEN`. If you also set an `agent_id` (`WARDEN_AGENT_ID`,
+`agent_id=`, the proxy's `agent_id`), they send it too, so a token that belongs to another
+agent is refused. Without one, the token alone decides. Approvals can only be used by the agent that asked.
 
 `warden agent list` and `warden agent remove <id>` manage the file (`--agents FILE`,
 then `WARDEN_AGENTS`, then `warden-agents.json`; mode 600). To rotate a token: remove, add, restart Warden.

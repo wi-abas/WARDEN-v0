@@ -295,7 +295,7 @@ def run_proxy(args: argparse.Namespace) -> int:
     server = args.server[1:] if args.server[:1] == ["--"] else args.server
     try:
         loaded = load_config(args.config) if args.config else None
-        data = loaded.model_dump() if loaded else {}
+        data = loaded.model_dump(exclude_unset=True) if loaded else {}
         # Where Warden is: --warden-url, then warden_url in the config file (the
         # specific, reviewed setting for this proxy), then WARDEN_URL, then the default.
         env_url = os.environ.get("WARDEN_URL")

@@ -1,13 +1,13 @@
 # Changelog
 
-## Unreleased
+## v0.4.1 (2026-11-25, alpha)
 
 ### Security
 - `warden proxy` refuses client requests and notifications with any top-level key other
   than `jsonrpc`, `id`, `method`, `params`, and look-alikes of `tools/call` in
   `allow_methods`. A hidden `Method`/`Params` pair could reach the server unchecked.
-- `warden proxy` never runs a call waiting for approval once the client disconnected, and
-  refuses a request id still in use (`1` and `"1"` are the same), overlong ids and more
+- `warden proxy` never runs a call waiting for approval once the client disconnected, also
+  when the server had stopped reading (it is cut off instead), and refuses a request id still in use (`1` and `"1"` are the same), overlong ids and more
   than 10,000 unanswered requests.
 - Every character Unicode may draw as nothing (variation selectors, Hangul fillers,
   U+034F, ...) counts as hidden in compared text, rule values and the approval list.
@@ -41,7 +41,8 @@
 - Retention above 36500 days is refused (it broke every purge); use 0 for forever.
 - `audit verify`, `audit head` and `--expect` don't call an honest log broken during a
   purge, and report BROKEN for value types Warden never writes.
-- `repr(WardenClient)` and the docs say that a token replaces `agent_id`.
+- A client (SDK, `WardenClient`, proxy) given both a token and an `agent_id` sends both, so a
+  mismatch is denied. Before, the `agent_id` was silently ignored.
 - The sample in `docs/policies.md` is corrected and tested. Every test file must be mapped
   in `scripts/mutation.py` or exempted.
 

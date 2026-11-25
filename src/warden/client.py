@@ -121,29 +121,28 @@ def parse_answer(data: Any) -> Answer:
 class WardenClient:
     """Asks a local Warden server for decisions. Never raises from `evaluate`.
 
-    With a `token`, the agent id comes from the token and `agent_id` is NOT used, not
-    even if you give both: the proxy and the SDK always have an agent_id (a default or
-    from the environment), so both together is normal, and Warden decides who a token
-    belongs to anyway. `repr(client)` shows which one counts."""
+    With a `token`, the agent id comes from the token. If you also give an `agent_id`, it
+    is sent too, and Warden denies everything (HTTP 403) if the token belongs to another
+    agent: a mix-up is a clear "no" instead of acting as the wrong agent."""
 
     def __init__(
         self,
         url: str = DEFAULT_URL,
-        agent_id: str = "agent",
+        agent_id: str | None = None,
         *,
         timeout: float = 5.0,
         token: str | None = None,
     ) -> None:
         self.url = check_url(url)
-        self.agent_id = agent_id
-        self.timeout = timeout
-        # Agent token (warden agent add). With a token, Warden takes the agent id from
-        # it, so agent_id is not sent.
+        # Agent token (warden agent add). Warden takes the agent id from it, so without
+        # an explicit agent_id none is sent.
         self._token = token
+        self.agent_id = "agent" if agent_id is None and token is None else agent_id
+        self.timeout = timeout
 
     def __repr__(self) -> str:  # never show the token
         token = "<set>" if self._token else None
-        agent = repr(self.agent_id) if self._token is None else "<from token>"
+        agent = "<from token>" if self.agent_id is None else repr(self.agent_id)
         return f"WardenClient(url={self.url!r}, agent_id={agent}, token={token})"
 
     def evaluate(
@@ -166,9 +165,9 @@ class WardenClient:
     ) -> Answer:
         body: dict[str, JsonValue] = {"tool": tool, "arguments": arguments}
         headers = {"content-type": "application/json"}
-        if self._token is None:
+        if self.agent_id is not None:
             body["agent_id"] = self.agent_id
-        else:
+        if self._token is not None:
             headers["authorization"] = f"Bearer {self._token}"
         if approval_id is not None:
             body["approval_id"] = approval_id
