@@ -32,14 +32,22 @@ MAX_RESPONSE_BYTES = 64 * 1024
 MAX_REQUEST_BYTES = 64 * 1024
 
 
+class _NoRedirects(urllib.request.HTTPRedirectHandler):
+    """Refuse every redirect: urllib would follow it to any host and send the agent
+    token or admin key along. Returning None makes urllib raise HTTPError (a deny)."""
+
+    def redirect_request(self, *args: Any, **kwargs: Any) -> None:
+        return None
+
+
 # Never through a proxy: urllib follows HTTP_PROXY / http_proxy even for 127.0.0.1, which
 # would send tool arguments (and the admin key, for `warden approvals`) to the proxy and
 # make us trust ITS answer. An empty ProxyHandler turns proxies off for this opener.
-_LOCAL_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+_LOCAL_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirects())
 
 
 def open_local(request: urllib.request.Request, timeout: float) -> Any:
-    """urlopen() for Warden's own local URL, ignoring every proxy setting."""
+    """urlopen() for Warden's own local URL: no proxies, no redirects."""
     return _LOCAL_OPENER.open(request, timeout=timeout)
 
 
