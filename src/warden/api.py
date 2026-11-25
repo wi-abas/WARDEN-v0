@@ -94,6 +94,7 @@ from warden.policy import (
     per_agent_problem,
 )
 from warden.settings import Settings
+from warden.unicode_safety import is_invisible
 
 logger = logging.getLogger(__name__)
 
@@ -249,19 +250,63 @@ class HostCheck:
         await self.app(scope, receive, send)
 
 
+class CrashGuard:
+    """Answers 500 deny when anything inside crashes, and logs only the error's type:
+    never its message or a stack trace, which may hold tool arguments. The exception
+    stops here, so the server can't log it either."""
+
+    def __init__(
+        self,
+        app: ASGIApp,
+        on_reject: Callable[[Scope, int, str], None] = lambda scope, status, reason: None,
+    ) -> None:
+        self.app = app
+        self.on_reject = on_reject
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        started = False
+
+        async def watched_send(message: Message) -> None:
+            nonlocal started
+            started = True
+            await send(message)
+
+        try:
+            await self.app(scope, receive, watched_send)
+        except Exception as exc:
+            logger.error("unexpected error handling request: %s", type(exc).__name__)
+            self.on_reject(scope, 500, "internal error")
+            if not started:  # else: the server closes the unfinished answer
+                await _deny_response(500, "internal error")(scope, receive, send)
+
+
 def _is_deceptive_char(ch: str) -> bool:
     """Characters that make text DISPLAY differently from what it is: invisible or
     control characters, direction overrides (U+202E reverses what follows), and
     compatibility look-alikes such as the full-width "ｅ"."""
-    return unicodedata.category(ch) in {"Cf", "Cc"} or unicodedata.normalize("NFKC", ch) != ch
+    return is_invisible(ch) or unicodedata.normalize("NFKC", ch) != ch
+
+
+# What an escape looks like, written out as plain text: shown raw, the text "\\u200b"
+# would look exactly like an escaped zero-width space. "\\U" only counts with 8 hex
+# digits (the shape of our own escapes), so "C:\\Users" stays readable.
+_LOOKS_ESCAPED = re.compile(r"\\(?:u|U[0-9A-Fa-f]{8})")
 
 
 def _needs_escape(text: str, index: int) -> bool:
-    """Deceptive characters, and a real backslash followed by "u": shown raw, the text
-    "\\u200b" would look exactly like an escaped zero-width space, so two different
-    keys could display the same and one would hide the other."""
-    ch = text[index]
-    return _is_deceptive_char(ch) or (ch == "\\" and text[index + 1 : index + 2] == "u")
+    """Deceptive characters, and a real backslash that would read as an escape: otherwise
+    two different keys could display the same and one would hide the other."""
+    return _is_deceptive_char(text[index]) or _LOOKS_ESCAPED.match(text, index) is not None
+
+
+def _escape(ch: str) -> str:
+    """\\uXXXX, or \\UXXXXXXXX above U+FFFF. Always a fixed length: "\\u1d400" could be
+    U+1D400, or U+1D40 followed by "0"."""
+    code = ord(ch)
+    return f"\\U{code:08x}" if code > 0xFFFF else f"\\u{code:04x}"
 
 
 def _display_safe(value: JsonValue, warnings: list[str]) -> JsonValue:
@@ -273,16 +318,17 @@ def _display_safe(value: JsonValue, warnings: list[str]) -> JsonValue:
         if not any(escape):
             return value
         warnings.append("contains hidden or look-alike characters (shown as \\uXXXX)")
-        return "".join(
-            f"\\u{ord(ch):04x}" if hit else ch for ch, hit in zip(value, escape, strict=True)
-        )
+        return "".join(_escape(ch) if hit else ch for ch, hit in zip(value, escape, strict=True))
     if isinstance(value, list):
         return [_display_safe(item, warnings) for item in value]
     if isinstance(value, dict):
         out: dict[str, JsonValue] = {}
         for key, item in value.items():
-            safe_key = _display_safe(key, warnings)
-            out[safe_key if isinstance(safe_key, str) else key] = _display_safe(item, warnings)
+            safe_key = str(_display_safe(key, warnings))
+            if safe_key in out:  # pragma: no cover - escaping is one-to-one (tested)
+                # Never overwrite: a vanished argument would be approved unseen.
+                raise ValueError("two argument names would display the same")
+            out[safe_key] = _display_safe(item, warnings)
         return out
     return value
 
@@ -919,14 +965,19 @@ def create_app(
         record_in_background=RECORD_REJECTIONS_IN_BACKGROUND,
     )
 
-    app = FastAPI(title="Warden", version=__version__)
+    # No redirects: "/v1/evaluate/" is a plain 404 deny, not an empty 307.
+    app = FastAPI(title="Warden", version=__version__, redirect_slashes=False)
     app.state.warden = w  # for tests and debugging
     # Middleware runs in reverse order of adding: HostCheck, then BodySizeLimit, then
     # DuplicateKeyCheck (which may read the body, so it must come after the size limit).
     app.add_middleware(DuplicateKeyCheck, on_reject=w.record_rejection)
     app.add_middleware(BodySizeLimit, on_reject=w.record_rejection)
-    # Added last, so it runs first: refuse foreign Host headers before anything else.
+    # Added after those, so it runs before them: refuse foreign Host headers first.
     app.add_middleware(HostCheck, allowed=ALLOWED_HOSTS, on_reject=w.record_rejection)
+    # Around everything: a crash anywhere becomes a 500 deny. Not an exception handler
+    # for Exception: Starlette re-raises after calling it, and Uvicorn then logs the full
+    # traceback with the exception's message, which may hold tool arguments.
+    app.add_middleware(CrashGuard, on_reject=w.record_rejection)
 
     @app.exception_handler(RequestValidationError)
     async def invalid_request(request: Request, exc: RequestValidationError) -> JSONResponse:
@@ -953,12 +1004,6 @@ def create_app(
     @app.exception_handler(_AgentTokenError)
     async def bad_agent_token(request: Request, exc: _AgentTokenError) -> JSONResponse:
         return w.reject(request, exc.status, exc.reason)
-
-    @app.exception_handler(Exception)
-    async def unexpected_error(request: Request, exc: Exception) -> JSONResponse:
-        # Log only the error type; never the message or a stack trace with arguments.
-        logger.error("unexpected error handling request: %s", type(exc).__name__)
-        return w.reject(request, 500, "internal error")
 
     admin = [Depends(w.require_admin)]
     app.get("/health")(w.health)

@@ -10,12 +10,15 @@ decision. Protect it with file permissions.
 
 import json
 import logging
+import os
 import re
+import stat
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Annotated, Self
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic_core import PydanticCustomError
 
 from warden.limits import Limits
 from warden.models import RULE_ID_PATTERN, TOOL_NAME_PATTERN, Rule, ToolSpec
@@ -101,6 +104,55 @@ def per_agent_problem(policy: Policy, known_agents: Iterable[str] | None) -> str
     return None
 
 
+_MAX_SYMLINKS = 40  # like the operating system's own limit
+
+
+def replaceable_by_others(path: Path) -> str | None:
+    """Why another user could swap the file that `path` leads to, or None (POSIX only).
+
+    Walks the path the way the operating system does, one name at a time, through every
+    symlink. Each folder on the way matters: whoever can replace one name in it (the
+    file, a folder or a symlink) chooses the file Warden reads.
+    - World-writable without the sticky bit: anyone can replace any name in it.
+    - World-writable with it (/tmp): only a name's owner can, so the owner must be root
+      or the user running Warden.
+    Ordinary system symlinks such as macOS /tmp -> /private/tmp sit in folders that only
+    root can change, so they pass. Anything that can't be checked is a problem.
+    """
+    current = Path(path.absolute().anchor)
+    todo = list(reversed(path.absolute().parts[1:]))
+    links = 0
+    try:
+        while todo:
+            name = todo.pop()
+            if name == "..":
+                current = current.parent  # `current` never contains symlinks
+                continue
+            entry = current / name
+            info = entry.lstat()
+            folder_mode = current.stat().st_mode
+            if folder_mode & 0o002:
+                if not folder_mode & stat.S_ISVTX:
+                    return f"{path} is reached through {current}, where any user can replace files"
+                if info.st_uid not in {0, os.geteuid()}:
+                    return f"{path} is reached through {entry}, owned by another user"
+            if not stat.S_ISLNK(info.st_mode):
+                current = entry
+                continue
+            links += 1
+            if links > _MAX_SYMLINKS:
+                return f"{path} can't be checked: too many symlinks"
+            target = entry.readlink()
+            if target.is_absolute():
+                current = Path(target.anchor)
+                todo.extend(reversed(target.parts[1:]))
+            else:
+                todo.extend(reversed(target.parts))
+    except OSError as exc:
+        return f"{path} can't be checked: {type(exc).__name__}"
+    return None
+
+
 class DuplicateKeyError(ValueError):
     """The same key appears twice in one JSON object. JSON parsers silently keep the
     last one, so {"effect": "allow", "effect": "deny"} could hide an override."""
@@ -110,7 +162,8 @@ def no_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
     seen: dict[str, object] = {}
     for key, value in pairs:
         if key in seen:
-            raise DuplicateKeyError(f"duplicate key '{key}' (one value would silently win)")
+            # ascii(): a lone surrogate in a key can't be printed
+            raise DuplicateKeyError(f"duplicate key {ascii(key)} (one value would silently win)")
         seen[key] = value
     return seen
 
@@ -119,8 +172,17 @@ def parse_policy(raw: str) -> Policy:
     """Validate policy JSON. Raises DuplicateKeyError or pydantic's ValidationError."""
     try:
         json.loads(raw, object_pairs_hook=no_duplicate_keys)
+    except DuplicateKeyError:
+        raise
     except (json.JSONDecodeError, RecursionError):
         pass  # not valid JSON, or nested too deeply: let pydantic report it
+    except ValueError:
+        # An integer longer than Python parses (4300 digits). Refused here: pydantic might
+        # read it, and the duplicate-key check above didn't get to the end of the file.
+        problem = PydanticCustomError("number_too_long", "a number has too many digits")
+        raise ValidationError.from_exception_data(
+            "Policy", [{"type": problem, "input": None}]
+        ) from None
     return Policy.model_validate_json(raw)
 
 

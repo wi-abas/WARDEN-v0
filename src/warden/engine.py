@@ -47,6 +47,7 @@ from warden.models import (
     ToolSpec,
     is_number,
 )
+from warden.unicode_safety import is_invisible
 
 logger = logging.getLogger(__name__)
 
@@ -102,12 +103,13 @@ _LOOKALIKE_DOTS = {"\u3002", "\uff0e", "\uff61"}
 def _check_unicode(actual: str, condition: Condition) -> None:
     """Refuse text that looks or decodes differently from what a rule sees.
 
-    - Invisible characters (zero-width space, soft hyphen, direction marks, control
-      characters): "evi\u00adl.net" is "evil.net" once software drops the soft hyphen.
+    - Invisible characters (zero-width space, soft hyphen, direction marks, variation
+      selectors, fillers, control characters): "evi\u00adl.net" is "evil.net" once software
+      drops the soft hyphen.
     - Compatibility look-alikes that software folds into plain letters: the
       full-width "ｅ" in "ｅvil.net" becomes "e" (NFKC).
     """
-    if any(unicodedata.category(ch) in {"Cf", "Cc"} for ch in actual):
+    if any(is_invisible(ch) for ch in actual):
         raise _UncheckableArgument(condition.label, _HIDDEN_CHARS)
     if unicodedata.normalize("NFKC", actual) != unicodedata.normalize("NFC", actual):
         raise _UncheckableArgument(condition.label, _HIDDEN_CHARS)
@@ -185,6 +187,11 @@ def _is_clean_url(text: str) -> bool:
         if colon and not _valid_port(port):
             return False
         if name.endswith("."):
+            return False
+        # An empty label (".evil.net", "a..evil.net") is not a host name, and libraries
+        # disagree about it. The host ends at "?" or "#" when there is no path.
+        labels = re.split("[?#]", name, maxsplit=1)[0]
+        if labels.startswith(".") or ".." in labels:
             return False
     if _ENCODED_SEPARATORS.search(path):
         return False  # "/public/%2e%2e/admin" escapes "/public/" once decoded
