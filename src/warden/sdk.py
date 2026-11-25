@@ -28,6 +28,7 @@ from pydantic import JsonValue
 
 from warden.client import DEFAULT_URL, Answer, WardenClient, capped_pause
 from warden.models import TOOL_NAME_PATTERN, Decision
+from warden.policy import no_duplicate_keys
 
 __all__ = [
     "ApprovalPending",
@@ -73,19 +74,48 @@ def freeze(arguments: dict[str, Any]) -> dict[str, JsonValue] | None:
 
     This one copy is both checked and executed. JSON is the format Warden checks, so a
     value with no exact JSON form (an object, a set, NaN, text with a lone surrogate such
-    as "\\ud800") can't be checked at all.
+    as "\\ud800") can't be checked at all. Nor can a dict whose keys aren't all text: JSON
+    would turn 1 into "1" and could drop one of the two.
     """
     try:
         text = json.dumps(arguments, allow_nan=False, ensure_ascii=False)
         text.encode("utf-8")  # UnicodeEncodeError (a ValueError) on a lone surrogate
-        copy = json.loads(text)
+        copy = json.loads(text, object_pairs_hook=no_duplicate_keys)
+        if not _text_keys(arguments):
+            return None
     except (TypeError, ValueError, RecursionError):  # RecursionError: nested too deeply
         return None
     return cast(dict[str, JsonValue], copy)
 
 
+def _text_keys(value: object) -> bool:
+    """True if every dict in `value` has only text keys."""
+    if isinstance(value, dict):
+        return all(isinstance(key, str) and _text_keys(item) for key, item in value.items())
+    if isinstance(value, list | tuple):
+        return all(_text_keys(item) for item in value)
+    return True
+
+
 def _refused(reason: str) -> NotAllowed:
     return NotAllowed(Answer(Decision.DENY, reason))
+
+
+def _freeze_or_refuse(arguments: dict[str, Any]) -> dict[str, JsonValue]:
+    """freeze(), or a refusal that names the argument (never its value)."""
+    frozen = freeze(arguments)
+    if frozen is not None:
+        return frozen
+    reason = "arguments are not plain JSON values, so they can't be checked"
+    bad = next((n for n, v in arguments.items() if freeze({"": v}) is None), None)
+    if isinstance(bad, str):
+        reason = f"argument {ascii(bad[:64])} is not a plain JSON value, so it can't be checked"
+        if bad in {"self", "cls"}:
+            reason += (
+                ". To guard a method, guard the bound method instead: "
+                "guard('tool_name')(obj.method)"
+            )
+    raise _refused(reason)
 
 
 def _final(answer: Answer) -> None:
@@ -222,9 +252,7 @@ def run_guarded[R](
     """Check `tool` with `arguments`; on allow, return fn(**frozen copy). Else raise."""
     if _is_async(fn):
         raise TypeError("run_guarded takes a plain function; use run_guarded_async for async")
-    frozen = freeze(arguments)
-    if frozen is None:
-        raise _refused("arguments are not plain JSON values, so they can't be checked")
+    frozen = _freeze_or_refuse(arguments)
     client = client or default_client()
     _final(_decide(client, tool, frozen, wait_for_approval, poll_seconds))
     return fn(**frozen)
@@ -250,9 +278,7 @@ async def run_guarded_async[R](
     with TypeError (wrap it in `async def`, or mark it: inspect.markcoroutinefunction)."""
     if not _is_async(fn):
         raise TypeError("run_guarded_async takes an `async def` function; use run_guarded")
-    frozen = freeze(arguments)
-    if frozen is None:
-        raise _refused("arguments are not plain JSON values, so they can't be checked")
+    frozen = _freeze_or_refuse(arguments)
     client = client or default_client()
     _final(await _decide_async(client, tool, frozen, wait_for_approval, poll_seconds))
     return await fn(**frozen)
@@ -297,6 +323,10 @@ def guard[**P, R](
     `tool` defaults to the function's name. `client` defaults to default_client() at
     call time. `wait_for_approval`: seconds to wait for a human (0 = raise
     ApprovalPending at once; call again with the same arguments after approving).
+
+    Not for methods inside a class: `self` would be an argument, and Warden can't check an
+    object. Guard the bound method instead, e.g. in __init__:
+    self.send = guard("send_email")(self._send)
     """
 
     def decorate(fn: Callable[P, R]) -> Callable[P, R]:

@@ -137,7 +137,12 @@ text = run_guarded("read_file", {"path": "/workspace/a.txt"}, open_and_read, cli
 - `async def` functions work with `@guard` too; `run_guarded_async` is the async
   `run_guarded`.
 - Arguments must be plain JSON values (text, numbers, true/false, null, lists, objects);
-  anything else raises `NotAllowed` without asking Warden.
+  anything else (also a dict with keys that aren't text) raises `NotAllowed` without
+  asking Warden. The error names the argument, never its value.
+- Methods: `self` isn't a JSON value, so don't put `@guard` on a method inside a class.
+  Guard the bound method: `self.send = guard("send_email")(self._send)` in `__init__`.
+  `self` is then not part of what Warden checks or a human approves, so pass whatever
+  matters (an account, a target) as an argument.
 
 ### 3. Anything else: plain HTTP
 
