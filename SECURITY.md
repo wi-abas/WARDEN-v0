@@ -88,6 +88,13 @@ Assuming the agent runtime calls Warden and obeys the answer:
   self-declared and anything that can reach `127.0.0.1` can ask as any agent (and dodge
   per-agent rate limits with new ids). With tokens, a program that can read an agent's
   environment or memory has its token.
+- **An impostor on Warden's port.** Clients (SDK, MCP proxy, `warden approvals`, plain
+  HTTP) don't check that it is really Warden answering. If Warden isn't running, another
+  local program can listen on its port: it then **receives the agent token and the tool
+  arguments** (or the admin key), and its `allow` makes the **tool run**, also with
+  `--agents`. Only run agents while your Warden is running; if its port was taken, replace
+  the tokens and admin key. A fix is designed but not built:
+  [docs/design/server-identity.md](docs/design/server-identity.md).
 - **One agent using another agent's permissions.** Per-agent rules (`"agents": [...]`)
   give agents different permissions, and require agent tokens: `warden serve` refuses to
   start with a per-agent rule and no `--agents`, or with an agent name that isn't in the
