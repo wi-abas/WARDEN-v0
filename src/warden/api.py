@@ -112,13 +112,19 @@ def _deny_response(status_code: int, reason: str) -> JSONResponse:
     return JSONResponse(status_code=status_code, content=body)
 
 
+class _BodyTooLarge(Exception):
+    """More bytes arrived than allowed, whatever the headers said."""
+
+
 class BodySizeLimit:
     """Rejects oversized requests BEFORE their body is read.
 
     Requests with a body must declare their size up front (Content-Length).
-    Bodies with no declared size (chunked uploads) are refused, because their
-    size can't be checked before reading them. The server never reads more
-    bytes than Content-Length says.
+    Transfer-Encoding (chunked uploads) is always refused, also next to a
+    Content-Length: the server then ignores the declared size (RFC 9112 6.3).
+
+    The bytes that really arrive are counted too, and reading stops at the limit, so a
+    server that frames the body in some other way can't get around the headers check.
     """
 
     def __init__(
@@ -135,12 +141,28 @@ class BodySizeLimit:
         if scope["type"] == "http":
             headers = dict(scope["headers"])
             length = headers.get(b"content-length")
-            if length is None and b"transfer-encoding" in headers:
-                await self._reject(scope, receive, send, 411, "content-length required")
+            if b"transfer-encoding" in headers:
+                reason = "transfer-encoding not allowed (send content-length)"
+                await self._reject(scope, receive, send, 411, reason)
                 return
             if length is not None and (not length.isdigit() or int(length) > self.max_bytes):
                 await self._reject(scope, receive, send, 413, "request too large")
                 return
+            received = 0
+
+            async def counted() -> Message:
+                nonlocal received
+                message = await receive()
+                received += len(message.get("body", b""))
+                if received > self.max_bytes:
+                    raise _BodyTooLarge
+                return message
+
+            try:
+                await self.app(scope, counted, send)
+            except _BodyTooLarge:
+                await self._reject(scope, receive, send, 413, "request too large")
+            return
         await self.app(scope, receive, send)
 
     async def _reject(

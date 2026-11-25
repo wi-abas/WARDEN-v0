@@ -32,6 +32,10 @@ curl -s -X POST http://127.0.0.1:8000/v1/evaluate \
 | `GET /v1/approvals?status=rejected` | Admin: rejections that still stand (no arguments). Takes the same `ids`/`agent_id`/`tool` filters; not `group`. |
 | `POST /v1/approvals/{id}/lift` | Admin: lift a rejection, so the agent may ask for that action again. |
 
+A request body may be at most 64 KB and must declare its size with `Content-Length`
+(413 if it is larger). `Transfer-Encoding` (chunked bodies) is refused with 411, also when
+`Content-Length` is sent as well, and the bytes that arrive are counted too.
+
 ## Approvals
 
 1. The agent asks. A rule says `require_approval`, and the response includes an `approval_id`.

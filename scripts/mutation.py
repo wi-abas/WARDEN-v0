@@ -98,6 +98,7 @@ TARGETS: dict[str, list[str]] = {
     "api": [
         "test_api.py",
         "test_hardening.py",
+        "test_body_limit.py",
         "test_http_errors.py",
         "test_host_check.py",
         "test_duplicate_request_keys.py",
