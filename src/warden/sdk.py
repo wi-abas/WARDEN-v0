@@ -26,7 +26,7 @@ from typing import Any, cast
 
 from pydantic import JsonValue
 
-from warden.client import DEFAULT_URL, Answer, WardenClient
+from warden.client import DEFAULT_URL, Answer, WardenClient, capped_pause
 from warden.models import TOOL_NAME_PATTERN, Decision
 
 __all__ = [
@@ -126,10 +126,15 @@ def _steps(
     deadline = time.monotonic() + wait_for_approval
     # The first re-ask is immediate: a human may already have approved this exact action.
     answer = yield from _ask(approval_id)
-    while _still_waiting(answer) and time.monotonic() < deadline:
+    while _still_waiting(answer) and (left := deadline - time.monotonic()) > 0:
         # Rate limited while polling: back off, keep waiting (it's still not an allow).
-        yield _Sleep(max(poll_seconds, answer.retry_after or 0.0))
+        pause = max(poll_seconds, answer.retry_after or 0.0)
+        yield _Sleep(capped_pause(pause, left, wait_for_approval))
+        if time.monotonic() >= deadline:  # asking now could only waste the approval
+            break
         answer = yield from _ask(approval_id)
+        if answer.allowed and time.monotonic() >= deadline:  # too late to run it
+            return Answer(Decision.DENY, "timed out waiting for a human to approve")
     if answer.decision is Decision.REQUIRE_APPROVAL and answer.reason != why:
         # Re-asks only say "waiting for a human to approve": keep the rule's reason too.
         answer = dataclasses.replace(answer, reason=f"{why} ({answer.reason})")

@@ -31,7 +31,9 @@ send_invoice(to="acme", amount=200)  # runs only if Warden says allow
 - **Approvals**: on `require_approval` the SDK immediately re-asks with the `approval_id`
   (a human may already have approved this exact action). Then it either raises
   `ApprovalPending` (default) or polls until allow / deny / timeout
-  (`wait_for_approval=seconds`). While polling, "Warden unreachable" (a restart) means
+  (`wait_for_approval=seconds`). Pauses (also a long `Retry-After`) are cut short so that
+  one last question is asked just before the timeout. After the timeout nothing is asked,
+  and an allow that arrives late doesn't run the tool (its approval is used up). While polling, "Warden unreachable" (a restart) means
   ask again until that timeout, never run. Any answer that did arrive but isn't
   understood still ends the wait with a deny.
 - `async def` tools are supported; each HTTP call runs in a thread. The wait between

@@ -142,6 +142,10 @@ If the client disconnects (closes the proxy's input) while a call waits for appr
 call is refused and never runs, even if you approve it later. The approval itself stays
 in Warden until it expires (or is used up, if it was just being used): the same agent asking for the same action again could use it.
 
+The wait never runs past `timeout_seconds`: a long `Retry-After` is cut short, the last
+question is asked just before the end, and an approval that only arrives after it doesn't
+run the call (if it was on its way to the proxy, it is used up).
+
 If Warden restarts during a wait, the proxy keeps asking until the approval timeout.
 
 ## What the proxy refuses

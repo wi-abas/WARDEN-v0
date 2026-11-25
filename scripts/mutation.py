@@ -80,6 +80,7 @@ TARGETS: dict[str, list[str]] = {
         "test_agent_tokens.py",
         "test_client_redirects.py",
         "test_sdk_wait_restart.py",
+        "test_approval_wait_deadline.py",
         "test_mutation_gaps.py",
     ],
     "sdk": [
@@ -89,6 +90,7 @@ TARGETS: dict[str, list[str]] = {
         "test_sdk_async_waits.py",
         "test_sdk_sync_async_mix.py",
         "test_sdk_wait_restart.py",
+        "test_approval_wait_deadline.py",
     ],
     "fingerprint": ["test_fingerprint.py"],
     "api": [
@@ -137,6 +139,7 @@ TARGETS: dict[str, list[str]] = {
         "test_mcp_proxy_hardening.py",
         "test_mcp_proxy_edges.py",
         "test_mcp_proxy_disconnect.py",
+        "test_approval_wait_deadline.py",
         "test_mcp_proxy_hint.py",
         "test_mcp_proxy_messages.py",
         "test_mcp_proxy_request_ids.py",

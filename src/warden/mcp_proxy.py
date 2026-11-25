@@ -35,7 +35,7 @@ from typing import Annotated, Any, BinaryIO, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError, field_validator
 
-from warden.client import DEFAULT_URL, Answer, WardenClient, check_url
+from warden.client import DEFAULT_URL, Answer, WardenClient, capped_pause, check_url
 from warden.models import AGENT_ID_PATTERN, Decision
 from warden.policy import DuplicateKeyError, describe_errors, no_duplicate_keys
 
@@ -654,6 +654,7 @@ class McpProxy:
                 "Retry the same call after approval.",
             )
         deadline = time.monotonic() + settings.timeout_seconds
+        timed_out = Answer(Decision.DENY, "timed out waiting for a human to approve")
         # Rate limited (429) while polling: back off and keep waiting, never allow.
         # Unreachable: Warden may be restarting. Keep asking until the deadline (never run).
         while (
@@ -661,17 +662,23 @@ class McpProxy:
             or answer.retry_after is not None
             or answer.unreachable
         ):
-            if time.monotonic() >= deadline:  # mutation-ok: equal floats never happen
-                return Answer(Decision.DENY, "timed out waiting for a human to approve")
+            left = deadline - time.monotonic()
+            if left <= 0:  # mutation-ok: equal floats never happen
+                return timed_out
             try:  # a sleep that ends early if the client leaves
                 pause = max(settings.poll_seconds, answer.retry_after or 0.0)
+                pause = capped_pause(pause, left, settings.timeout_seconds)
                 await asyncio.wait_for(self._client_gone.wait(), pause)
                 return gone
             except TimeoutError:
                 pass
+            if time.monotonic() >= deadline:  # asking now could only waste the approval
+                return timed_out
             answer = await self._ask(tool, arguments, approval_id)
             if self._client_gone.is_set():
                 return gone
+            if answer.allowed and time.monotonic() >= deadline:  # too late to run it
+                return timed_out
         return answer
 
     # --- Output -----------------------------------------------------------------------

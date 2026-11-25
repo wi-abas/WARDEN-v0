@@ -197,6 +197,14 @@ class WardenClient:
         return parse_answer(_json_or_none(raw))
 
 
+def capped_pause(pause: float, left: float, total: float) -> float:
+    """How long to pause before asking again about an approval, with `left` of `total`
+    seconds to go. Cut short for one last question a moment before the deadline (so its
+    answer can arrive in time); after that one, just the rest of the wait."""
+    margin = min(0.25, total / 10)
+    return left if left < margin * 1.5 else min(pause, left - margin)
+
+
 def _retry_after(error: urllib.error.HTTPError) -> float:
     """Retry-After in seconds, kept between 1 and 60 (garbage or missing: 1)."""
     raw = (error.headers.get("Retry-After") or "").strip()
