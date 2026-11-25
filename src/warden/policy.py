@@ -10,7 +10,9 @@ decision. Protect it with file permissions.
 
 import json
 import logging
+import os
 import re
+import stat
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Annotated, Self
@@ -99,6 +101,55 @@ def per_agent_problem(policy: Policy, known_agents: Iterable[str] | None) -> str
                 f"{where[0]} names agent '{agent}', which is not in the agents file "
                 f"(typo? add it with `warden agent add {agent}`)"
             )
+    return None
+
+
+_MAX_SYMLINKS = 40  # like the operating system's own limit
+
+
+def replaceable_by_others(path: Path) -> str | None:
+    """Why another user could swap the file that `path` leads to, or None (POSIX only).
+
+    Walks the path the way the operating system does, one name at a time, through every
+    symlink. Each folder on the way matters: whoever can replace one name in it (the
+    file, a folder or a symlink) chooses the file Warden reads.
+    - World-writable without the sticky bit: anyone can replace any name in it.
+    - World-writable with it (/tmp): only a name's owner can, so the owner must be root
+      or the user running Warden.
+    Ordinary system symlinks such as macOS /tmp -> /private/tmp sit in folders that only
+    root can change, so they pass. Anything that can't be checked is a problem.
+    """
+    current = Path(path.absolute().anchor)
+    todo = list(reversed(path.absolute().parts[1:]))
+    links = 0
+    try:
+        while todo:
+            name = todo.pop()
+            if name == "..":
+                current = current.parent  # `current` never contains symlinks
+                continue
+            entry = current / name
+            info = entry.lstat()
+            folder_mode = current.stat().st_mode
+            if folder_mode & 0o002:
+                if not folder_mode & stat.S_ISVTX:
+                    return f"{path} is reached through {current}, where any user can replace files"
+                if info.st_uid not in {0, os.geteuid()}:
+                    return f"{path} is reached through {entry}, owned by another user"
+            if not stat.S_ISLNK(info.st_mode):
+                current = entry
+                continue
+            links += 1
+            if links > _MAX_SYMLINKS:
+                return f"{path} can't be checked: too many symlinks"
+            target = entry.readlink()
+            if target.is_absolute():
+                current = Path(target.anchor)
+                todo.extend(reversed(target.parts[1:]))
+            else:
+                todo.extend(reversed(target.parts))
+    except OSError as exc:
+        return f"{path} can't be checked: {type(exc).__name__}"
     return None
 
 
