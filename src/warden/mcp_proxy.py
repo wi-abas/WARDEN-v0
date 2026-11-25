@@ -802,7 +802,8 @@ def serve_stdio(config: ProxyConfig) -> int:
     token = os.environ.get("WARDEN_AGENT_TOKEN") or None
     checker = WardenClient(
         config.warden_url,
-        config.agent_id,
+        # With a token, only an agent_id someone chose is sent (it must match the token).
+        config.agent_id if token is None or "agent_id" in config.model_fields_set else None,
         timeout=config.warden_timeout_seconds,
         token=token,
     )

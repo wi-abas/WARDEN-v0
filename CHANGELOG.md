@@ -41,7 +41,8 @@
 - Retention above 36500 days is refused (it broke every purge); use 0 for forever.
 - `audit verify`, `audit head` and `--expect` don't call an honest log broken during a
   purge, and report BROKEN for value types Warden never writes.
-- `repr(WardenClient)` and the docs say that a token replaces `agent_id`.
+- A client (SDK, `WardenClient`, proxy) given both a token and an `agent_id` sends both, so a
+  mismatch is denied. Before, the `agent_id` was silently ignored.
 - The sample in `docs/policies.md` is corrected and tested. Every test file must be mapped
   in `scripts/mutation.py` or exempted.
 

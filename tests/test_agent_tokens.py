@@ -281,9 +281,22 @@ def live(tmp_path: Path, client: TestClient) -> Iterator[str]:
         yield url
 
 
-def test_client_sends_token_not_agent_id(live: str, tokens: dict[str, str]) -> None:
-    client = WardenClient(live, "agent-b", token=tokens["agent-a"])
-    assert client.evaluate("read_file", {"path": "/a"}).allowed  # agent-b NOT sent: no 403
+def test_client_with_a_token_and_the_wrong_agent_id_is_denied(
+    live: str, tokens: dict[str, str]
+) -> None:
+    wrong = WardenClient(live, "agent-b", token=tokens["agent-a"])
+    answer = wrong.evaluate("read_file", {"path": "/a"})
+    assert not answer.allowed and "does not match" in answer.reason
+    right = WardenClient(live, "agent-a", token=tokens["agent-a"])
+    assert right.evaluate("read_file", {"path": "/a"}).allowed
+    # Not even the plain default is sent, and an empty id isn't "none".
+    empty = WardenClient(live, "", token=tokens["agent-a"])
+    assert not empty.evaluate("read_file", {"path": "/a"}).allowed
+
+
+def test_client_with_only_a_token(live: str, tokens: dict[str, str]) -> None:
+    client = WardenClient(live, token=tokens["agent-a"])
+    assert client.evaluate("read_file", {"path": "/a"}).allowed
     assert tokens["agent-a"] not in repr(client) and "<set>" in repr(client)
     assert not WardenClient(live, "agent-a").evaluate("read_file", {"path": "/a"}).allowed
 
@@ -291,6 +304,10 @@ def test_client_sends_token_not_agent_id(live: str, tokens: dict[str, str]) -> N
 def test_sdk_reads_token_from_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("WARDEN_AGENT_TOKEN", "wdn_secret")
     assert "<set>" in repr(default_client())
+    assert default_client().agent_id is None
+    monkeypatch.setenv("WARDEN_AGENT_ID", "billing")
+    assert default_client().agent_id == "billing"  # sent too: must match the token
+    monkeypatch.delenv("WARDEN_AGENT_ID")
     monkeypatch.setenv("WARDEN_AGENT_TOKEN", "")
     assert "token=None" in repr(default_client())
 

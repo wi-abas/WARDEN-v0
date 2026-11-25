@@ -105,7 +105,8 @@ Remove the server's direct entry: the proxy only protects calls that go through 
 If Warden uses agent tokens (`--agents`), give the proxy its token through the
 environment, never the config file: in Claude Desktop / Cursor add
 `"env": {"WARDEN_AGENT_TOKEN": "wdn_..."}` next to `"args"`. The agent id then comes from
-the token, and `agent_id` in the config is not used.
+the token. Leave `agent_id` out of the config, or set it to the token's agent: if they
+don't match, every call is denied.
 
 ## Approving
 
