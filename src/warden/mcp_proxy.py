@@ -609,7 +609,12 @@ class McpProxy:
             )
         deadline = time.monotonic() + settings.timeout_seconds
         # Rate limited (429) while polling: back off and keep waiting, never allow.
-        while answer.decision is Decision.REQUIRE_APPROVAL or answer.retry_after is not None:
+        # Unreachable: Warden may be restarting. Keep asking until the deadline (never run).
+        while (
+            answer.decision is Decision.REQUIRE_APPROVAL
+            or answer.retry_after is not None
+            or answer.unreachable
+        ):
             if time.monotonic() >= deadline:  # mutation-ok: equal floats never happen
                 return Answer(Decision.DENY, "timed out waiting for a human to approve")
             try:  # a sleep that ends early if the client leaves

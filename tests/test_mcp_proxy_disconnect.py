@@ -21,6 +21,7 @@ from test_mcp_proxy import (
 
 from warden.client import Answer
 from warden.mcp_proxy import stdin_reader
+from warden.models import Decision
 
 GONE = "Blocked by Warden: the client disconnected before this was approved"
 
@@ -146,3 +147,32 @@ def test_stdin_read_error_is_end_of_input() -> None:
         return await asyncio.wait_for(stdin_reader(asyncio.get_running_loop(), BrokenStream())(), 2)
 
     assert asyncio.run(main()) == b""
+
+
+def test_wait_survives_warden_being_unreachable(tmp_path: Path) -> None:
+    """A Warden restart doesn't end the wait, and never runs the tool by itself."""
+    lost = Answer(Decision.DENY, "Warden unreachable", unreachable=True)
+    warden = FakeWarden({"echo": [pending(), pending(), lost, lost, ALLOW]})
+
+    async def script(s: Session) -> None:
+        s.send(call("echo", {"a": 1}))
+        await s.recv()
+
+    session, _ = run_session(make_config(tmp_path), warden, script)
+    assert len(calls_seen(session)) == 1
+
+
+def test_unreachable_until_the_deadline_never_runs(tmp_path: Path) -> None:
+    lost = Answer(Decision.DENY, "Warden unreachable", unreachable=True)
+    warden = FakeWarden({"echo": [pending(), lost]})
+    config = make_config(
+        tmp_path, approval={"mode": "wait", "timeout_seconds": 1, "poll_seconds": 0.1}
+    )
+
+    async def script(s: Session) -> None:
+        s.send(call("echo", {}))
+        await asyncio.sleep(1.5)
+
+    session, _ = run_session(config, warden, script)
+    assert calls_seen(session) == []
+    assert "timed out" in answer_text(session)
