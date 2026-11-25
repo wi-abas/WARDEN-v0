@@ -129,3 +129,61 @@ def test_one_byte_over_32_mb_is_refused(fixed_server: tuple[str, type[_Fixed]]) 
     handler.body = b"[]" + b" " * (32 * 1024 * 1024 - 1)
     with pytest.raises(approvals_cli._Unreachable, match="too large"):
         approvals_cli._call(url, KEY, "GET", "/v1/approvals")
+
+
+# --- Broken connections and unsendable keys: a clear message, never a traceback ------------
+
+
+@pytest.fixture
+def raw_server() -> Iterator[tuple[str, list[bytes]]]:
+    """Sends whatever bytes the test puts in the list, then closes the connection."""
+    answer: list[bytes] = []
+
+    class Raw(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802 (http.server naming)
+            self.wfile.write(answer[0])
+            self.close_connection = True
+
+        def log_message(self, *a: Any) -> None:
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Raw)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        yield f"http://127.0.0.1:{server.server_address[1]}", answer
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def run_real(url: str, key: str = KEY) -> tuple[int, str]:
+    err = io.StringIO()
+    namespace = args("list", warden_url=url)
+    code = approvals_cli.run(namespace, env={"WARDEN_ADMIN_KEY": key}, out=io.StringIO(), err=err)
+    return code, err.getvalue()
+
+
+CHUNKED = b"\r\nTransfer-Encoding: chunked\r\n\r\nff\r\nshort"
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        b"",  # closed without answering
+        b"garbage\r\n\r\n",  # not HTTP
+        b"HTTP/1.1 200 OK" + CHUNKED,  # cut off while reading the answer
+        b"HTTP/1.1 500 Oops" + CHUNKED,  # cut off while reading an error's body
+    ],
+)
+def test_broken_answers_are_a_clear_error(raw_server: tuple[str, list[bytes]], raw: bytes) -> None:
+    url, answer = raw_server
+    answer.append(raw)
+    code, err = run_real(url)
+    assert code == 2 and f"can't reach Warden at {url}" in err
+
+
+@pytest.mark.parametrize("bad", ["key\nX-Evil: 1", "key-\u20ac"])
+def test_a_key_that_cant_be_sent_is_a_clear_error_without_the_key(bad: str) -> None:
+    code, err = run_real("http://127.0.0.1:9", bad)
+    assert code == 2 and "WARDEN_ADMIN_KEY contains characters" in err
+    assert bad not in err and "Evil" not in err

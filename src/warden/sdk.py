@@ -21,7 +21,7 @@ import json
 import os
 import re
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Generator
 from typing import Any, cast
 
 from pydantic import JsonValue
@@ -59,7 +59,8 @@ class ApprovalPending(NotAllowed):
 
 def default_client() -> WardenClient:
     """A client from WARDEN_URL, WARDEN_AGENT_ID and WARDEN_AGENT_TOKEN
-    (defaults: local Warden, "agent", no token)."""
+    (defaults: local Warden, "agent", no token). With a token, the agent id comes from
+    the token and WARDEN_AGENT_ID is not used."""
     return WardenClient(
         os.environ.get("WARDEN_URL", DEFAULT_URL),
         os.environ.get("WARDEN_AGENT_ID", "agent"),
@@ -96,15 +97,26 @@ def _final(answer: Answer) -> None:
     raise NotAllowed(answer)
 
 
-def _decide(
-    client: WardenClient,
-    tool: str,
-    arguments: dict[str, JsonValue],
-    wait_for_approval: float,
-    poll_seconds: float,
-    sleep: Callable[[float], None] = time.sleep,
-) -> Answer:
-    answer = client.evaluate(tool, arguments)
+@dataclasses.dataclass(frozen=True)
+class _Ask:
+    """Step: ask Warden (with this approval id) and send the answer back in."""
+
+    approval_id: str | None = None
+
+
+@dataclasses.dataclass(frozen=True)
+class _Sleep:
+    """Step: wait this long."""
+
+    seconds: float
+
+
+def _steps(
+    wait_for_approval: float, poll_seconds: float
+) -> Generator[_Ask | _Sleep, Answer | None, Answer]:
+    """When to ask and when to wait, without doing either: the sync and the async
+    version share this, and differ only in HOW they ask and wait."""
+    answer = yield from _ask(None)
     if answer.decision is not Decision.REQUIRE_APPROVAL:
         return answer
     approval_id = answer.approval_id
@@ -113,19 +125,84 @@ def _decide(
     why = answer.reason  # the rule's message: why a human must approve
     deadline = time.monotonic() + wait_for_approval
     # The first re-ask is immediate: a human may already have approved this exact action.
-    answer = client.evaluate(tool, arguments, approval_id)
+    answer = yield from _ask(approval_id)
     while _still_waiting(answer) and time.monotonic() < deadline:
         # Rate limited while polling: back off, keep waiting (it's still not an allow).
-        sleep(max(poll_seconds, answer.retry_after or 0.0))
-        answer = client.evaluate(tool, arguments, approval_id)
+        yield _Sleep(max(poll_seconds, answer.retry_after or 0.0))
+        answer = yield from _ask(approval_id)
     if answer.decision is Decision.REQUIRE_APPROVAL and answer.reason != why:
         # Re-asks only say "waiting for a human to approve": keep the rule's reason too.
         answer = dataclasses.replace(answer, reason=f"{why} ({answer.reason})")
     return answer
 
 
+def _ask(approval_id: str | None) -> Generator[_Ask, Answer | None, Answer]:
+    answer = yield _Ask(approval_id)
+    return answer or Answer(Decision.DENY, "no answer from Warden")
+
+
+def _decide(
+    client: WardenClient,
+    tool: str,
+    arguments: dict[str, JsonValue],
+    wait_for_approval: float,
+    poll_seconds: float,
+) -> Answer:
+    steps = _steps(wait_for_approval, poll_seconds)
+    answer: Answer | None = None
+    while True:
+        try:
+            step = steps.send(answer)
+        except StopIteration as done:
+            return cast(Answer, done.value)
+        answer = None
+        if isinstance(step, _Ask):
+            answer = client.evaluate(tool, arguments, step.approval_id)
+        else:
+            time.sleep(step.seconds)
+
+
+async def _decide_async(
+    client: WardenClient,
+    tool: str,
+    arguments: dict[str, JsonValue],
+    wait_for_approval: float,
+    poll_seconds: float,
+) -> Answer:
+    """Each question runs in a thread; waiting between them does not, so waiting calls
+    don't use up the thread pool, and cancelling stops the questions."""
+    steps = _steps(wait_for_approval, poll_seconds)
+    answer: Answer | None = None
+    while True:
+        try:
+            step = steps.send(answer)
+        except StopIteration as done:
+            return cast(Answer, done.value)
+        answer = None
+        if isinstance(step, _Ask):
+            answer = await asyncio.to_thread(client.evaluate, tool, arguments, step.approval_id)
+        else:
+            await asyncio.sleep(step.seconds)
+
+
 def _still_waiting(answer: Answer) -> bool:
-    return answer.decision is Decision.REQUIRE_APPROVAL or answer.retry_after is not None
+    """Not decided yet. `unreachable`: Warden may be restarting, and the approval state
+    is persisted, so keep asking until the deadline (still never an allow)."""
+    return (
+        answer.decision is Decision.REQUIRE_APPROVAL
+        or answer.retry_after is not None
+        or answer.unreachable
+    )
+
+
+def _is_async(fn: Callable[..., Any]) -> bool:
+    """True if calling `fn` gives a coroutine (nothing runs until it is awaited): also
+    for functools.partial, staticmethod and objects with an `async def __call__`."""
+    while isinstance(fn, functools.partial | staticmethod):
+        fn = fn.func if isinstance(fn, functools.partial) else fn.__func__
+    return inspect.iscoroutinefunction(fn) or inspect.iscoroutinefunction(
+        getattr(type(fn), "__call__", None)  # noqa: B004 (the method, not "is it callable")
+    )
 
 
 def run_guarded[R](
@@ -138,6 +215,8 @@ def run_guarded[R](
     poll_seconds: float = 2.0,
 ) -> R:
     """Check `tool` with `arguments`; on allow, return fn(**frozen copy). Else raise."""
+    if _is_async(fn):
+        raise TypeError("run_guarded takes a plain function; use run_guarded_async for async")
     frozen = freeze(arguments)
     if frozen is None:
         raise _refused("arguments are not plain JSON values, so they can't be checked")
@@ -155,13 +234,22 @@ async def run_guarded_async[R](
     wait_for_approval: float = 0,
     poll_seconds: float = 2.0,
 ) -> R:
-    """Like run_guarded, for `async def` tools. Never blocks the event loop."""
+    """Like run_guarded, for `async def` tools. Never blocks the event loop.
+
+    Cancelling it while it waits stops the polling, so a later approval stays unused. If
+    it is cancelled exactly while a question is on its way to Warden, that question may
+    still use up the approval although the tool doesn't run: a human must approve again
+    (it never runs twice).
+
+    `fn` must be recognisably async: a plain function that returns an awaitable is refused
+    with TypeError (wrap it in `async def`, or mark it: inspect.markcoroutinefunction)."""
+    if not _is_async(fn):
+        raise TypeError("run_guarded_async takes an `async def` function; use run_guarded")
     frozen = freeze(arguments)
     if frozen is None:
         raise _refused("arguments are not plain JSON values, so they can't be checked")
     client = client or default_client()
-    answer = await asyncio.to_thread(_decide, client, tool, frozen, wait_for_approval, poll_seconds)
-    _final(answer)
+    _final(await _decide_async(client, tool, frozen, wait_for_approval, poll_seconds))
     return await fn(**frozen)
 
 
@@ -170,8 +258,9 @@ def _check_signature(fn: Callable[..., Any]) -> inspect.Signature:
     for param in signature.parameters.values():
         if param.kind in {param.POSITIONAL_ONLY, param.VAR_POSITIONAL}:
             raise TypeError(
-                f"@guard can't name parameter {param.name!r} of {fn.__name__}() for the "
-                "policy: use normal or keyword parameters"
+                f"@guard can't name parameter {param.name!r} of "
+                f"{getattr(fn, '__name__', type(fn).__name__)}() for the policy: "
+                "use normal or keyword parameters"
             )
     return signature
 
@@ -206,7 +295,9 @@ def guard[**P, R](
     """
 
     def decorate(fn: Callable[P, R]) -> Callable[P, R]:
-        name = tool or fn.__name__
+        name = tool or getattr(fn, "__name__", None)
+        if name is None:
+            raise TypeError("@guard needs a tool name for this callable: guard('name')")
         if not re.fullmatch(TOOL_NAME_PATTERN, name):
             raise ValueError(f"tool name {name!r} isn't valid for Warden ({TOOL_NAME_PATTERN})")
         signature = _check_signature(fn)
@@ -216,12 +307,14 @@ def guard[**P, R](
             "poll_seconds": poll_seconds,
         }
 
-        if inspect.iscoroutinefunction(fn):
+        if _is_async(fn):
 
             @functools.wraps(fn)
             async def async_wrapper(*args: P.args, **kwargs: P.kwargs) -> Any:
                 named = _named_arguments(signature, args, kwargs)
-                return await run_guarded_async(name, named, fn, **options)
+                return await run_guarded_async(
+                    name, named, cast(Callable[..., Awaitable[Any]], fn), **options
+                )
 
             return cast(Callable[P, R], async_wrapper)
 
