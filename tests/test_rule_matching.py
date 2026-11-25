@@ -109,3 +109,40 @@ def test_special_letters_are_fine_where_they_decide_nothing(value: str) -> None:
 def test_an_exact_choice_wins_over_an_ambiguous_one() -> None:
     rules = allow("in", ["strasse", "straße"], ignore_case=True)
     assert ask(rules, "Straße") == Decision.ALLOW
+
+
+# --- startswith: ".." always denies, also when the rule's prefix has no "/" -------------
+
+DOT_DOT = [
+    "workspace/../x",
+    "workspace/../../etc/passwd",
+    "workspace/a/..",
+    "workspace\\..\\x",
+    "workspace/.. /x",
+    "workspace/.../x",
+    "workspace/..;/x",
+    "workspace/%2e%2e/x",
+    "workspace/.%2E/x",
+    "workspace%2f..%5cx",
+    "workspace/%252e%252e/x",
+    "../workspace",
+    "..",
+]
+
+
+@pytest.mark.parametrize("value", DOT_DOT)
+def test_dot_dot_denies_for_a_prefix_without_a_slash(value: str) -> None:
+    assert ask(allow("startswith", "workspace"), value) == Decision.DENY
+    assert ask(deny("startswith", "secret"), value) == Decision.DENY
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["wait...", "wait... and/or go", "wait for a..b", "wait/a..b/c", "wait/..a", "wait 5/6. ok"],
+)
+def test_harmless_dots_are_fine(value: str) -> None:
+    assert ask(allow("startswith", "wait"), value) == Decision.ALLOW
+
+
+def test_long_runs_of_dots_are_checked_quickly() -> None:
+    assert ask(allow("startswith", "wait"), "wait/" + "." * 50_000 + "x") == Decision.ALLOW

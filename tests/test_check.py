@@ -221,3 +221,25 @@ def test_w003_not_raised_for_equally_strict_rules(tmp_path: Path) -> None:
         "rules": [r("always", "t", "deny"), r("sometimes", "t", "deny", cond)],
     }
     assert codes(tmp_path, policy) == []
+
+
+@pytest.mark.parametrize(
+    ("arg", "value", "expected"),
+    [
+        ("path", "workspace", ["W005"]),
+        ("file_path", "workspace", ["W005"]),
+        ("x", "src/app", ["W005"]),
+        ("x", "./data", ["W005"]),
+        ("path", "workspace/", []),
+        ("x", "workspace", []),
+        ("x", "git log a/b", []),
+        ("x", "image/", []),
+        ("x", "https://x.com/a", []),
+        ("x", "me@x.com/a", []),
+    ],
+)
+def test_w005_relative_path_prefix(
+    tmp_path: Path, arg: str, value: str, expected: list[str]
+) -> None:
+    cond = {"arg": arg, "op": "startswith", "value": value}
+    assert codes(tmp_path, {"rules": [r("a", "t", "allow", cond)]}) == expected

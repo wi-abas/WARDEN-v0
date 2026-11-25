@@ -177,6 +177,18 @@ _ENCODED_SEPARATORS = re.compile(r"%(2e|2f|5c|25)", re.IGNORECASE)
 _ANY_PERCENT_ESCAPE = re.compile(r"%[0-9a-f]{2}", re.IGNORECASE)
 
 
+# The same characters however often they were encoded: "%2e", "%252e", ...
+_ENCODED_DOT = re.compile(r"%(?:25)*2e", re.IGNORECASE)
+_ENCODED_SLASH = re.compile(r"%(?:25)*(?:2f|5c)", re.IGNORECASE)
+
+
+def _climbs_out(text: str) -> bool:
+    """True if one part between slashes is "..", also as "...", ".. ", "..;" or %-encoded."""
+    text = _ENCODED_SLASH.sub("/", _ENCODED_DOT.sub(".", text)).replace("\\", "/")
+    parts = (part.split(";", 1)[0] for part in text.split("/"))
+    return any(".." in part and not part.strip(". ") for part in parts)
+
+
 def _is_clean_path(text: str) -> bool:
     """No tricks that make one path look like another: //, /./, /../, backslashes, and
     no %-escapes at all (a decoding tool would read "/%65tc" as "/etc")."""
@@ -382,6 +394,10 @@ def _holds(condition: Condition, arguments: dict[str, JsonValue]) -> bool:
             raise ValueError("policy value is not text")
         _check_unicode(actual, condition)
         _check_text_shape(actual, [expected], condition)
+        # The promise for startswith holds for a prefix without "/" too: "workspace" must
+        # not allow "workspace/../x". (URLs were checked above, in their own way.)
+        if op is Op.STARTSWITH and not _looks_like_url(expected) and _climbs_out(actual):
+            raise _UncheckableArgument(condition.label, _UNCLEAN_PATH)
         affix_test = str.startswith if op is Op.STARTSWITH else str.endswith
         return _any_match(actual, [expected], condition, affix_test)
 

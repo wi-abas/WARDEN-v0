@@ -9,7 +9,8 @@ Warnings: the policy loads, but probably doesn't do what you meant:
 - W003  dead rule: an unconditional, stricter rule for the same tool always wins (a
         rule with "otherwise" also always applies, giving at least its "effect").
 - W004  duplicate rule: same tool, effect and conditions as another rule.
-- W005  path prefix without a trailing "/": "/data" also matches "/database".
+- W005  path prefix without a trailing "/": "/data" also matches "/database"
+        (and "workspace" for an argument called "path" matches "workspace-old").
 - W006  tool has an argument list but no rules: it's always denied.
 - W007  a condition checks an argument that isn't in the tool's argument list
         (probably a typo): it can never be present.
@@ -44,6 +45,7 @@ Only reads the file. Never starts the server or changes anything.
 """
 
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -81,6 +83,18 @@ def _covers(other: Rule, rule: Rule) -> bool:
     if other.agents is None:
         return True
     return rule.agents is not None and set(rule.agents) <= set(other.agents)
+
+
+_PATH_ARGUMENT = re.compile(r"(^|_)(path|dir|directory|folder)$", re.IGNORECASE)
+
+
+def _is_path_prefix(arg: str, value: str) -> bool:
+    """A path by its "/" or by the argument's name; not a URL, email or command."""
+    if value.startswith("/"):
+        return True
+    if "://" in value or "@" in value or " " in value:
+        return False
+    return "/" in value or bool(_PATH_ARGUMENT.search(arg))
 
 
 def _agents_key(rule: Rule) -> frozenset[str] | None:
@@ -160,7 +174,7 @@ def _warnings(policy: Policy) -> list[str]:
             if (
                 c.op is Op.STARTSWITH
                 and isinstance(c.value, str)
-                and c.value.startswith("/")
+                and _is_path_prefix(c.path[-1], c.value)
                 and not c.value.endswith("/")
             ):
                 out.append(

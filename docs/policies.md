@@ -76,8 +76,9 @@ A rule can add `when` conditions. It then matches only if **all** of them hold:
   `require_approval` rule a missing argument counts as matching (the rule applies); on an
   `allow` rule it doesn't. So `deny send_email when recipient startswith "evil"` can't be
   dodged by leaving `recipient` out. Use `exists` / `missing` to say exactly what you mean.
-- An argument of the **wrong type** (e.g. `"50000"` as text for `gt`), or a value containing
-  `..` for `startswith`, **denies the whole request**. This stops a `deny` rule being dodged.
+- An argument of the **wrong type** (e.g. `"50000"` as text for `gt`), or a value with
+  `..` as a path part for `startswith` (`/data/../x`, `workspace/%2e%2e/x`; not `wait...`),
+  **denies the whole request**. This stops a `deny` rule being dodged.
 - `true` is never treated as the number `1`.
 - Add `"ignore_case": true` to compare text without caring about upper/lower case
   (works with `eq`, `neq`, `in`, `startswith`, `endswith`, `contains`). Use it for email domains:
@@ -397,7 +398,7 @@ do what you meant:
 | W002 | No rules at all: everything is denied |
 | W003 | A rule can never apply, because a stricter unconditional rule (or a stricter rule with `otherwise`) always wins |
 | W004 | A rule duplicates another |
-| W005 | A path prefix without a trailing `/` (`"/data"` also matches `"/database"`) |
+| W005 | A path prefix without a trailing `/` (`"/data"` also matches `"/database"`), absolute or relative |
 | W006 | A tool has an argument list but no rules: it's always denied |
 | W007 | A condition checks an argument that isn't in the tool's argument list (typo?) |
 | W008 | An email address is compared case-sensitively (`x@EVIL.com` would slip past) |
