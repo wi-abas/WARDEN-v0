@@ -2,11 +2,15 @@
 
 import json
 import sqlite3
+import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import pytest
 
+import warden.audit
+import warden.audit_checkpoint
 from warden import cli
 from warden.audit import (
     GENESIS_HASH,
@@ -351,3 +355,83 @@ def test_skipping_never_hides_a_mismatch_in_a_kept_row(db: Path, tmp_path: Path)
     new = json.loads(head(db))
     new["heads"]["decisions"]["hash"] = "b" * 64  # newest disagrees
     assert expect(db, save(tmp_path, old, json.dumps(new)))
+
+
+# --- A purge while verifying -------------------------------------------------------------
+
+
+class PurgeDuring:
+    """Wraps a function of the verifier: starts a retention purge (as `warden serve` would,
+    from another connection) just before its `when`-th call, gives it time to finish, then
+    goes on. Reading from one snapshot, the purge has to wait for the reader instead."""
+
+    def __init__(self, log: SQLiteAuditLog, wrapped: Any, when: int = 1) -> None:
+        self.log, self.wrapped, self.when = log, wrapped, when
+        self.calls = 0
+        self.deleted: list[int] = []
+        self.thread = threading.Thread(target=lambda: self.deleted.append(log.purge_older_than(50)))
+
+    def __call__(self, *args: Any) -> Any:
+        self.calls += 1
+        if self.calls == self.when:
+            self.thread.start()
+            self.thread.join(0.3)
+        return self.wrapped(*args)
+
+
+def old_and_new(db: Path) -> SQLiteAuditLog:
+    log = SQLiteAuditLog(db, retention_days=None, clock=lambda: START + timedelta(days=100))
+    fill(log, 3)
+    fill(log, 2, when=START + timedelta(days=99))
+    return log
+
+
+@pytest.mark.parametrize(
+    ("name", "when"), [("_verify_table", 1), ("_verify_table", 2), ("_verify_anchors", 1)]
+)
+@pytest.mark.parametrize("edited", [False, True])
+def test_verify_during_a_purge(
+    tmp_path: Path, name: str, when: int, edited: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db = tmp_path / "a.db"
+    log = old_and_new(db)
+    if edited:  # real tampering is still found
+        with sqlite3.connect(db) as conn:
+            conn.execute("UPDATE decisions SET reason = 'x' WHERE id = 5")
+    purge = PurgeDuring(log, getattr(warden.audit, name), when)
+    monkeypatch.setattr(warden.audit, name, purge)
+    report = warden.audit.verify_chain(db)
+    purge.thread.join()
+    assert purge.deleted and purge.deleted[0] == 6
+    assert report.ok is not edited, report.problems
+    monkeypatch.undo()
+    assert warden.audit.verify_chain(db).ok is not edited
+
+
+def test_checkpoint_made_during_a_purge(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    db = tmp_path / "a.db"
+    log = SQLiteAuditLog(db, retention_days=None, clock=lambda: START + timedelta(days=100))
+    fill(log, 3)  # the purge deletes every row, so the events head moves
+    purge = PurgeDuring(log, warden.audit_checkpoint._anchors)
+    monkeypatch.setattr(warden.audit_checkpoint, "_anchors", purge)
+    checkpoint = make_checkpoint(db)
+    purge.thread.join()
+    assert purge.deleted == [6]
+    assert {t: h.id for t, h in checkpoint.heads.items()} == {"decisions": 3, "events": 3}
+    monkeypatch.undo()
+    assert check_checkpoints(db, [checkpoint]).problems == []  # it matches the purge anchor
+
+
+def test_expect_during_a_purge(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    db = tmp_path / "a.db"
+    log = old_and_new(db)
+    early = make_checkpoint(db)
+    fill(log, 1, when=START + timedelta(days=99))
+    checkpoints = [early, make_checkpoint(db)]
+    purge = PurgeDuring(log, warden.audit_checkpoint._check_head)
+    purge.thread = threading.Thread(target=lambda: purge.deleted.append(log.purge_older_than(1)))
+    monkeypatch.setattr(log, "_clock", lambda: START + timedelta(days=200))
+    monkeypatch.setattr(warden.audit_checkpoint, "_check_head", purge)
+    problems = check_checkpoints(db, checkpoints).problems
+    purge.thread.join()
+    assert purge.deleted == [12] and problems == []
