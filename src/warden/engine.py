@@ -200,15 +200,41 @@ def _is_clean_path(text: str) -> bool:
     inner = segments[1:-1] if text.startswith("/") else segments[:-1]
     if any(segment == "" for segment in inner):  # "//"
         return False
-    # ".", "..", and any other segment made only of dots and spaces ("...", ".. ", " "):
-    # Windows and tools that strip trailing dots/spaces read ".. " as ".." (a way out).
-    return not any(segment and not segment.strip(". ") for segment in segments)
+    return not _has_dot_segment(text)
+
+
+def _has_dot_segment(text: str) -> bool:
+    """ ".", "..", and any other segment made only of dots and spaces ("...", ".. ", " "):
+    Windows and tools that strip trailing dots/spaces read ".. " as ".." (a way out).
+    Java servers drop everything after ";" first, so "..;x" counts too."""
+    parts = (segment.split(";", 1)[0] for segment in text.split("/"))
+    return any(part and not part.strip(". ") for part in parts)
 
 
 def _valid_port(port: str) -> bool:
     """1 to 65535 in plain ASCII digits, no leading zero. Libraries disagree about what
     ":0", ":99999" or ":0443" reach (an error, a truncated number, the default port)."""
     return port.isascii() and port.isdigit() and not port.startswith("0") and int(port) <= 65535
+
+
+# In a URL path: escapes no ordinary URL has, and which some servers decode into a way out.
+# Control characters (".%00."), overlong UTF-8 ("%c0%ae" is "."), and "%" without two hex
+# digits ("%u002e", "%%32%65").
+_BAD_URL_ESCAPE = re.compile(
+    r"%([01][0-9a-f]|7f|c[01]%[89ab][0-9a-f]|e0%[89][0-9a-f]|f0%8[0-9a-f]|(?![0-9a-f]{2}))",
+    re.IGNORECASE,
+)
+
+
+def _has_disguised_escape(url: str) -> bool:
+    """For rules that compare a URL's path (host_in doesn't): escapes in the path that
+    some servers read as "..", "/" or the end of the text."""
+    path = re.split("[?#]", url.split("://", 1)[1], maxsplit=1)[0]
+    if _BAD_URL_ESCAPE.search(path):
+        return True
+    # %20 and %3b are normal, unless they hide a dot segment ("..%20", "..%3b").
+    readable = re.sub("%3b", ";", path.replace("%20", " "), flags=re.IGNORECASE)
+    return _has_dot_segment(readable)
 
 
 # Letters (also non-ASCII ones: host_in refuses those itself), digits, "-", "_" and ".".
@@ -327,7 +353,7 @@ def _check_text_shape(actual: str, expected: list[str], condition: Condition) ->
         if any(dot in actual for dot in _LOOKALIKE_DOTS):
             raise _UncheckableArgument(condition.label, _HIDDEN_CHARS)
     if any(_looks_like_url(e) for e in expected):
-        if not _is_clean_url(actual):
+        if not _is_clean_url(actual) or _has_disguised_escape(actual):
             raise _UncheckableArgument(condition.label, _UNCLEAN_URL)
         return  # a URL may legitimately contain "@" in its path: skip the email check
     if any(_looks_like_domain(e) for e in expected) and not _is_clean_domain_text(actual):

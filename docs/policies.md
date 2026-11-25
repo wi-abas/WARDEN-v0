@@ -116,6 +116,9 @@ A rule can add `when` conditions. It then matches only if **all** of them hold:
 - Text a rule compares may not contain invisible characters or look-alike Unicode
   (full-width letters, look-alike dots), and paths may not contain `%`-escapes; such
   requests are denied.
+  In a URL's path (compared as text; `host_in` only looks at the host), ordinary escapes (`%20`, `caf%C3%A9`) are fine; hidden dot segments
+  (`..;/`, `..%20/`), control characters (`%00`), overlong UTF-8 (`%c0%ae`) and malformed
+  escapes (`%u002e`, a lone `%`) are denied.
 - An email address a rule compares must be one plain address: no display name, list or
   quotes, and a normal name before the `@` (not empty, no `%`, `!`, `:` or `\`, no
   leading, trailing or double dots). Those are routing tricks some mail software still

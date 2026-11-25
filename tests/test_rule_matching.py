@@ -188,3 +188,64 @@ def test_legitimate_hosts_still_work(url: str) -> None:
 
 def test_international_hosts_still_work_in_text_rules() -> None:
     assert ask(allow("startswith", "https://例え.jp/"), "https://例え.jp/x") == Decision.ALLOW
+
+
+# --- URL prefixes: dot segments in disguise ---------------------------------------------
+
+API = "https://api.good.com/public/"
+
+
+@pytest.mark.parametrize(
+    "rest",
+    [
+        "..;/admin",
+        "..;a=b/admin",
+        ".;/admin",
+        "..%3b/admin",
+        "..%3Bx/admin",
+        "%c0%ae%c0%ae/admin",  # overlong UTF-8 for "."
+        "%e0%80%ae./admin",
+        "%f0%80%80%ae./admin",
+        "..%c0%af/admin",
+        ".%00./admin",
+        "..%00/admin",
+        "a%0d%0ab",
+        "a%7fb",
+        "%u002e%u002e/admin",
+        "%%32%65%%32%65/admin",
+        ".%20./admin",
+        "..%20/admin",
+        "100%",
+    ],
+)
+def test_disguised_dot_segments_are_denied(rest: str) -> None:
+    assert ask(allow("startswith", API), API + rest) == Decision.DENY
+
+
+@pytest.mark.parametrize(
+    "rest",
+    [
+        "a;v=1/b",
+        "a%3Bb",
+        "a..;b/c",
+        "my%20file.txt",
+        "a%20/b",
+        "caf%C3%A9",
+        "caf%E9/x",
+        "%E0%A4%A8%F0%9F%9A%80",
+        "q?discount=100%&note=..;%00",
+        "q#100%",
+        "a;",
+    ],
+)
+def test_ordinary_url_paths_still_work(rest: str) -> None:
+    assert ask(allow("startswith", API), API + rest) == Decision.ALLOW
+
+
+@pytest.mark.parametrize("path", ["/data/..;/x", "/data/.;a/x"])
+def test_dot_segments_with_a_parameter_are_denied_in_paths(path: str) -> None:
+    assert ask(allow("startswith", "/data/"), path) == Decision.DENY
+
+
+def test_a_semicolon_in_a_file_name_is_fine() -> None:
+    assert ask(allow("startswith", "/data/"), "/data/a;b/;c") == Decision.ALLOW
