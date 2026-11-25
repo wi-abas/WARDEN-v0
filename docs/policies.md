@@ -59,8 +59,11 @@ A rule can add `when` conditions. It then matches only if **all** of them hold:
 { "id": "big-invoice",   "tool": "send_invoice", "effect": "require_approval",
   "when": [ { "arg": "amount", "op": "gt",  "value": 500 } ] },
 { "id": "small-invoice", "tool": "send_invoice", "effect": "allow",
-  "when": [ { "arg": "amount", "op": "lte", "value": 500 } ] }
+  "when": [ { "arg": "amount", "op": "gte", "value": 0 },
+            { "arg": "amount", "op": "lte", "value": 500 } ] }
 ```
+
+The `gte 0` matters: without it, `-500` is "at most 500" and would be allowed.
 
 | `op` | Meaning | `value` |
 |---|---|---|
@@ -317,7 +320,8 @@ may only read, and nobody else may do either:
   "rules": [
     { "id": "billing-pays-small", "tool": "pay", "effect": "allow",
       "agents": ["billing-agent"],
-      "when": [{ "arg": "amount", "op": "lte", "value": 500 }] },
+      "when": [{ "arg": "amount", "op": "gte", "value": 0 },
+               { "arg": "amount", "op": "lte", "value": 500 }] },
     { "id": "research-reads", "tool": "read_file", "effect": "allow",
       "agents": ["research-agent", "billing-agent"],
       "when": [{ "arg": "path", "op": "startswith", "value": "/workspace/" }] }

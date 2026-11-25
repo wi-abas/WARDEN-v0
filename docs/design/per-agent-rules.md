@@ -12,7 +12,8 @@ can't use that yet.
 - A rule may list the agents it applies to:
   ```json
   {"id": "billing-pays", "tool": "pay", "effect": "allow",
-   "agents": ["billing-agent"], "when": [{"arg": "amount", "op": "lte", "value": 500}]}
+   "agents": ["billing-agent"], "when": [{"arg": "amount", "op": "gte", "value": 0},
+                                         {"arg": "amount", "op": "lte", "value": 500}]}
   ```
   No `agents` key = every agent (today's behaviour, so old policies keep their meaning).
 - **Exact, case-sensitive matching.** Each entry must match `AGENT_ID_PATTERN`; 1 to

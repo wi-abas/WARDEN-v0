@@ -17,7 +17,8 @@
       "when": [ { "arg": "to", "op": "endswith", "value": "@mycompany.com", "ignore_case": true } ] },
 
     { "id": "small-invoice", "tool": "send_invoice", "effect": "allow",
-      "when": [ { "arg": "amount", "op": "lte", "value": 500 } ] },
+      "when": [ { "arg": "amount", "op": "gte", "value": 0 },
+                { "arg": "amount", "op": "lte", "value": 500 } ] },
     { "id": "big-invoice", "tool": "send_invoice", "effect": "require_approval",
       "when": [ { "arg": "amount", "op": "gt", "value": 500 } ],
       "message": "Invoices over €500 need a human to approve" }
