@@ -295,9 +295,14 @@ class McpProxy:
         checker: Checker,
         read_client: Callable[[], Awaitable[bytes | None]],
         write_client: Callable[[bytes], None],
+        *,
+        agent_from_token: bool = False,
     ) -> None:
         self.config = config
         self.checker = checker
+        # With an agent token, Warden takes the agent id from the token: config.agent_id
+        # is not the approval's agent, and the proxy doesn't know which one is.
+        self.agent_from_token = agent_from_token
         self.read_client = read_client
         self.write_client = write_client
         self.allowed_methods = PASS_THROUGH | set(config.allow_methods)
@@ -553,13 +558,14 @@ class McpProxy:
         settings = self.config.approval
         if answer.decision is Decision.REQUIRE_APPROVAL:
             url = f"--warden-url {self.config.warden_url}"
+            agent = "" if self.agent_from_token else f"--agent {self.config.agent_id} "
             # Review first: Warden refuses an approval without the action_hash from the
             # list. `warden approvals approve` lists, shows and sends it; the hint never
             # prints the hash itself (the human must get it from the list).
             print(
                 f"Warden: {_safe_name(tool)} needs approval (id {approval_id}).\n"
                 "  1. Check what it would do:  warden approvals list "
-                f"--agent {self.config.agent_id} {url}\n"
+                f"{agent}{url}\n"
                 f"  2. Then approve it:         warden approvals approve {approval_id} {url}\n"
                 "  (both need WARDEN_ADMIN_KEY; with curl, see docs/mcp-proxy.md)",
                 file=sys.stderr,
@@ -734,17 +740,22 @@ def serve_stdio(config: ProxyConfig) -> int:
     """Run the proxy on this process's stdin/stdout. Returns the server's exit code."""
     # The agent token comes from the environment (e.g. the MCP client config's "env"),
     # never from the config file, so it isn't stored next to the server settings.
+    token = os.environ.get("WARDEN_AGENT_TOKEN") or None
     checker = WardenClient(
         config.warden_url,
         config.agent_id,
         timeout=config.warden_timeout_seconds,
-        token=os.environ.get("WARDEN_AGENT_TOKEN") or None,
+        token=token,
     )
 
     async def main() -> int:
         loop = asyncio.get_running_loop()
         proxy = McpProxy(
-            config, checker, stdin_reader(loop, sys.stdin.buffer), stdout_writer(sys.stdout.buffer)
+            config,
+            checker,
+            stdin_reader(loop, sys.stdin.buffer),
+            stdout_writer(sys.stdout.buffer),
+            agent_from_token=token is not None,
         )
         return await proxy.run()
 

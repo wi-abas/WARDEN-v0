@@ -102,7 +102,7 @@ Remove the server's direct entry: the proxy only protects calls that go through 
 If Warden uses agent tokens (`--agents`), give the proxy its token through the
 environment, never the config file: in Claude Desktop / Cursor add
 `"env": {"WARDEN_AGENT_TOKEN": "wdn_..."}` next to `"args"`. The agent id then comes from
-the token.
+the token, and `agent_id` in the config is not used.
 
 ## Approving
 
@@ -114,6 +114,9 @@ Warden: write_file needs approval (id <approval id>).
   1. Check what it would do:  warden approvals list --agent <agent id> --warden-url <url>
   2. Then approve it:         warden approvals approve <approval id> --warden-url <url>
 ```
+
+With an agent token the list command has no `--agent`: only Warden knows which agent the
+token belongs to.
 
 Both need `WARDEN_ADMIN_KEY`. `warden approvals approve` shows the action again and sends
 its `action_hash` for you. The hint never prints the `action_hash` itself: since v0.4
