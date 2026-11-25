@@ -187,3 +187,56 @@ def test_w012_suggests_host_in(tmp_path: Path) -> None:
     assert [w[:4] for w in check_policy(path).warnings] == ["W012"]
     path.write_text(json.dumps({"tools": {"fetch": {"arguments": ["url"]}}, "rules": BLOCK}))
     assert check_policy(path).warnings == []
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://.evil.org/",
+        "https://..evil.org/",
+        "https://a..evil.org/x",
+        "https://a..evil.org:443/x",
+        "https://a..evil.org?x=1",
+        "https://a..evil.org#x",
+        "https://evil.org..?x=1",
+        "https://../",
+        "https://./",
+    ],
+)
+def test_empty_host_labels_are_refused(url: str) -> None:
+    # Not valid host names: libraries disagree about what they reach.
+    allow_org: Any = [
+        {
+            "id": "only",
+            "tool": "fetch",
+            "effect": "allow",
+            "when": [{"arg": "url", "op": "host_in", "value": [".evil.org"]}],
+        }
+    ]
+    as_text: Any = [
+        {
+            "id": "only",
+            "tool": "fetch",
+            "effect": "allow",
+            "when": [{"arg": "url", "op": "startswith", "value": "https://"}],
+        }
+    ]
+    for rules in (allow_org, as_text, BLOCK):
+        assert ask(rules, url) is Decision.DENY
+
+
+@pytest.mark.parametrize(
+    ("url", "decision"),
+    [
+        ("https://api.good.com?range=1..2", Decision.ALLOW),  # dots in a query or path are fine
+        ("https://api.good.com#a..b", Decision.ALLOW),
+        ("https://api.good.com/v1..2", Decision.ALLOW),
+        # One trailing dot: refused before a path, dropped before a query (as before).
+        ("https://api.good.com./", Decision.DENY),
+        ("https://api.good.com.?x", Decision.ALLOW),
+    ],
+)
+def test_dots_outside_the_host_and_one_trailing_dot_are_unchanged(
+    url: str, decision: Decision
+) -> None:
+    assert ask(ONLY, url) is decision

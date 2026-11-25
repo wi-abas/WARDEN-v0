@@ -188,6 +188,11 @@ def _is_clean_url(text: str) -> bool:
             return False
         if name.endswith("."):
             return False
+        # An empty label (".evil.net", "a..evil.net") is not a host name, and libraries
+        # disagree about it. The host ends at "?" or "#" when there is no path.
+        labels = re.split("[?#]", name, maxsplit=1)[0]
+        if labels.startswith(".") or ".." in labels:
+            return False
     if _ENCODED_SEPARATORS.search(path):
         return False  # "/public/%2e%2e/admin" escapes "/public/" once decoded
     # Ordinary escapes like %20 are normal in URL paths; check the rest for //, /./, /../
