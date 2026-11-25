@@ -64,14 +64,22 @@ TARGETS: dict[str, list[str]] = {
         "test_restore_vs_rejection.py",
         "test_shared_approvals_database.py",
     ],
-    "limits": ["test_rate_limits.py", "test_mutation_gaps.py", "test_sticky_rejections.py"],
-    "agents": ["test_agent_tokens.py"],
+    "limits": [
+        "test_rate_limits.py",
+        "test_mutation_gaps.py",
+        "test_sticky_rejections.py",
+    ],
+    "agents": [
+        "test_agent_tokens.py",
+        "test_mutation_gaps.py",
+    ],
     "client": [
         "test_client.py",
         "test_sdk.py",
         "test_agent_tokens.py",
         "test_client_redirects.py",
         "test_sdk_wait_restart.py",
+        "test_mutation_gaps.py",
     ],
     "sdk": [
         "test_sdk.py",
@@ -137,6 +145,8 @@ TARGETS: dict[str, list[str]] = {
         "test_approvals_flood.py",
         "test_approval_hygiene.py",
         "test_required_action_hash.py",
+        "test_sticky_rejections.py",
+        "test_mutation_gaps.py",
     ],
     "policy_tests": [
         "test_policy_tests.py",
