@@ -44,7 +44,7 @@ from warden.agents import (
     read_agents_file,
     remove_agent,
 )
-from warden.audit import DEFAULT_AUDIT_PATH, verify_chain
+from warden.audit import DEFAULT_AUDIT_PATH, read_error, verify_chain
 from warden.check import check_policy, format_report
 from warden.policy import DEFAULT_POLICY_PATH, Policy, describe_errors
 from warden.settings import SettingsError, resolve
@@ -227,7 +227,7 @@ def verify_audit(path: Path, expect: Path | None = None) -> int:
             return 2
         report = verify_chain(path)
     except (sqlite3.Error, OSError) as exc:
-        print(f"warden: can't read {path}: {type(exc).__name__}", file=sys.stderr)
+        print(f"warden: {read_error(path, exc)}", file=sys.stderr)
         return 2
     for table in report.checked:
         line = f"{table}: {report.checked[table]} rows verified"

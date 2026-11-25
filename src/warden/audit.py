@@ -630,6 +630,26 @@ def read_snapshot(path: Path) -> Iterator[sqlite3.Connection]:
         yield conn
 
 
+def read_error(path: Path, exc: Exception) -> str:
+    """Why the log can't be read, for people. Never the exception's own text."""
+    message = f"can't read {path}: {type(exc).__name__}"
+    if getattr(exc, "sqlite_errorcode", None) != sqlite3.SQLITE_READONLY_ROLLBACK:
+        return message
+    # A writer died in the middle of a write. Undoing it changes the file, so a read-only
+    # tool must not: these files may be evidence.
+    real = path.resolve()  # SQLite keeps the journal next to the real file
+    return (
+        f"{message}\nA write was interrupted (crash, kill or power loss) and left {real}-journal."
+        "\nNothing was verified and nothing was changed. SQLite must first undo that write:"
+        "\n- To keep these files as evidence: copy both files into a new folder, run"
+        "\n  sqlite3 COPY .schema"
+        "\n  (which undoes the write in the copy), then"
+        "\n  warden audit verify --audit-db COPY"
+        "\n- Otherwise: starting Warden on this database undoes it. Never delete the journal: "
+        "that corrupts the log."
+    )
+
+
 def verify_chain(path: Path) -> ChainReport:
     """Recompute every hash. Reports the FIRST broken row of each table. Read-only."""
     with read_snapshot(path) as conn:

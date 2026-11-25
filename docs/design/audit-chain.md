@@ -21,6 +21,10 @@ nothing would show it.
 - `warden audit verify` recomputes everything (read-only) and reports the **first
   broken row** of each table, anchors that don't match the last purge, and prints each
   table's newest hash.
+- **After a crash in the middle of a write** SQLite leaves a `-journal` file, and the
+  log can't be read until that write is undone, which changes the file. `verify` and
+  `head` never do that: they exit with 2 and say how to verify a copy instead
+  (starting Warden also undoes it). Never delete the journal.
 - Databases from before the chain: new columns are added at startup; old rows have no
   hashes and are reported as "from before the hash chain". At that moment (and only
   then) a chained `audit_chain_started` event records the last old id per table; any
