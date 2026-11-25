@@ -81,7 +81,7 @@ script before fixing, and each fix has a test that fails without it.
 | Low | Nested conditions don't search lists; argument lists only cover top-level names (W013 warns). | Feature work. |
 | Low | Text and `host_in` rules see the host as written: `http://2130706433/` and `http://0x7f.1/` both reach 127.0.0.1, so a deny list of IP addresses can be dodged. | Prefer allow lists (`host_in` with the hosts you trust). |
 | Low | Look-alike letters from other scripts (Cyrillic `а` in `pаypal.com`) aren't flagged in the approval list; only invisible and compatibility characters are. | Rules don't match them (exact text), but an approver can be fooled. |
-| Low | Persisted approval expiry uses the wall clock (jumps shorten/extend it); one Warden per database. | Documented. |
+| Low | Persisted approval expiry uses the wall clock (jumps shorten/extend it); one Warden per database. | Documented; sharing a database fixed after v0.4.0. |
 | Low | When the 10,000-agent table is full, each new agent triggers an O(n) scan for idle buckets. | Only reachable without tokens. |
 | Info | Mutation score 83% before the gap tests; most remaining survivors are equivalent mutants (constants, `strict=True` already enforced by the parent model). | Weekly CI job, floor 80%. |
 

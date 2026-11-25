@@ -1,5 +1,49 @@
 # Changelog
 
+## Unreleased
+
+### Security
+- `warden proxy` refuses client requests and notifications with any top-level key other
+  than `jsonrpc`, `id`, `method`, `params`, and look-alikes of `tools/call` in
+  `allow_methods`. A hidden `Method`/`Params` pair could reach the server unchecked.
+- `warden proxy` never runs a call waiting for approval once the client disconnected, and
+  refuses a request id still in use (`1` and `"1"` are the same), overlong ids and more
+  than 10,000 unanswered requests.
+- Every character Unicode may draw as nothing (variation selectors, Hangul fillers,
+  U+034F, ...) counts as hidden in compared text, rule values and the approval list.
+  Emoji with U+FE0F are therefore refused in arguments a rule compares.
+- The approval list uses `\UXXXXXXXX` above U+FFFF; two argument names can never display
+  the same and hide one.
+- The client and `warden approvals` refuse all HTTP redirects.
+- Servers sharing one database can't each use the same approval; a newer rejection or
+  revocation always beats restoring one.
+- URLs whose host has an empty label (`https://..evil.net/`) are refused.
+- A crash no longer puts the exception message or traceback (possibly tool arguments) in
+  Uvicorn's log.
+- `serve` checks the policy and agents file paths through symlinks and every folder.
+
+### Changed
+- `run_guarded` with an async function, or `run_guarded_async` with a plain one, raises
+  `TypeError` before any check.
+- Approval waits (SDK and proxy) survive a brief Warden restart. Async waits hold no
+  threads and stop when cancelled.
+- A trailing slash (`/v1/evaluate/`) is a 404 deny, not an empty redirect.
+- `examples/agent.py` uses `WardenClient`.
+
+### Fixed
+- `warden limits` shows `rejection_window_seconds`, and `limits reset` keeps it.
+- `warden agent` uses `WARDEN_AGENTS`.
+- Clear errors instead of tracebacks for unreadable files or folders, over-long numbers,
+  broken connections, unsendable admin keys and MCP servers that can't start.
+- `warden proxy` no longer aborts when the server stops first; its approval hint no longer
+  names the wrong agent when a token is used.
+- Retention above 36500 days is refused (it broke every purge); use 0 for forever.
+- `audit verify`, `audit head` and `--expect` don't call an honest log broken during a
+  purge, and report BROKEN for value types Warden never writes.
+- `repr(WardenClient)` and the docs say that a token replaces `agent_id`.
+- The sample in `docs/policies.md` is corrected and tested. Every test file must be mapped
+  in `scripts/mutation.py` or exempted.
+
 ## v0.4.0 (2026-11-24, alpha)
 
 ### Changed

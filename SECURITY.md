@@ -36,12 +36,13 @@ Assuming the agent runtime calls Warden and obeys the answer:
 - **Unapproved high-risk actions**: `require_approval` actions only run after a human
   approves that exact action.
 - **Approval abuse**: replaying an approval, changing the action after approval, using an
-  expired approval, deciding twice, or racing two requests on one approval.
+  expired approval, deciding twice, or racing two requests on one approval, also across
+  several servers sharing one database. A newer rejection always beats restoring a use.
 - **Secret leaks through Warden itself**: tool arguments are never logged or written to
   disk, and error responses never echo input.
 - **Silent failure**: any error, broken policy, or failed audit write results in `deny`.
 - **Misleading the approver**: hidden and look-alike characters in arguments are shown
-  escaped in the approval list.
+  escaped in the approval list; two argument names never display the same.
 - **Parser tricks**: request bodies that repeat a JSON key are refused, so Warden and the
   tool can't read different values.
 - **A writable policy**: `warden serve` refuses a policy file other users could change
@@ -52,7 +53,8 @@ Assuming the agent runtime calls Warden and obeys the answer:
 - **Silent history edits**: the audit log is a hash chain; `warden audit verify` reports
   the first edited, deleted or inserted row.
 - **Checked ≠ executed**: the SDK and the MCP proxy run a tool with exactly the object
-  that was checked; the proxy refuses duplicate JSON keys, batches and unknown methods,
+  that was checked; the proxy refuses duplicate JSON keys, batches, unknown methods,
+  unexpected top-level keys, request ids still in use,
   and `_meta` keys other than `progressToken` (configurable).
 - **Bulk-approval tricks** (group approvals): a group decision names every approval by
   id (no filters, so nothing that arrived later is swept in) together with the
@@ -104,6 +106,16 @@ Assuming the agent runtime calls Warden and obeys the answer:
 - **Re-asking with a slightly different action.** A sticky rejection covers the exact
   action only: one changed character in the arguments (or, without agent tokens, a new
   `agent_id`) is a new approval. Rate limits and pending quotas bound how often.
+- **Several servers on one database**: pending quotas can be overshot by a few, and rate
+  limits are per server.
+- **A cancelled async call** can use up its approval if cancelled while a question is on
+  its way to Warden (the tool doesn't run).
+- **An MCP server that stops reading its input** can leave the proxy stuck writing, so it
+  notices a disconnected client late; a call approved in that moment could still run.
+- **A disconnected client's approval** stays valid until it expires, for the same agent
+  and action.
+- **Argument names that differ only in case**, if the tool ignores case: use tool
+  argument lists.
 - **A reviewer who doesn't read.** Group approvals make a careful review possible, not
   certain: similar-looking actions in one group must still be compared, and a script
   with the admin key (or `--yes`) can decide ids nobody looked at. A required
