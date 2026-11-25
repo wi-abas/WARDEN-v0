@@ -186,7 +186,13 @@ async def _decide_async(
 
 
 def _still_waiting(answer: Answer) -> bool:
-    return answer.decision is Decision.REQUIRE_APPROVAL or answer.retry_after is not None
+    """Not decided yet. `unreachable`: Warden may be restarting, and the approval state
+    is persisted, so keep asking until the deadline (still never an allow)."""
+    return (
+        answer.decision is Decision.REQUIRE_APPROVAL
+        or answer.retry_after is not None
+        or answer.unreachable
+    )
 
 
 def _is_async(fn: Callable[..., Any]) -> bool:

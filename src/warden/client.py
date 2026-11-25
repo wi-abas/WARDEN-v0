@@ -11,11 +11,12 @@ The URL must point at this machine (127.0.0.1, localhost or ::1): Warden only li
 locally, and tool arguments may contain secrets that must never go anywhere else.
 """
 
+import http.client
 import json
 import re
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -66,6 +67,9 @@ class Answer:
     # Set when Warden said "too many requests" (HTTP 429): seconds to wait before
     # asking again. Always a deny; only polling loops use it to keep waiting.
     retry_after: float | None = None
+    # Set when no answer came back (connection refused or lost, timeout: e.g. Warden is
+    # restarting). Always a deny; only a wait for a human may ask again.
+    unreachable: bool = field(default=False, compare=False)
 
     @property
     def allowed(self) -> bool:
@@ -151,6 +155,8 @@ class WardenClient:
         """Ask about one tool call. Any failure is a DENY answer, never an exception."""
         try:
             return self._evaluate(tool, arguments, approval_id)
+        except (OSError, http.client.HTTPException):
+            return Answer(Decision.DENY, "Warden unreachable", unreachable=True)
         except Exception:
             # Don't include the error text: it could quote the arguments.
             return _deny("Warden unreachable")
