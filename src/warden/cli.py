@@ -335,8 +335,9 @@ def init_policy(path: Path) -> int:
     path.chmod(0o644)  # others may read, only you may change it (serve refuses otherwise)
     print(f"Created {path}. Next:")
     print("  1. Edit it to describe your agent's tools and rules")
-    print(f"  2. uv run warden check {path}")
-    print("  3. uv run warden")
+    print(f"  2. warden check {path}")
+    print("  3. warden serve" + ("" if path == DEFAULT_POLICY_PATH else f" --policy {path}"))
+    print("(in a uv project, put `uv run` in front)")
     return 0
 
 
