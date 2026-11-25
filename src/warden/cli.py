@@ -66,7 +66,12 @@ def main(argv: list[str] | None = None) -> int:
     agent = commands.add_parser("agent", help="manage agent tokens")
     agent.add_argument("action", choices=["add", "list", "remove"])
     agent.add_argument("agent_id", nargs="?")
-    agent.add_argument("--agents", type=Path, default=DEFAULT_AGENTS_PATH, help="agents file")
+    agent.add_argument(
+        "--agents",
+        type=Path,
+        default=Path(os.environ.get("WARDEN_AGENTS") or DEFAULT_AGENTS_PATH),
+        help=f"agents file (default WARDEN_AGENTS or {DEFAULT_AGENTS_PATH})",
+    )
     audit_parser = commands.add_parser("audit", help="audit log tools")
     audit_parser.add_argument("action", choices=["verify", "head"])
     audit_parser.add_argument("--expect", type=Path, help="checkpoint file from `audit head`")
@@ -191,6 +196,9 @@ def main(argv: list[str] | None = None) -> int:
     except SettingsError as exc:
         print(f"warden: {exc}", file=sys.stderr)
         return 2
+    except OSError as exc:  # e.g. a file in a folder this user may not open
+        print(f"warden: can't open {exc.filename}: {type(exc).__name__}", file=sys.stderr)
+        return 2
 
     # A broken or empty policy would make the server deny everything. That's safe, but
     # almost certainly a mistake: refuse to start and say why instead.
@@ -213,12 +221,12 @@ def main(argv: list[str] | None = None) -> int:
 
 def verify_audit(path: Path, expect: Path | None = None) -> int:
     """`warden audit verify`: 0 intact, 1 broken, 2 can't read."""
-    if not path.is_file():
-        print(f"warden: no audit database at {path}", file=sys.stderr)
-        return 2
     try:
+        if not path.is_file():
+            print(f"warden: no audit database at {path}", file=sys.stderr)
+            return 2
         report = verify_chain(path)
-    except sqlite3.Error as exc:
+    except (sqlite3.Error, OSError) as exc:
         print(f"warden: can't read {path}: {type(exc).__name__}", file=sys.stderr)
         return 2
     for table in report.checked:
@@ -262,6 +270,9 @@ def manage_agents(action: str, agent_id: str | None, path: Path) -> int:
         token = add_agent(path, agent_id)
     except AgentsError as exc:
         print(f"warden: {exc}", file=sys.stderr)
+        return 2
+    except OSError as exc:  # e.g. no such folder, or not allowed; the file is unchanged
+        print(f"warden: can't use {path}: {type(exc).__name__}", file=sys.stderr)
         return 2
     print(f"Added {agent_id} to {path}. Its token (shown ONCE, store it safely):", file=sys.stderr)
     print(token)  # stdout alone, so it can be captured: TOKEN=$(warden agent add x)

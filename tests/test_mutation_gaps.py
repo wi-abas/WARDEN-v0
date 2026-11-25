@@ -1,6 +1,7 @@
 """Behaviours that a planted bug could break without any test noticing (found by
 scripts/mutation.py during the build-session re-audit)."""
 
+import dataclasses
 import json
 import time
 from pathlib import Path
@@ -11,11 +12,22 @@ from fastapi.testclient import TestClient
 from helpers import ADMIN_KEY, BASIC_POLICY, shown
 from pydantic import ValidationError
 
-from warden.api import create_app
-from warden.approvals import ApprovalDB, ApprovalStore, apply_approval
+from warden import client as client_module
+from warden import limits as limits_module
+from warden.agents import MAX_AGENTS, AgentEntry, AgentsFile
+from warden.api import _display_safe, create_app
+from warden.approvals import (
+    ApprovalDB,
+    ApprovalStore,
+    GroupDecideError,
+    Status,
+    apply_approval,
+)
+from warden.approvals_cli import _ago
 from warden.audit import SQLiteAuditLog
-from warden.client import Answer
+from warden.client import MAX_RESPONSE_BYTES, Answer, _retry_after, parse_answer
 from warden.engine import _is_clean_url, evaluate
+from warden.limits import Limits, LimitSpec
 from warden.models import ActionRequest, Decision, EvaluationResult
 from warden.policy import Policy, parse_policy
 from warden.sdk import ApprovalPending, WardenClient, run_guarded
@@ -138,3 +150,108 @@ def test_limit_bounds(limits: dict[str, Any], ok: bool) -> None:
     else:
         with pytest.raises(ValidationError):
             Policy.model_validate_json(raw)
+
+
+# --- Models, defaults and bounds --------------------------------------------------------
+
+
+def test_limits_and_agents_models_are_strict_and_frozen() -> None:
+    entry = AgentEntry(id="a", token_sha256="0" * 64)
+    for model, field in (
+        (LimitSpec(), "requests_per_minute"),
+        (Limits(), "default"),
+        (entry, "id"),
+        (AgentsFile(agents=(entry,)), "agents"),
+    ):
+        with pytest.raises(ValidationError, match="frozen"):
+            setattr(model, field, None)
+    with pytest.raises(ValidationError):
+        LimitSpec(requests_per_minute="5")  # type: ignore[arg-type]
+    with pytest.raises(ValidationError):
+        Limits.model_validate({"default": {}, "agents": [("a", {})]})
+    with pytest.raises(ValidationError):
+        AgentEntry.model_validate({"id": b"a", "token_sha256": "0" * 64})
+    with pytest.raises(ValidationError):
+        AgentsFile.model_validate({"agents": [entry]})  # a list is not a tuple
+
+
+def test_default_numbers() -> None:
+    assert limits_module.DEFAULT_REQUESTS_PER_MINUTE == 1200
+    assert limits_module.DEFAULT_MAX_PENDING_APPROVALS == 100
+    assert limits_module.MAX_TRACKED_AGENTS == 10_000
+    assert MAX_AGENTS == 1000
+    assert MAX_RESPONSE_BYTES == 65_536
+
+
+def test_answer_is_frozen_and_its_reason_is_cut() -> None:
+    answer = parse_answer({"decision": "deny", "reason": "x" * 300})
+    assert answer.reason == "x" * 200
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        answer.decision = Decision.ALLOW  # type: ignore[misc]
+
+
+def test_client_never_sends_nan() -> None:
+    sent: list[object] = []
+    original = client_module.open_local
+    client_module.open_local = lambda *args, **kwargs: sent.append(args)
+    try:
+        answer = WardenClient().evaluate("t", {"x": float("nan")})
+    finally:
+        client_module.open_local = original
+    assert answer.decision is Decision.DENY
+    assert sent == []
+
+
+@pytest.mark.parametrize(("header", "seconds"), [("00007", 7.0), ("000007", 1.0)])
+def test_retry_after_length_limit(header: str, seconds: float) -> None:
+    class Error:
+        headers = {"Retry-After": header}  # noqa: RUF012
+
+    assert _retry_after(Error()) == seconds  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("age", "text"), [(59, "59s ago"), (60, "1 min ago"), (119, "1 min ago"), (120, "2 min ago")]
+)
+def test_age_text(age: int, text: str) -> None:
+    assert _ago(age) == text
+
+
+def test_highest_bmp_character_and_the_next_one_display() -> None:
+    # U+FFF8 and U+E0001 are hidden: 4 hex digits below U+10000, 8 above.
+    assert _display_safe("\ufff8\U000e0001", []) == "\\ufff8\\U000e0001"
+
+
+# --- Approvals --------------------------------------------------------------------------
+
+
+def used_approval(store: ApprovalStore) -> str:
+    approval_id = store.request(ACTION, "d" * 64)
+    assert approval_id is not None
+    store.decide(approval_id, approve=True)
+    assert store.use(approval_id, "d" * 64) is Status.APPROVED
+    return approval_id
+
+
+def test_group_approve_of_a_used_approval_does_not_block_its_restore() -> None:
+    store = ApprovalStore()
+    approval_id = used_approval(store)
+    with pytest.raises(GroupDecideError):
+        store.decide_group([approval_id], approve=True)
+    store.restore(approval_id)
+    assert store.use(approval_id, "d" * 64) is Status.APPROVED
+
+
+def test_a_rejection_at_the_same_instant_beats_a_restore() -> None:
+    store = ApprovalStore(clock=lambda: 1000.0)
+    first = used_approval(store)
+    second = store.request(ACTION, "d" * 64)
+    assert second is not None and second != first
+    store.decide(second, approve=False)
+    store.restore(first)
+    assert store.use(first, "d" * 64) is Status.USED
+
+
+def test_approval_database_is_created_private(tmp_path: Path) -> None:
+    ApprovalDB(tmp_path / "new.db")
+    assert (tmp_path / "new.db").stat().st_mode & 0o777 == 0o600

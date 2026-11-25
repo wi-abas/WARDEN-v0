@@ -194,3 +194,10 @@ def test_proxy_settings_are_ignored(url: str, var: str, monkeypatch: pytest.Monk
     monkeypatch.delenv("no_proxy", raising=False)
     monkeypatch.delenv("NO_PROXY", raising=False)
     assert WardenClient(url, "agent-1").evaluate("read_file", {"path": "/a"}).allowed
+
+
+def test_repr_shows_which_agent_id_counts() -> None:
+    """With a token the agent id comes from it: never show the unused one as if it did."""
+    assert "agent_id='billing'" in repr(WardenClient(agent_id="billing"))
+    shown = repr(WardenClient(agent_id="billing", token="wdn_x"))  # noqa: S106
+    assert "agent_id=<from token>" in shown and "billing" not in shown

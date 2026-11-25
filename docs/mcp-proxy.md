@@ -71,6 +71,9 @@ Unknown keys are an error, so a typo can't silently weaken the setup. Without a 
 file, flags work too: `warden proxy --agent-id cursor --tool-prefix fs. -- npx -y
 @modelcontextprotocol/server-filesystem /Users/me/workspace`.
 
+If the server can't be started (no such command, for example), the proxy says so on stderr
+and exits with code 2. Nothing is relayed.
+
 ## 3. Point your client at the proxy
 
 **Claude Desktop** (`claude_desktop_config.json`; Cursor's `~/.cursor/mcp.json` has the
@@ -102,7 +105,7 @@ Remove the server's direct entry: the proxy only protects calls that go through 
 If Warden uses agent tokens (`--agents`), give the proxy its token through the
 environment, never the config file: in Claude Desktop / Cursor add
 `"env": {"WARDEN_AGENT_TOKEN": "wdn_..."}` next to `"args"`. The agent id then comes from
-the token.
+the token, and `agent_id` in the config is not used.
 
 ## Approving
 
@@ -114,6 +117,9 @@ Warden: write_file needs approval (id <approval id>).
   1. Check what it would do:  warden approvals list --agent <agent id> --warden-url <url>
   2. Then approve it:         warden approvals approve <approval id> --warden-url <url>
 ```
+
+With an agent token the list command has no `--agent`: only Warden knows which agent the
+token belongs to.
 
 Both need `WARDEN_ADMIN_KEY`. `warden approvals approve` shows the action again and sends
 its `action_hash` for you. The hint never prints the `action_hash` itself: since v0.4
@@ -131,14 +137,29 @@ MCP clients have their own time limit per tool call. If yours gives up before yo
 approve, use `"mode": "error"`: the model is told approval is pending, and retrying the
 same call after you approve goes through (once).
 
+If the client disconnects (closes the proxy's input) while a call waits for approval, the
+call is refused and never runs, even if you approve it later. The approval itself stays
+in Warden until it expires: the same agent asking for the same action again could use it.
+
+If Warden restarts during a wait, the proxy keeps asking until the approval timeout.
+
 ## What the proxy refuses
 
 - Any MCP method other than `tools/call` (checked) and the protocol basics
   (`initialize`, `ping`, `tools/list`, `resources/list`, `resources/templates/list`,
   `prompts/list`, `logging/setLevel`, and `notifications/*`), unless listed in
-  `allow_methods`. `tools/call` itself can't be listed.
+  `allow_methods`. `tools/call` itself can't be listed, nor the same name in other case.
 - Messages that repeat a JSON key, JSON-RPC batches, `NaN`/`Infinity`, invalid JSON.
   These could make the proxy and the server read different things.
+- Requests and notifications with any top-level key other than `jsonrpc`, `id`, `method`
+  and `params` (exact spelling), and responses that aren't exactly `jsonrpc`, `id` and one
+  of `result` / `error`. A server that ignores case could read `"Method"` as `"method"`
+  and run a call Warden never checked.
+- A request whose id is still in use: its first request is held by Warden, or the server
+  hasn't answered it yet (also after a cancel, since the server may still answer). `1` and
+  `"1"` count as the same id. The error has id `null`, so it can't be taken for the first
+  request's answer. Ids over 256 characters or beyond ±(2^53 − 1), and requests past
+  10,000 unanswered ones, are refused too.
 - A `tools/call` sent as a notification (no `id`): dropped.
 - A `tools/call` whose `_meta` holds anything but keys from `allow_meta_keys` (default
   only `progressToken`), each with short printable text (1-256 characters) or a whole
@@ -176,6 +197,8 @@ logged by type only.
 - Server requests you allow in `allow_server_requests` pass unchecked (Warden doesn't
   look at a sampling prompt or a roots answer).
 - The server is trusted for what it answers: a tool result can still be misleading.
+- Keys inside `arguments` are the policy's job: if your server ignores case there (reads
+  `"Path"` as `"path"`), use tool argument lists so unknown argument names are denied.
 - Tool names Warden doesn't accept (uppercase letters, spaces) are always denied.
 
 Design and threat model: [design/mcp-proxy.md](design/mcp-proxy.md),

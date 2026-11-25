@@ -29,6 +29,7 @@ import sys
 import threading
 import time
 from collections.abc import Awaitable, Callable
+from concurrent.futures import CancelledError
 from pathlib import Path
 from typing import Annotated, Any, BinaryIO, Literal, Protocol
 
@@ -42,6 +43,8 @@ logger = logging.getLogger(__name__)
 
 MAX_LINE_BYTES = 16 * 1024 * 1024  # one JSON-RPC message
 MAX_IN_FLIGHT = 64  # tool calls being checked (or waiting for approval) at once
+MAX_UNANSWERED = 10_000  # client requests without an answer whose ids are remembered
+MAX_ID_TEXT = 256
 SHUTDOWN_GRACE_SECONDS = 5.0  # how long the server gets to exit after the client leaves
 MAX_ANSWER_BACKLOG = 1024 * 1024  # unsent bytes before the proxy's own answers are dropped
 
@@ -59,6 +62,11 @@ PASS_THROUGH = frozenset(
         "logging/setLevel",
     }
 )
+
+# The only top-level keys of a client request or notification (exact, case-sensitive).
+# Anything else is refused: a server that ignores case could read "Method" as "method"
+# and run something Warden never checked.
+REQUEST_KEYS = frozenset({"jsonrpc", "id", "method", "params"})
 
 # The fields a tools/call may carry; anything else is refused. "_meta" is protocol
 # metadata (e.g. a progress token): only keys on the config's "allow_meta_keys" list,
@@ -157,7 +165,8 @@ class ProxyConfig(BaseModel):
     @field_validator("allow_methods")
     @classmethod
     def tools_call_stays_checked(cls, value: tuple[str, ...]) -> tuple[str, ...]:
-        if "tools/call" in value:
+        # Nor a look-alike (other case, spaces) that a sloppy server takes for tools/call.
+        if any(method.strip().casefold() == "tools/call" for method in value):
             raise ValueError("tools/call is always checked by Warden; it can't be allowed")
         return value
 
@@ -289,16 +298,25 @@ class McpProxy:
         checker: Checker,
         read_client: Callable[[], Awaitable[bytes | None]],
         write_client: Callable[[bytes], None],
+        *,
+        agent_from_token: bool = False,
     ) -> None:
         self.config = config
         self.checker = checker
+        # With an agent token, Warden takes the agent id from the token: config.agent_id
+        # is not the approval's agent, and the proxy doesn't know which one is.
+        self.agent_from_token = agent_from_token
         self.read_client = read_client
         self.write_client = write_client
         self.allowed_methods = PASS_THROUGH | set(config.allow_methods)
         self.allowed_server_requests = frozenset(config.allow_server_requests)
         self._calls: dict[str, asyncio.Task[None]] = {}  # in-flight tool calls by id
         self._held: set[str] = set()  # ids of tool calls not (yet) sent to the server
+        # Requests the client has no answer to yet: _id_key -> the exact id. An id in here
+        # can't be used again: two answers under one id could be mixed up.
+        self._unanswered: dict[str, str] = {}
         self._backlog_warned = False
+        self._client_gone = asyncio.Event()  # the client closed its input (or crashed)
         self._server_in: asyncio.StreamWriter | None = None
 
     # --- Session ----------------------------------------------------------------------
@@ -306,14 +324,20 @@ class McpProxy:
     async def run(self) -> int:
         """Start the server, relay until either side ends. Returns the server's exit code."""
         spec = self.config.server
-        process = await asyncio.create_subprocess_exec(
-            spec.command,
-            *spec.args,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            env=server_env(spec.env, dict(os.environ)),
-            limit=MAX_LINE_BYTES,
-        )
+        try:
+            process = await asyncio.create_subprocess_exec(
+                spec.command,
+                *spec.args,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                env=server_env(spec.env, dict(os.environ)),
+                limit=MAX_LINE_BYTES,
+            )
+        except (OSError, ValueError) as exc:  # no such command, NUL byte in an argument, ...
+            # Not the error's own text: it may quote the arguments or the environment.
+            raise ConfigError(
+                f"can't start the MCP server {_safe_name(spec.command)} ({type(exc).__name__})"
+            ) from None
         # mutation-ok: both are set (PIPE); the assert only informs the type checker
         assert process.stdin is not None and process.stdout is not None  # noqa: S101 (PIPE)
         self._server_in = process.stdin
@@ -323,7 +347,8 @@ class McpProxy:
         # mutation-ok: `or` differs only if both sides end at the very same moment
         if client_side.done() and not server_side.done():
             # The client closed its input. Calls already accepted still get their answer
-            # (each one ends: Warden has a timeout, approvals have a deadline).
+            # (each one ends: Warden has a timeout, and calls that need an approval are
+            # refused at once, see _decide).
             # mutation-ok: calls never raise (they answer errors themselves)
             await asyncio.gather(*self._calls.values(), return_exceptions=True)
         else:
@@ -367,11 +392,15 @@ class McpProxy:
         kind = _server_message_kind(message)
         if kind is None:
             logger.warning("dropped a malformed message from the MCP server")
-        elif kind == "response" and json.dumps(message["id"]) in self._held:
+        elif kind == "response" and _id_key(message["id"]) in self._held:
             # The proxy hasn't sent that call yet (still checking or waiting for a
             # human): the server can't have answered it.
             logger.warning("dropped a server response to a call Warden hasn't forwarded")
         elif kind != "request" or message["method"] in self.allowed_server_requests:
+            if kind == "response":
+                key = _id_key(message["id"])
+                if self._unanswered.get(key) == json.dumps(message["id"]):
+                    del self._unanswered[key]
             self._reply(message)
         elif message["method"] == "ping":
             self._answer_server({"jsonrpc": "2.0", "id": message["id"], "result": {}})
@@ -385,6 +414,12 @@ class McpProxy:
             )
 
     async def _relay_client(self) -> None:
+        try:
+            await self._relay_client_lines()
+        finally:  # end of input, or the reader failed: either way nobody is there any more
+            self._client_gone.set()
+
+    async def _relay_client_lines(self) -> None:
         while True:
             line = await self.read_client()
             if line == b"":
@@ -405,6 +440,8 @@ class McpProxy:
                 raise _Refused(INVALID_REQUEST, "batches and non-object messages not supported")
         except _Refused as refused:
             request_id = recover_id(line) if refused.duplicate_key else None
+            if _id_key(request_id) in self._unanswered:  # not an answer to that request
+                request_id = None
             self._reply(rpc_error(request_id, refused.code, refused.message))
             return
 
@@ -428,6 +465,20 @@ class McpProxy:
         if not isinstance(method, str):
             self._reply(rpc_error(None, INVALID_REQUEST, "method must be text"))
             return
+        if has_id:
+            # Before anything that answers under this id. These refusals carry id null: an
+            # error under a reused id would look like the answer to the first request.
+            if not _usable_id(request_id):
+                self._reply(rpc_error(None, INVALID_REQUEST, "request id is too long or too large"))
+                return
+            if _id_key(request_id) in self._unanswered or _id_key(request_id) in self._calls:
+                self._reply(rpc_error(None, INVALID_REQUEST, "request id already in use"))
+                return
+        if not set(message) <= REQUEST_KEYS:
+            logger.warning("refused a message from the client (unexpected key)")
+            if has_id:
+                self._reply(rpc_error(request_id, INVALID_REQUEST, "unexpected key in message"))
+            return
         if not has_id:  # a notification: no answer expected
             if method == "notifications/cancelled":
                 self._cancel(message.get("params"))
@@ -437,13 +488,17 @@ class McpProxy:
                 # e.g. "tools/call" without an id: a server might still run it.
                 logger.warning("dropped notification %s (not allowed)", _safe_name(method))
             return
-        if method == "tools/call":
+        if len(self._unanswered) >= MAX_UNANSWERED:
+            self._reply(rpc_error(request_id, INVALID_REQUEST, "too many unanswered requests"))
+        elif method == "tools/call":
             self._start_call(request_id, message)
         elif method == "initialize":
+            self._unanswered[_id_key(request_id)] = json.dumps(request_id)
             await self._forward(
                 _without_refused_capabilities(message, self.allowed_server_requests)
             )
         elif method in self.allowed_methods:
+            self._unanswered[_id_key(request_id)] = json.dumps(request_id)
             await self._forward(message)
         else:
             logger.warning("refused method %s (not on the allow list)", _safe_name(method))
@@ -452,27 +507,27 @@ class McpProxy:
             )
 
     def _start_call(self, request_id: JsonValue, message: dict[str, Any]) -> None:
-        key = json.dumps(request_id)
+        key = _id_key(request_id)
         if len(self._calls) >= MAX_IN_FLIGHT:
             self._reply(tool_error(request_id, "Blocked by Warden: too many calls in progress"))
-            return
-        if key in self._calls:
-            self._reply(rpc_error(request_id, INVALID_REQUEST, "request id already in use"))
             return
         task = asyncio.create_task(self._tool_call(request_id, message))
         self._calls[key] = task
         self._held.add(key)
+        self._unanswered[key] = json.dumps(request_id)
 
         def done(_: object) -> None:
             self._calls.pop(key, None)
-            self._held.discard(key)
+            if key in self._held:  # never sent to the server, so nothing else answers it
+                self._held.discard(key)
+                self._unanswered.pop(key, None)
 
         task.add_done_callback(done)
 
     def _cancel(self, params: object) -> None:
         """The client gave up on a request: stop waiting for its approval."""
         if isinstance(params, dict) and _valid_id(params.get("requestId")):
-            task = self._calls.get(json.dumps(params.get("requestId")))
+            task = self._calls.get(_id_key(params.get("requestId")))
             if task is not None:
                 task.cancel()
 
@@ -507,7 +562,7 @@ class McpProxy:
         if answer.allowed:
             # Forward the SAME parsed object Warden checked, re-encoded: never the raw
             # bytes, so the server can't read anything Warden didn't see.
-            self._held.discard(json.dumps(request_id))
+            self._held.discard(_id_key(request_id))
             await self._forward(message)
         else:
             self._reply(tool_error(request_id, f"Blocked by Warden: {answer.reason}"))
@@ -522,18 +577,26 @@ class McpProxy:
         approval_id = answer.approval_id
         if approval_id is None:
             return Answer(Decision.DENY, "approval needed, but Warden gave no approval id")
+        # From here on the call needs a human. If the client leaves, it must not run: not
+        # on a later approval, nor on one used by a question that was already on its way.
+        gone = Answer(Decision.DENY, "the client disconnected before this was approved")
+        if self._client_gone.is_set():  # and don't use up an approval by asking
+            return gone
         # Maybe a human already approved this exact action (Warden reuses the id).
         answer = await self._ask(tool, arguments, approval_id)
+        if self._client_gone.is_set():
+            return gone
         settings = self.config.approval
         if answer.decision is Decision.REQUIRE_APPROVAL:
             url = f"--warden-url {self.config.warden_url}"
+            agent = "" if self.agent_from_token else f"--agent {self.config.agent_id} "
             # Review first: Warden refuses an approval without the action_hash from the
             # list. `warden approvals approve` lists, shows and sends it; the hint never
             # prints the hash itself (the human must get it from the list).
             print(
                 f"Warden: {_safe_name(tool)} needs approval (id {approval_id}).\n"
                 "  1. Check what it would do:  warden approvals list "
-                f"--agent {self.config.agent_id} {url}\n"
+                f"{agent}{url}\n"
                 f"  2. Then approve it:         warden approvals approve {approval_id} {url}\n"
                 "  (both need WARDEN_ADMIN_KEY; with curl, see docs/mcp-proxy.md)",
                 file=sys.stderr,
@@ -546,11 +609,23 @@ class McpProxy:
             )
         deadline = time.monotonic() + settings.timeout_seconds
         # Rate limited (429) while polling: back off and keep waiting, never allow.
-        while answer.decision is Decision.REQUIRE_APPROVAL or answer.retry_after is not None:
+        # Unreachable: Warden may be restarting. Keep asking until the deadline (never run).
+        while (
+            answer.decision is Decision.REQUIRE_APPROVAL
+            or answer.retry_after is not None
+            or answer.unreachable
+        ):
             if time.monotonic() >= deadline:  # mutation-ok: equal floats never happen
                 return Answer(Decision.DENY, "timed out waiting for a human to approve")
-            await asyncio.sleep(max(settings.poll_seconds, answer.retry_after or 0.0))
+            try:  # a sleep that ends early if the client leaves
+                pause = max(settings.poll_seconds, answer.retry_after or 0.0)
+                await asyncio.wait_for(self._client_gone.wait(), pause)
+                return gone
+            except TimeoutError:
+                pass
             answer = await self._ask(tool, arguments, approval_id)
+            if self._client_gone.is_set():
+                return gone
         return answer
 
     # --- Output -----------------------------------------------------------------------
@@ -648,6 +723,19 @@ def _valid_id(value: object) -> bool:
     return value is None or isinstance(value, str) or (type(value) is int)
 
 
+def _usable_id(value: JsonValue) -> bool:
+    """Short enough to remember, and a number every JSON parser reads exactly (else two
+    different ids could be the same one to the server)."""
+    if isinstance(value, str):
+        return len(value) <= MAX_ID_TEXT
+    return not isinstance(value, int) or abs(value) <= MAX_META_INT
+
+
+def _id_key(value: object) -> str:
+    """What makes two ids "the same". 1 and "1" are: sloppy servers and clients mix them."""
+    return "null" if value is None else str(value)
+
+
 # --- Real stdin / stdout -------------------------------------------------------------
 
 
@@ -671,11 +759,14 @@ def stdin_reader(
 
     def worker() -> None:
         while True:
-            line = read_line(stream)
+            try:
+                line = read_line(stream)
+            except (OSError, ValueError):  # unreadable or closed: the client is gone
+                line = b""
             put = queue.put(line)
             try:
                 asyncio.run_coroutine_threadsafe(put, loop).result()
-            except RuntimeError:  # the loop is gone: we're shutting down
+            except (RuntimeError, CancelledError):  # the loop is gone: we're shutting down
                 put.close()
                 return
             if line == b"":
@@ -694,22 +785,41 @@ def stdout_writer(stream: BinaryIO) -> Callable[[bytes], None]:
     return write
 
 
+def own_stdin() -> BinaryIO:
+    """Standard input through a reader of our own, when it is a real file. The stdin thread
+    may still be blocked reading at exit (the server stopped, the client didn't), and
+    Python aborts if that thread holds the lock of sys.stdin's own buffer."""
+    try:
+        return open(sys.stdin.fileno(), "rb", closefd=False)
+    except (OSError, ValueError):  # not a real file (tests)
+        return sys.stdin.buffer
+
+
 def serve_stdio(config: ProxyConfig) -> int:
     """Run the proxy on this process's stdin/stdout. Returns the server's exit code."""
     # The agent token comes from the environment (e.g. the MCP client config's "env"),
     # never from the config file, so it isn't stored next to the server settings.
+    token = os.environ.get("WARDEN_AGENT_TOKEN") or None
     checker = WardenClient(
         config.warden_url,
         config.agent_id,
         timeout=config.warden_timeout_seconds,
-        token=os.environ.get("WARDEN_AGENT_TOKEN") or None,
+        token=token,
     )
 
     async def main() -> int:
         loop = asyncio.get_running_loop()
         proxy = McpProxy(
-            config, checker, stdin_reader(loop, sys.stdin.buffer), stdout_writer(sys.stdout.buffer)
+            config,
+            checker,
+            stdin_reader(loop, own_stdin()),
+            stdout_writer(sys.stdout.buffer),
+            agent_from_token=token is not None,
         )
         return await proxy.run()
 
-    return asyncio.run(main())
+    try:
+        return asyncio.run(main())
+    except ConfigError as exc:
+        print(f"warden proxy: {exc}", file=sys.stderr)
+        return 2

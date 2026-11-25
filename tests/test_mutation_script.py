@@ -110,3 +110,19 @@ def test_main_reports_and_applies_the_minimum(
     assert m.main(["--target", "limits", "--min-score", "70"]) == 0
     assert "SURVIVED" in capsys.readouterr().out
     assert m.main(["--target", "limits", "--min-score", "80"]) == 1
+
+
+def test_every_test_file_is_mapped_or_exempt() -> None:
+    """A test file nobody lists is never run against mutants: what it checks looks
+    untested, and the bugs it would catch count as survivors. So a new file must be added
+    to TARGETS, or to EXEMPT with a reason."""
+    m = load()
+    existing = {p.name for p in (ROOT / "tests").glob("test_*.py")}
+    mapped = {name for tests in m.TARGETS.values() for name in tests}
+    assert existing - mapped - set(m.EXEMPT) == set(), "add to TARGETS or EXEMPT"
+    assert (mapped | set(m.EXEMPT)) - existing == set(), "listed, but no such test file"
+    assert mapped & set(m.EXEMPT) == set(), "both mapped and exempt"
+    assert all(reason.strip() for reason in m.EXEMPT.values())
+    for module, tests in m.TARGETS.items():
+        assert (m.SRC / f"{module}.py").is_file(), module
+        assert len(set(tests)) == len(tests), f"{module}: a test file is listed twice"

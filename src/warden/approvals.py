@@ -62,6 +62,10 @@ class Approval:
     status: Status = Status.PENDING
     created_at: float = 0.0  # store's clock; only used to sort lists
     decided_at: float | None = None  # store's clock; when a human last decided it
+    revision: int = 0  # goes up with every saved change; 0 = not saved yet
+    # Memory only: the revision this server's own use() gave it. restore() may only undo
+    # exactly that use; any newer change (or a human's "no") wins.
+    used_revision: int | None = None
 
 
 class DecideError(Exception):
@@ -94,6 +98,11 @@ class DecideError(Exception):
         self.hash_required = hash_required
 
 
+class StaleApproval(Exception):
+    """Another Warden server changed the approval between our check and our write.
+    Nothing was written (fail closed)."""
+
+
 class GroupReason(StrEnum):
     """Why one id in a group decision was refused."""
 
@@ -123,14 +132,18 @@ CREATE TABLE IF NOT EXISTS approvals (
     status       TEXT NOT NULL,
     expires_at   REAL NOT NULL,
     created_at   REAL,
-    decided_at   REAL
+    decided_at   REAL,
+    revision     INTEGER NOT NULL DEFAULT 1
 )
 """
 
 
 class ApprovalDB:
     """Approval state in SQLite (no arguments, ever). Usually the audit database file,
-    which is already private (600) and never a symlink."""
+    which is already private (600) and never a symlink.
+
+    Several servers may share it: a change is written only if the row still has the
+    revision the server last saw, so exactly one of two racing changes wins."""
 
     def __init__(self, path: Path) -> None:
         if path.is_symlink():
@@ -145,18 +158,23 @@ class ApprovalDB:
                 conn.execute("ALTER TABLE approvals ADD COLUMN created_at REAL")
             if "decided_at" not in columns:  # a database from before sticky rejections
                 conn.execute("ALTER TABLE approvals ADD COLUMN decided_at REAL")
+            if "revision" not in columns:  # a database from before shared databases
+                conn.execute("ALTER TABLE approvals ADD COLUMN revision INTEGER NOT NULL DEFAULT 1")
 
     def _connect(self) -> sqlite3.Connection:
         return sqlite3.connect(self.path, timeout=5)
 
-    def load(self, now: float, ttl: float) -> list[Approval]:
-        """Unexpired approvals (expired ones are deleted). Arguments unknown (None).
-        Rows from before `created_at` existed count as created `ttl` before expiry."""
+    def delete_expired(self, now: float) -> None:
         with closing(self._connect()) as conn, conn:
             conn.execute("DELETE FROM approvals WHERE expires_at <= ?", (now,))
+
+    def read(self, ttl: float) -> list[Approval]:
+        """Every approval, oldest expiry first. Arguments unknown (None). Rows from
+        before `created_at` existed count as created `ttl` before expiry."""
+        with closing(self._connect()) as conn:
             rows = conn.execute(
                 "SELECT approval_id, agent_id, tool, action_hash, status, expires_at, "
-                "created_at, decided_at FROM approvals ORDER BY expires_at"
+                "created_at, decided_at, revision FROM approvals ORDER BY expires_at"
             ).fetchall()
         return [
             Approval(
@@ -169,6 +187,7 @@ class ApprovalDB:
                 status=Status(r[4]),
                 created_at=r[6] if r[6] is not None else r[5] - ttl,
                 decided_at=r[7],
+                revision=r[8],
             )
             for r in rows
         ]
@@ -177,28 +196,40 @@ class ApprovalDB:
         self.save_many([approval])
 
     def save_many(self, approvals: Sequence[Approval]) -> None:
-        """Save all of them in ONE transaction: all are written, or none."""
+        """Save all of them in ONE transaction: all are written, or none.
+
+        Each must still have the revision it was read with (0: it is new, and no other
+        pending or approved row is for the same action). If not: StaleApproval."""
         with closing(self._connect()) as conn, conn:
-            conn.executemany(
-                "INSERT INTO approvals (approval_id, agent_id, tool, action_hash, status, "
-                "expires_at, created_at, decided_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
-                "ON CONFLICT(approval_id) DO UPDATE "
-                "SET status = excluded.status, expires_at = excluded.expires_at, "
-                "decided_at = excluded.decided_at",
-                [
-                    (
-                        a.approval_id,
-                        a.agent_id,
-                        a.tool,
-                        a.action_hash,
-                        a.status.value,
-                        a.expires_at,
-                        a.created_at,
-                        a.decided_at,
+            for a in approvals:
+                if a.revision == 0:
+                    cursor = conn.execute(
+                        "INSERT INTO approvals (approval_id, agent_id, tool, action_hash, "
+                        "status, expires_at, created_at, decided_at, revision) "
+                        "SELECT ?, ?, ?, ?, ?, ?, ?, ?, 1 WHERE NOT EXISTS ("
+                        "SELECT 1 FROM approvals WHERE action_hash = ? "
+                        "AND status IN ('pending', 'approved') AND expires_at > ?)",
+                        (
+                            a.approval_id,
+                            a.agent_id,
+                            a.tool,
+                            a.action_hash,
+                            a.status.value,
+                            a.expires_at,
+                            a.created_at,
+                            a.decided_at,
+                            a.action_hash,
+                            a.created_at,
+                        ),
                     )
-                    for a in approvals
-                ],
-            )
+                else:
+                    cursor = conn.execute(
+                        "UPDATE approvals SET status = ?, expires_at = ?, decided_at = ?, "
+                        "revision = revision + 1 WHERE approval_id = ? AND revision = ?",
+                        (a.status.value, a.expires_at, a.decided_at, a.approval_id, a.revision),
+                    )
+                if cursor.rowcount != 1:
+                    raise StaleApproval  # rolls back every row of this call
 
     def delete(self, approval_ids: list[str]) -> None:
         with closing(self._connect()) as conn, conn:
@@ -232,8 +263,10 @@ def _new_approval_id() -> str:
 class ApprovalStore:
     """Thread-safe approvals. Every method takes the lock.
 
-    With `db`, every change is written to the database BEFORE it takes effect in
-    memory: if the write fails, the method raises and nothing changes (fail closed).
+    With `db`, the database is the truth: every method first reads it again (another
+    server may share it), and every change is written to it BEFORE it takes effect in
+    memory, only if nobody else changed that approval meanwhile. If reading or writing
+    fails, the method raises and nothing changes (fail closed).
     """
 
     def __init__(
@@ -258,22 +291,37 @@ class ApprovalStore:
         self._lock = threading.Lock()
         self._items: dict[str, Approval] = {}
         if db is not None:
-            self._items = {a.approval_id: a for a in db.load(self._clock(), ttl_seconds)}
+            self._refresh(self._clock())
 
-    def _save(self, approval: Approval) -> None:
+    def _save(self, *updated: Approval) -> None:
+        """Make these changes: in the database first (all or none), then in memory."""
         if self._db is not None:
-            self._db.save(approval)
+            if len(updated) == 1:
+                self._db.save(updated[0])
+            else:
+                self._db.save_many(updated)
+        for new in updated:
+            known = self._items.setdefault(new.approval_id, new)
+            known.status, known.expires_at = new.status, new.expires_at
+            known.decided_at, known.revision = new.decided_at, new.revision + 1
 
-    def _purge_expired(self, now: float) -> None:
-        # Forgetting an expired id is safe: an unknown id is always refused.
-        expired = [k for k, a in self._items.items() if a.expires_at <= now]
-        for key in expired:
-            del self._items[key]
-        if expired and self._db is not None:
-            try:
-                self._db.delete(expired)
-            except sqlite3.Error:
-                pass  # harmless: expired rows are ignored and deleted on the next load
+    def _refresh(self, now: float) -> None:
+        """Take over what other servers changed, and forget expired approvals (safe: an
+        unknown id is always refused). Arguments are kept: they are only in memory."""
+        if self._db is not None:
+            rows = self._db.read(self._ttl)
+            if any(row.expires_at <= now for row in rows):
+                try:
+                    self._db.delete_expired(now)
+                except sqlite3.Error:
+                    pass  # harmless: expired rows are ignored
+            for row in rows:
+                known = self._items.get(row.approval_id)
+                if known is not None:
+                    known.status, known.expires_at = row.status, row.expires_at
+                    known.decided_at, known.revision = row.decided_at, row.revision
+            self._items = {r.approval_id: self._items.get(r.approval_id, r) for r in rows}
+        self._items = {k: a for k, a in self._items.items() if a.expires_at > now}
 
     @staticmethod
     def _recall(approval: Approval, arguments: dict[str, JsonValue] | None) -> None:
@@ -303,47 +351,55 @@ class ApprovalStore:
         a human rejected this exact action and the rejection still stands (checked
         first: a rejection beats everything)."""
         with self._lock:
-            now = self._clock()
-            self._purge_expired(now)
-            for a in self._items.values():
-                # The hash covers the agent id: only the same agent, same action.
-                if self._sticky(a) and secrets.compare_digest(a.action_hash, action_hash):
-                    raise Rejected(a.approval_id, a.expires_at - now)
-            for a in self._items.values():
-                if a.status in {Status.PENDING, Status.APPROVED} and a.action_hash == action_hash:
-                    # Same action asked again (maybe the agent lost the id): hand back
-                    # the existing approval instead of piling up a new one.
-                    self._recall(a, action.arguments)
-                    return a.approval_id
-            pending = sum(a.status is Status.PENDING for a in self._items.values())
-            if pending >= self._max_pending:
-                return None
-            if agent_limit is not None:
-                mine = sum(
-                    a.status is Status.PENDING and a.agent_id == action.agent_id
-                    for a in self._items.values()
-                )
-                if mine >= agent_limit:
-                    raise PendingQuotaExceeded
-            approval_id = _new_approval_id()
-            approval = Approval(
-                approval_id=approval_id,
-                agent_id=action.agent_id,
-                tool=action.tool,
-                arguments=action.arguments,
-                action_hash=action_hash,
-                expires_at=now + self._ttl,
-                created_at=now,
+            try:
+                return self._request(action, action_hash, agent_limit)
+            except StaleApproval:
+                # Another server just created one for the same action: use that one.
+                return self._request(action, action_hash, agent_limit)
+
+    def _request(
+        self, action: ActionRequest, action_hash: str, agent_limit: int | None
+    ) -> str | None:
+        now = self._clock()
+        self._refresh(now)
+        for a in self._items.values():
+            # The hash covers the agent id: only the same agent, same action.
+            if self._sticky(a) and secrets.compare_digest(a.action_hash, action_hash):
+                raise Rejected(a.approval_id, a.expires_at - now)
+        for a in self._items.values():
+            if a.status in {Status.PENDING, Status.APPROVED} and a.action_hash == action_hash:
+                # Same action asked again (maybe the agent lost the id): hand back
+                # the existing approval instead of piling up a new one.
+                self._recall(a, action.arguments)
+                return a.approval_id
+        pending = sum(a.status is Status.PENDING for a in self._items.values())
+        if pending >= self._max_pending:
+            return None
+        if agent_limit is not None:
+            mine = sum(
+                a.status is Status.PENDING and a.agent_id == action.agent_id
+                for a in self._items.values()
             )
-            self._save(approval)
-            self._items[approval_id] = approval
-            return approval_id
+            if mine >= agent_limit:
+                raise PendingQuotaExceeded
+        approval_id = _new_approval_id()
+        approval = Approval(
+            approval_id=approval_id,
+            agent_id=action.agent_id,
+            tool=action.tool,
+            arguments=action.arguments,
+            action_hash=action_hash,
+            expires_at=now + self._ttl,
+            created_at=now,
+        )
+        self._save(approval)
+        return approval_id
 
     def pending(self) -> list[tuple[Approval, float]]:
         """Pending approvals with seconds left, oldest first."""
         with self._lock:
             now = self._clock()
-            self._purge_expired(now)
+            self._refresh(now)
             items = [a for a in self._items.values() if a.status is Status.PENDING]
             return [(a, a.expires_at - now) for a in sorted(items, key=lambda a: a.expires_at)]
 
@@ -368,12 +424,14 @@ class ApprovalStore:
         """
         with self._lock:
             now = self._clock()
-            self._purge_expired(now)
+            self._refresh(now)
             approval = self._items.get(approval_id)
             if approval is None:
                 raise DecideError(not_found=True)
             revoking = approval.status is Status.APPROVED and not approve
             if approval.status is not Status.PENDING and not revoking:
+                if approval.status is Status.USED and not approve:
+                    self._cancel_restore(approval)
                 raise DecideError(not_found=False)
             if require_hash and expected_hash is None and not revoking:
                 raise DecideError(not_found=False, hash_required=True)
@@ -392,17 +450,35 @@ class ApprovalStore:
             # (or revoke) sticks for the agent's rejection window.
             expires_at = now + self._ttl if approve else self._denied_until(approval, now)
             self._save(replace(approval, status=new_status, expires_at=expires_at, decided_at=now))
-            approval.status = new_status
-            approval.expires_at = expires_at
-            approval.decided_at = now
             return new_status
+
+    def _cancel_restore(self, approval: Approval) -> None:
+        """A human said no to an approval that is being used right now. Too late to
+        revoke it, but if that use is undone (restore) it must stay spent: no server may
+        restore it after this."""
+        approval.used_revision = None
+        self._save(replace(approval))  # a new revision: other servers' restores lose
+
+    def _superseded(self, approval: Approval) -> bool:
+        """True if a human rejected this exact action after this approval was approved
+        (through another approval, created while this one counted as used)."""
+        return any(
+            a.status is Status.DENIED
+            and secrets.compare_digest(a.action_hash, approval.action_hash)
+            and (
+                a.decided_at is None
+                or approval.decided_at is None
+                or a.decided_at >= approval.decided_at
+            )
+            for a in self._items.values()
+        )
 
     def rejections(self) -> list[tuple[Approval, float, float]]:
         """Rejections that still stand: (approval, seconds left, seconds since the
         rejection), soonest to expire first."""
         with self._lock:
             now = self._clock()
-            self._purge_expired(now)
+            self._refresh(now)
             items = sorted(
                 (a for a in self._items.values() if self._sticky(a)), key=lambda a: a.expires_at
             )
@@ -423,16 +499,26 @@ class ApprovalStore:
         if it isn't a rejection. `before_commit` (the audit) runs under the lock first;
         if it raises, nothing changes. Deleted from the database before from memory."""
         with self._lock:
-            self._purge_expired(self._clock())
+            self._refresh(self._clock())
             approval = self._items.get(approval_id)
             if approval is None:
                 raise DecideError(not_found=True)
             if approval.status is not Status.DENIED:
                 raise DecideError(not_found=False)
             before_commit(approval)
+            # With it goes any older approval of the same action it beat: otherwise
+            # lifting would bring that approval back, and nobody would be asked again.
+            gone = [approval_id] + [
+                a.approval_id
+                for a in self._items.values()
+                if a.status is Status.APPROVED
+                and a.action_hash == approval.action_hash
+                and self._superseded(a)
+            ]
             if self._db is not None:
-                self._db.delete([approval_id])
-            del self._items[approval_id]
+                self._db.delete(gone)
+            for key in gone:
+                del self._items[key]
 
     def pending_groups(self) -> list[tuple[tuple[str, str], list[tuple[Approval, float]]]]:
         """Pending approvals grouped by (agent_id, tool), groups sorted by that key,
@@ -468,7 +554,7 @@ class ApprovalStore:
             raise ValueError("one action_hash per id")
         with self._lock:
             now = self._clock()
-            self._purge_expired(now)
+            self._refresh(now)
             failed: list[tuple[str, GroupReason]] = []
             found: list[Approval] = []
             seen: set[str] = set()
@@ -487,6 +573,8 @@ class ApprovalStore:
                 if key != group:
                     failed.append((approval_id, GroupReason.MIXED))
                 elif approval.status is not Status.PENDING:
+                    if approval.status is Status.USED and not approve:
+                        self._cancel_restore(approval)
                     failed.append((approval_id, GroupReason.DECIDED))
                 elif approve and approval.arguments is None:
                     failed.append((approval_id, GroupReason.NO_ARGUMENTS))
@@ -511,12 +599,7 @@ class ApprovalStore:
                 )
                 for a in found
             ]
-            if self._db is not None:
-                self._db.save_many(updated)
-            for approval, new in zip(found, updated, strict=True):
-                approval.status = new.status
-                approval.expires_at = new.expires_at
-                approval.decided_at = new.decided_at
+            self._save(*updated)
             return found
 
     def use(
@@ -536,7 +619,7 @@ class ApprovalStore:
         second, explicit lock).
         """
         with self._lock:
-            self._purge_expired(self._clock())
+            self._refresh(self._clock())
             approval = self._items.get(approval_id)
             if approval is None:
                 return None
@@ -547,22 +630,43 @@ class ApprovalStore:
             self._recall(approval, arguments)
             status = approval.status
             if status is Status.APPROVED:
+                if self._superseded(approval):
+                    return Status.DENIED
                 # Persist "used" BEFORE granting: a crash right after can't replay it.
-                self._save(replace(approval, status=Status.USED))
-                approval.status = Status.USED
+                # Conditional: of several servers sharing the database, only one can.
+                try:
+                    self._save(replace(approval, status=Status.USED))
+                except StaleApproval:
+                    self._refresh(self._clock())
+                    current = self._items.get(approval_id)
+                    # Never an allow after losing the race, whatever it is now.
+                    if current is None or current.status is Status.APPROVED:
+                        return None
+                    return current.status
+                approval.used_revision = approval.revision
             return status
 
     def restore(self, approval_id: str) -> None:
         """Undo a use: the allow it produced was never delivered (e.g. the audit write
-        failed and the agent got deny instead), so the approval isn't spent."""
+        failed and the agent got deny instead), so the approval isn't spent.
+
+        Only the use this server made, unchanged since. A newer "no" from a human wins,
+        for this approval or for the same action under another id. On any doubt it
+        stays used: the agent asks for a new approval (fail closed)."""
         with self._lock:
-            approval = self._items.get(approval_id)
-            if approval is not None and approval.status is Status.USED:
-                try:
-                    self._save(replace(approval, status=Status.APPROVED))
-                except sqlite3.Error:
-                    return  # stays used: the agent asks for a new approval (fail closed)
-                approval.status = Status.APPROVED
+            try:
+                self._refresh(self._clock())
+                approval = self._items.get(approval_id)
+                if (
+                    approval is None
+                    or approval.status is not Status.USED
+                    or approval.used_revision != approval.revision
+                    or self._superseded(approval)
+                ):
+                    return
+                self._save(replace(approval, status=Status.APPROVED))
+            except (sqlite3.Error, StaleApproval):
+                return
 
     def consume(self, approval_id: str, action_hash: str) -> bool:
         """Use an approval. True only once, only for the exact approved action."""

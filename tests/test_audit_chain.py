@@ -1,6 +1,7 @@
 """Tamper-evident audit log: a hash chain over decisions and events, and `audit verify`."""
 
 import sqlite3
+import sys
 import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -352,3 +353,49 @@ def test_verify_opens_exactly_the_given_file(tmp_path: Path, name: str) -> None:
     sql(path, "UPDATE decisions SET reason = 'edited' WHERE id = 1")
     report = verify_chain(path)
     assert not report.ok and report.problems[0].startswith("decisions row id 1")
+
+
+@pytest.mark.parametrize(
+    ("statement", "problem"),
+    [
+        ("UPDATE decisions SET reason = x'ff00' WHERE id = 1", "decisions row id 1: contents"),
+        ("INSERT INTO audit_anchors VALUES ('decisions', 1, x'ff')", "audit_anchors: contains"),
+        ("INSERT INTO audit_anchors VALUES ('decisions', 'abc', 'x')", "audit_anchors: contains"),
+        ("INSERT INTO audit_anchors VALUES (x'ff', 1, 'x')", "audit_anchors: contains"),
+    ],
+)
+def test_values_warden_never_writes_are_reported_not_a_crash(
+    tmp_path: Path, statement: str, problem: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = tmp_path / "a.db"
+    filled(path, 2)
+    sql(path, statement)
+    assert cli.main(["audit", "verify", "--audit-db", str(path)]) == 1
+    assert f"BROKEN: {problem}" in capsys.readouterr().out
+    assert cli.main(["audit", "head", "--audit-db", str(path)]) == 1
+
+
+def test_edited_anchor_id_after_a_real_purge(tmp_path: Path) -> None:
+    path = tmp_path / "a.db"
+    clock = Clock()
+    log = SQLiteAuditLog(path, retention_days=None, clock=clock)
+    log.record(entry())
+    clock.now += timedelta(days=10)
+    log.purge_older_than(5)
+    assert verify_chain(path).ok
+    sql(path, "UPDATE audit_anchors SET last_deleted_id = 'abc'")
+    assert not verify_chain(path).ok
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX permissions")
+@pytest.mark.parametrize("action", ["verify", "head"])
+def test_database_in_a_closed_folder(
+    tmp_path: Path, action: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    closed = tmp_path / "closed"
+    closed.mkdir(mode=0o000)
+    try:
+        assert cli.main(["audit", action, "--audit-db", str(closed / "a.db")]) == 2
+    finally:
+        closed.chmod(0o700)
+    assert capsys.readouterr().err.startswith("warden: ")

@@ -26,8 +26,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from warden.audit import DEFAULT_AUDIT_PATH, DEFAULT_RETENTION_DAYS
-from warden.policy import DEFAULT_POLICY_PATH
+from warden.audit import DEFAULT_AUDIT_PATH, DEFAULT_RETENTION_DAYS, MAX_RETENTION_DAYS
+from warden.policy import DEFAULT_POLICY_PATH, replaceable_by_others
 
 DEFAULT_PORT = 8000
 MIN_ADMIN_KEY_LENGTH = 32
@@ -59,7 +59,8 @@ def unsafe_permissions(path: Path) -> str | None:
 
     The policy decides every answer, so whoever can rewrite it controls Warden: like SSH
     with key files, refuse a policy that other users can write, or that sits in a folder
-    where they could replace it (world-writable without the sticky bit, e.g. not /tmp).
+    where they could replace it (world-writable without the sticky bit, e.g. not /tmp),
+    or is reached through such a folder or a symlink in one.
     """
     if os.name != "posix":
         return None
@@ -70,7 +71,14 @@ def unsafe_permissions(path: Path) -> str | None:
     folder_mode = folder.stat().st_mode
     if folder_mode & 0o002 and not folder_mode & stat.S_ISVTX:
         return f"{path} is in {folder}, where any user can replace files; move it"
-    return None
+    return replaceable_by_others(path)  # symlinks, and every folder on the way
+
+
+def _is_file(path: Path) -> bool:
+    try:
+        return path.is_file()
+    except OSError as exc:  # e.g. a folder this user may not enter
+        raise SettingsError(f"can't read {path}: {type(exc).__name__}") from exc
 
 
 def _whole_number(name: str, raw: str) -> int:
@@ -105,10 +113,10 @@ def resolve(
     if chosen := pick(policy, "WARDEN_POLICY"):
         raw, name = chosen
         path = Path(raw)
-        if not path.is_file():
+        if not _is_file(path):
             raise SettingsError(f"{name}: policy file not found: {raw}")
         values["policy"] = path
-    elif not DEFAULT_POLICY_PATH.is_file():
+    elif not _is_file(DEFAULT_POLICY_PATH):
         raise SettingsError(
             f"no policy file at {DEFAULT_POLICY_PATH}. Create one with `warden init`, "
             "or pass --policy / set WARDEN_POLICY"
@@ -137,12 +145,16 @@ def resolve(
     if chosen := pick(retention_days, "WARDEN_RETENTION_DAYS"):
         raw, name = chosen
         days = _whole_number(name, raw)
+        if days > MAX_RETENTION_DAYS:
+            raise SettingsError(
+                f"{name} must be between 0 and {MAX_RETENTION_DAYS} (0 = keep forever), got {days}"
+            )
         values["retention_days"] = None if days == 0 else days
 
     if chosen := pick(agents, "WARDEN_AGENTS"):
         raw, name = chosen
         path = Path(raw)
-        if not path.is_file():
+        if not _is_file(path):
             raise SettingsError(
                 f"{name}: agents file not found: {raw} (create it with `warden agent add`)"
             )

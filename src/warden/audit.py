@@ -30,8 +30,8 @@ import os
 import sqlite3
 import stat
 import threading
-from collections.abc import Callable
-from contextlib import closing
+from collections.abc import Callable, Iterator
+from contextlib import closing, contextmanager
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
@@ -45,6 +45,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_AUDIT_PATH = Path("warden-audit.db")
 DEFAULT_RETENTION_DAYS = 90  # None = keep everything forever
+MAX_RETENTION_DAYS = 36_500  # 100 years: far more overflows the calendar, so purges fail
 PURGE_INTERVAL = timedelta(days=1)
 
 
@@ -275,6 +276,14 @@ def _make_private(path: Path) -> None:
         logger.warning("audit log %s was readable by others; restricted it to you (600)", path)
 
 
+def _check_days(days: int) -> None:
+    if type(days) is not int or not 1 <= days <= MAX_RETENTION_DAYS:
+        raise ValueError(
+            f"retention must be a whole number of days >= 1 and <= {MAX_RETENTION_DAYS}, "
+            "or None (forever)"
+        )
+
+
 class SQLiteAuditLog:
     """Audit log stored in a local SQLite file (standard library, no extra dependency).
 
@@ -288,12 +297,8 @@ class SQLiteAuditLog:
         retention_days: int | None = DEFAULT_RETENTION_DAYS,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
-        if retention_days is not None and (
-            not isinstance(retention_days, int)
-            or isinstance(retention_days, bool)
-            or retention_days < 1
-        ):
-            raise ValueError("retention_days must be a whole number of days >= 1, or None")
+        if retention_days is not None:
+            _check_days(retention_days)
         self.path = path
         self.retention_days = retention_days
         self._clock = clock
@@ -394,6 +399,7 @@ class SQLiteAuditLog:
         The deletion and an AUDIT_PURGED event explaining it are written in one
         transaction: history never disappears without a record saying why.
         """
+        _check_days(days)
         now = self._clock()
         cutoff = (now - timedelta(days=days)).isoformat()
         with closing(self._write()) as conn, conn:
@@ -554,29 +560,57 @@ class ChainReport(BaseModel):
         return not self.problems
 
 
-def verify_chain(path: Path) -> ChainReport:
-    """Recompute every hash. Reports the FIRST broken row of each table. Read-only."""
+@contextmanager
+def read_snapshot(path: Path) -> Iterator[sqlite3.Connection]:
+    """A read-only connection that sees ONE moment of the log until it's closed.
+
+    Without the transaction, every SELECT would see the latest state: a retention purge
+    between two of them made an honest log look tampered with. Writers wait meanwhile
+    (as they already did while a single table was read).
+    """
     # as_uri() percent-encodes "?", "#" and "%": pasting the raw path into the URI
     # would make SQLite open a DIFFERENT file (e.g. "audit#1.db" -> "audit").
     uri = f"{path.resolve().as_uri()}?mode=ro"
+    with closing(sqlite3.connect(uri, uri=True, timeout=5)) as conn:  # mutation-ok: timeout
+        conn.execute("BEGIN")  # the snapshot starts at the first read and ends with close()
+        yield conn
+
+
+def verify_chain(path: Path) -> ChainReport:
+    """Recompute every hash. Reports the FIRST broken row of each table. Read-only."""
+    with read_snapshot(path) as conn:
+        return verify_snapshot(conn)
+
+
+def verify_snapshot(conn: sqlite3.Connection) -> ChainReport:
+    """Same, on an open read_snapshot(), to read more from the state that was verified."""
     checked: dict[str, int] = {}
     unchained: dict[str, int] = {}
     heads: dict[str, str] = {}
     problems: list[str] = []
-    with closing(sqlite3.connect(uri, uri=True, timeout=5)) as conn:  # mutation-ok: timeout
-        anchors = dict(
-            conn.execute("SELECT table_name, last_deleted_hash FROM audit_anchors").fetchall()
+    anchors, anchors_ok = _read_anchors(conn)
+    if not anchors_ok:
+        problems.append("audit_anchors: contains values Warden never writes (edited?)")
+    old_rows = _unchained_limits(conn)
+    for table in _TABLES:
+        count, legacy, head, problem = _verify_table(
+            conn, table, anchors.get(table), old_rows.get(table, 0)
         )
-        old_rows = _unchained_limits(conn)
-        for table in _TABLES:
-            count, legacy, head, problem = _verify_table(
-                conn, table, anchors.get(table), old_rows.get(table, 0)
-            )
-            checked[table], unchained[table], heads[table] = count, legacy, head
-            if problem:
-                problems.append(problem)
-        problems += _verify_anchors(conn, anchors)
+        checked[table], unchained[table], heads[table] = count, legacy, head
+        if problem:
+            problems.append(problem)
+    problems += _verify_anchors(conn, anchors)
     return ChainReport(checked=checked, unchained=unchained, heads=heads, problems=problems)
+
+
+def _read_anchors(conn: sqlite3.Connection) -> tuple[dict[str, str], bool]:
+    """Last deleted hash per table, and whether every anchor has the right types (SQLite
+    columns accept any type, so an edited database can hold anything here)."""
+    rows = conn.execute(
+        "SELECT table_name, last_deleted_id, last_deleted_hash FROM audit_anchors"
+    ).fetchall()
+    good = {t: h for t, i, h in rows if type(t) is str and type(i) is int and type(h) is str}
+    return good, len(good) == len(rows)
 
 
 def _unchained_limits(conn: sqlite3.Connection) -> dict[str, int]:
@@ -617,7 +651,11 @@ def _verify_table(
         if prev != expected:
             return checked, legacy, expected, f"{where}: doesn't follow the previous row "
             "(a row before it was deleted, inserted or edited)"
-        if row_hash(table, row_id, prev, values) != stored:
+        try:
+            actual = row_hash(table, row_id, prev, values)
+        except (TypeError, ValueError):  # e.g. a BLOB: a value Warden never writes
+            actual = None
+        if actual != stored:
             return checked, legacy, expected, f"{where}: contents changed after writing"
         chained = True
         checked += 1

@@ -44,16 +44,19 @@ is backed by code and tests, and what it leaves open. Short version: [SECURITY.m
 | Get an action approved blind (an id from an agent's message, a stale list) (A1) | Approving, or rejecting a pending approval, needs the `action_hash` from the list; approving across separate runs warns, and `--yes` needs `--across-runs` | `tests/test_required_action_hash.py`, `tests/test_approval_hygiene.py` |
 | Keep asking until a human gives in (A1) | A rejected or revoked action stays refused for `rejection_window_seconds` (default 15 min); only an admin can lift it | `tests/test_sticky_rejections.py` |
 | Mislead the approver with hidden characters (A1) | Escaped display + warnings | `tests/test_approval_display.py` |
-| Checked ≠ executed (A1) | SDK and proxy run exactly the checked object; proxy forwards re-encoded JSON, refuses extra params, batches, unknown methods | `tests/test_sdk.py`, `tests/test_mcp_proxy.py`, fuzz target `proxy` |
+| Checked ≠ executed (A1) | SDK and proxy run exactly the checked object; proxy forwards re-encoded JSON, refuses extra params and top-level keys, reused ids, batches, unknown methods | `tests/test_sdk.py`, `tests/test_mcp_proxy.py`, `tests/test_mcp_proxy_messages.py`, `tests/test_mcp_proxy_request_ids.py`, fuzz target `proxy` |
 | Pretend to be another agent (A1, A2) | Agent tokens (`--agents`): id from a secret, hashes only, constant-time lookup | `tests/test_agent_tokens.py` |
 | Use another agent's permissions (A1) | Per-agent rules (`agents`) need tokens: `serve` refuses a per-agent rule without `--agents` or with an unknown name; most restrictive still wins | `tests/test_per_agent_rules.py` |
 | Flood Warden (A1) | 64 KB bodies; per-agent rate limits and pending-approval caps; capped rejection logging | `tests/test_rate_limits.py`, `tests/test_rejection_rate_limit.py` |
 | Freeze the server via a locked DB (A2) | Rejection records written in the background | `tests/test_locked_database.py` |
 | DNS rebinding from a browser (A6) | `Host` header must be loopback | `tests/test_host_check.py` |
-| Rewrite the policy (A2) | `serve` refuses group/world-writable policy and agents files | `tests/test_policy_permissions.py` |
+| Rewrite the policy (A2) | `serve` refuses group/world-writable policy and agents files, and paths whose symlinks or folders other users can replace | `tests/test_policy_permissions.py` |
 | Edit audit history (A3) | Hash chain; `audit verify`; checkpoints kept elsewhere catch full rewrites and a cut end | `tests/test_audit_chain.py`, `tests/test_audit_checkpoint.py` |
 | Policy typos that silently disable rules (A4) | Invisible/edge-space rule values fail to load; `warden check` warnings W001–W017; `warden test` | `tests/test_policy_typos.py`, `tests/test_check.py`, `tests/test_policy_tests.py` |
-| Leak secrets through Warden (A1) | Arguments never logged or stored; errors never echo input | `tests/test_hardening.py`, `tests/test_http_errors.py` |
+| Leak secrets through Warden (A1) | Arguments never logged or stored (crashes log only the error type); errors never echo input | `tests/test_hardening.py`, `tests/test_http_errors.py`, `tests/test_crash_logging.py` |
+| Redirect a client to steal its token (A2) | Clients refuse every redirect | `tests/test_client_redirects.py` |
+| Dodge a deny rule with invisible characters (A1) | Default-ignorable characters count as hidden everywhere | `tests/test_default_ignorable.py` |
+| Use one approval on two servers, or undo a newer "no" (A1) | Revision-checked updates; the database is the truth | `tests/test_shared_approvals_database.py`, `tests/test_restore_vs_rejection.py` |
 | Crash Warden into allowing (A1) | Every error path returns deny | `tests/test_http_errors.py`, fuzz target `http` |
 
 ## What stays open (residual risk)

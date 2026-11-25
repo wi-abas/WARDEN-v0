@@ -11,11 +11,12 @@ The URL must point at this machine (127.0.0.1, localhost or ::1): Warden only li
 locally, and tool arguments may contain secrets that must never go anywhere else.
 """
 
+import http.client
 import json
 import re
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -32,14 +33,22 @@ MAX_RESPONSE_BYTES = 64 * 1024
 MAX_REQUEST_BYTES = 64 * 1024
 
 
+class _NoRedirects(urllib.request.HTTPRedirectHandler):
+    """Refuse every redirect: urllib would follow it to any host and send the agent
+    token or admin key along. Returning None makes urllib raise HTTPError (a deny)."""
+
+    def redirect_request(self, *args: Any, **kwargs: Any) -> None:
+        return None
+
+
 # Never through a proxy: urllib follows HTTP_PROXY / http_proxy even for 127.0.0.1, which
 # would send tool arguments (and the admin key, for `warden approvals`) to the proxy and
 # make us trust ITS answer. An empty ProxyHandler turns proxies off for this opener.
-_LOCAL_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+_LOCAL_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirects())
 
 
 def open_local(request: urllib.request.Request, timeout: float) -> Any:
-    """urlopen() for Warden's own local URL, ignoring every proxy setting."""
+    """urlopen() for Warden's own local URL: no proxies, no redirects."""
     return _LOCAL_OPENER.open(request, timeout=timeout)
 
 
@@ -58,6 +67,9 @@ class Answer:
     # Set when Warden said "too many requests" (HTTP 429): seconds to wait before
     # asking again. Always a deny; only polling loops use it to keep waiting.
     retry_after: float | None = None
+    # Set when no answer came back (connection refused or lost, timeout: e.g. Warden is
+    # restarting). Always a deny; only a wait for a human may ask again.
+    unreachable: bool = field(default=False, compare=False)
 
     @property
     def allowed(self) -> bool:
@@ -107,7 +119,12 @@ def parse_answer(data: Any) -> Answer:
 
 
 class WardenClient:
-    """Asks a local Warden server for decisions. Never raises from `evaluate`."""
+    """Asks a local Warden server for decisions. Never raises from `evaluate`.
+
+    With a `token`, the agent id comes from the token and `agent_id` is NOT used, not
+    even if you give both: the proxy and the SDK always have an agent_id (a default or
+    from the environment), so both together is normal, and Warden decides who a token
+    belongs to anyway. `repr(client)` shows which one counts."""
 
     def __init__(
         self,
@@ -126,7 +143,8 @@ class WardenClient:
 
     def __repr__(self) -> str:  # never show the token
         token = "<set>" if self._token else None
-        return f"WardenClient(url={self.url!r}, agent_id={self.agent_id!r}, token={token})"
+        agent = repr(self.agent_id) if self._token is None else "<from token>"
+        return f"WardenClient(url={self.url!r}, agent_id={agent}, token={token})"
 
     def evaluate(
         self,
@@ -137,6 +155,8 @@ class WardenClient:
         """Ask about one tool call. Any failure is a DENY answer, never an exception."""
         try:
             return self._evaluate(tool, arguments, approval_id)
+        except (OSError, http.client.HTTPException):
+            return Answer(Decision.DENY, "Warden unreachable", unreachable=True)
         except Exception:
             # Don't include the error text: it could quote the arguments.
             return _deny("Warden unreachable")

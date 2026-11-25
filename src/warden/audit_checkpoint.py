@@ -33,7 +33,6 @@ Read-only. See docs/threat-model.md for what this does and doesn't protect.
 import json
 import sqlite3
 import sys
-from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -41,7 +40,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from warden.audit import GENESIS_HASH, verify_chain
+from warden.audit import GENESIS_HASH, read_snapshot, verify_snapshot
 from warden.policy import DuplicateKeyError, no_duplicate_keys
 
 CHECKPOINT_VERSION: Literal["warden-audit-checkpoint-v1"] = "warden-audit-checkpoint-v1"
@@ -72,26 +71,24 @@ class CheckpointError(Exception):
     """The log or the checkpoint file can't be used; the message says why."""
 
 
-def _uri(path: Path) -> str:
-    # Same as verify_chain: as_uri() escapes "?", "#" and "%" so SQLite opens THIS file.
-    return f"{path.resolve().as_uri()}?mode=ro"
-
-
 def _anchors(conn: sqlite3.Connection) -> dict[str, tuple[int, str]]:
     rows = conn.execute(
         "SELECT table_name, last_deleted_id, last_deleted_hash FROM audit_anchors"
     ).fetchall()
-    return {str(t): (int(i), str(h)) for t, i, h in rows}
+    try:
+        return {str(t): (int(i), str(h)) for t, i, h in rows}
+    except ValueError as exc:  # pragma: no cover - verify_chain already refused it
+        raise CheckpointError("audit_anchors contains invalid values (edited?)") from exc
 
 
 def make_checkpoint(path: Path, now: datetime | None = None) -> Checkpoint:
     """The newest id and hash per table. Refuses a log whose chain is already broken:
     saving the head of a tampered log would bless the tampering."""
-    report = verify_chain(path)
-    if not report.ok:
-        raise CheckpointError("the hash chain is broken: " + "; ".join(report.problems))
     heads: dict[Table, Head] = {}
-    with closing(sqlite3.connect(_uri(path), uri=True, timeout=5)) as conn:  # mutation-ok: timeout
+    with read_snapshot(path) as conn:
+        report = verify_snapshot(conn)
+        if not report.ok:
+            raise CheckpointError("the hash chain is broken: " + "; ".join(report.problems))
         anchors = _anchors(conn)
         for table in TABLES:
             head = report.heads[table]
@@ -105,7 +102,7 @@ def make_checkpoint(path: Path, now: datetime | None = None) -> Checkpoint:
                 row_id = anchors[table][0]  # everything was purged; the anchor is the head
             elif head == GENESIS_HASH:
                 row_id = 0
-            else:  # pragma: no cover - a write landed between verify and this read
+            else:  # pragma: no cover - impossible in one snapshot
                 raise CheckpointError("the log changed while reading it; try again")
             heads[table] = Head(id=row_id, hash=head)
     created = (now or datetime.now(UTC)).isoformat(timespec="seconds")
@@ -149,7 +146,7 @@ def check_checkpoints(path: Path, checkpoints: list[Checkpoint]) -> CheckResult:
     newest = {t: max(c.heads[t].id for c in checkpoints) for t in TABLES}
     problems: list[str] = []
     skipped = 0
-    with closing(sqlite3.connect(_uri(path), uri=True, timeout=5)) as conn:  # mutation-ok: timeout
+    with read_snapshot(path) as conn:
         anchors = _anchors(conn)
         for number, checkpoint in enumerate(checkpoints, start=1):
             for table, head in sorted(checkpoint.heads.items()):
@@ -199,12 +196,12 @@ def to_line(checkpoint: Checkpoint) -> str:
 
 def run_head(path: Path) -> int:
     """`warden audit head`: print one checkpoint line. 0 ok, 1 chain broken, 2 can't read."""
-    if not path.is_file():
-        print(f"warden: no audit database at {path}", file=sys.stderr)
-        return 2
     try:
+        if not path.is_file():
+            print(f"warden: no audit database at {path}", file=sys.stderr)
+            return 2
         checkpoint = make_checkpoint(path)
-    except sqlite3.Error as exc:
+    except (sqlite3.Error, OSError) as exc:
         print(f"warden: can't read {path}: {type(exc).__name__}", file=sys.stderr)
         return 2
     except CheckpointError as exc:

@@ -716,14 +716,19 @@ def test_cli_builds_config_from_file_and_flags(
 
 
 def test_calls_in_flight_are_answered_after_client_closes_input(tmp_path: Path) -> None:
-    warden = FakeWarden({"echo": [pending(), pending(), ALLOW]})
+    """Calls Warden allows still run. A call that needs an approval gets a refusal: an
+    approval after the client left must not run it (tests/test_mcp_proxy_disconnect.py)."""
+    warden = FakeWarden({"echo": [ALLOW], "send": [pending(), pending(), ALLOW]})
 
     async def script(s: Session) -> None:
-        s.send(call("echo", {"a": 1}))  # then the client closes stdin at once
+        s.send(call("echo", {"a": 1}))
+        s.send(call("send", {}, request_id=2))  # then the client closes stdin at once
 
     session, _ = run_session(make_config(tmp_path), warden, script)
-    reply = session.outbox.get_nowait()
-    assert echoed(reply)["arguments"] == {"a": 1}
+    replies = {r["id"]: r for r in (session.outbox.get_nowait(), session.outbox.get_nowait())}
+    assert echoed(replies[1])["arguments"] == {"a": 1}
+    assert replies[2]["result"]["isError"] is True
+    assert [c["params"]["name"] for c in calls_seen(session)] == ["echo"]
 
 
 def test_server_line_too_long_stops_the_session(

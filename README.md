@@ -99,6 +99,18 @@ The arguments are frozen before the check and the function receives exactly what
 checked, so changing them afterwards has no effect. Warden down means not allowed.
 `require_approval` raises `ApprovalPending` (or waits, with `wait_for_approval`).
 
+While it waits:
+
+- **Timeout**: if nobody decides in time, the tool doesn't run.
+- **Cancel** (`async def` tools): cancelling stops the waiting, and an approval given later
+  stays unused. If you cancel at the exact moment a question is on its way to Warden, the
+  approval may be used up without the tool running; ask a human again. It never runs twice.
+- **Warden restarts**: the SDK and the MCP proxy keep asking until the timeout. A pending
+  approval can be approved again once the agent's next question has brought its arguments
+  back.
+- **MCP client disconnects**: the proxy refuses the waiting call, and a later approval
+  doesn't run it. The approval itself stays valid until it expires.
+
 A few more things the SDK does (all in `warden.sdk`):
 
 ```python
@@ -136,13 +148,22 @@ only:
 import json, urllib.request
 
 
+class NoRedirects(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args):
+        return None
+
+
+# Arguments may hold secrets: no proxies, no redirects.
+opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirects())
+
+
 def ask_warden(tool: str, arguments: dict) -> dict:
     body = json.dumps({"agent_id": "my-agent", "tool": tool, "arguments": arguments})
     request = urllib.request.Request(
         "http://127.0.0.1:8000/v1/evaluate", body.encode(), {"content-type": "application/json"}
     )
     try:
-        with urllib.request.urlopen(request, timeout=5) as response:
+        with opener.open(request, timeout=5) as response:
             return json.load(response)
     except Exception:
         return {"decision": "deny", "reason": "Warden unreachable"}  # fail closed

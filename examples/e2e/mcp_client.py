@@ -220,7 +220,7 @@ def main_phase() -> None:
     }
     check("mcp: jsonrpc 1.0 refused (-32600)", error_code(proxy.ask(old, None)) == -32600)
     shaped = {**call(27, "run_cmd", {}), "result": {}}
-    check("mcp: response-shaped tools/call blocked", blocked(proxy.ask(shaped, 27)))
+    check("mcp: response-shaped tools/call refused", error_code(proxy.ask(shaped, 27)) == -32600)
     huge = call(28, "read_file", {"path": "/workspace/a", "x": "A" * 2_000_000})
     reply = proxy.ask(huge, 28)
     check("mcp: 2 MB call not run", reply is not None and not ran(reply), text(reply))
