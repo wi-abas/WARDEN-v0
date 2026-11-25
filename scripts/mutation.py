@@ -95,6 +95,7 @@ TARGETS: dict[str, list[str]] = {
         "test_approval_wait_deadline.py",
     ],
     "fingerprint": ["test_fingerprint.py"],
+    "identity": ["test_identity.py"],
     "api": [
         "test_api.py",
         "test_hardening.py",
