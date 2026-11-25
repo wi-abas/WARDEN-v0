@@ -32,7 +32,9 @@ send_invoice(to="acme", amount=200)  # runs only if Warden says allow
   (a human may already have approved this exact action). Then it either raises
   `ApprovalPending` (default) or polls until allow / deny / timeout
   (`wait_for_approval=seconds`).
-- `async def` tools are supported; the HTTP call runs in a thread.
+- `async def` tools are supported; each HTTP call runs in a thread. The wait between
+  polls doesn't, so calls waiting for a human don't fill the thread pool, and cancelling
+  the call stops the polling (a later approval stays unused).
 - `run_guarded(tool, arguments, fn)` does the same without a decorator.
 
 ## Threat model
@@ -48,3 +50,6 @@ threads), Warden outages, approval mix-ups (the approval is bound to the frozen 
 - Positional-only and `*args` parameters: refused at decoration time (they can't be
   named for the policy).
 - Tools receive JSON-shaped copies: tuples arrive as lists, dict keys as strings.
+- Cancelling an async call exactly while a question is on its way to Warden: the answer
+  may use up the approval although the tool doesn't run. Giving it back isn't safe (the
+  client can't know what happened), so a human must approve again. It never runs twice.

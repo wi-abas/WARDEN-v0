@@ -21,7 +21,7 @@ import json
 import os
 import re
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Generator
 from typing import Any, cast
 
 from pydantic import JsonValue
@@ -96,15 +96,26 @@ def _final(answer: Answer) -> None:
     raise NotAllowed(answer)
 
 
-def _decide(
-    client: WardenClient,
-    tool: str,
-    arguments: dict[str, JsonValue],
-    wait_for_approval: float,
-    poll_seconds: float,
-    sleep: Callable[[float], None] = time.sleep,
-) -> Answer:
-    answer = client.evaluate(tool, arguments)
+@dataclasses.dataclass(frozen=True)
+class _Ask:
+    """Step: ask Warden (with this approval id) and send the answer back in."""
+
+    approval_id: str | None = None
+
+
+@dataclasses.dataclass(frozen=True)
+class _Sleep:
+    """Step: wait this long."""
+
+    seconds: float
+
+
+def _steps(
+    wait_for_approval: float, poll_seconds: float
+) -> Generator[_Ask | _Sleep, Answer | None, Answer]:
+    """When to ask and when to wait, without doing either: the sync and the async
+    version share this, and differ only in HOW they ask and wait."""
+    answer = yield from _ask(None)
     if answer.decision is not Decision.REQUIRE_APPROVAL:
         return answer
     approval_id = answer.approval_id
@@ -113,15 +124,64 @@ def _decide(
     why = answer.reason  # the rule's message: why a human must approve
     deadline = time.monotonic() + wait_for_approval
     # The first re-ask is immediate: a human may already have approved this exact action.
-    answer = client.evaluate(tool, arguments, approval_id)
+    answer = yield from _ask(approval_id)
     while _still_waiting(answer) and time.monotonic() < deadline:
         # Rate limited while polling: back off, keep waiting (it's still not an allow).
-        sleep(max(poll_seconds, answer.retry_after or 0.0))
-        answer = client.evaluate(tool, arguments, approval_id)
+        yield _Sleep(max(poll_seconds, answer.retry_after or 0.0))
+        answer = yield from _ask(approval_id)
     if answer.decision is Decision.REQUIRE_APPROVAL and answer.reason != why:
         # Re-asks only say "waiting for a human to approve": keep the rule's reason too.
         answer = dataclasses.replace(answer, reason=f"{why} ({answer.reason})")
     return answer
+
+
+def _ask(approval_id: str | None) -> Generator[_Ask, Answer | None, Answer]:
+    answer = yield _Ask(approval_id)
+    return answer or Answer(Decision.DENY, "no answer from Warden")
+
+
+def _decide(
+    client: WardenClient,
+    tool: str,
+    arguments: dict[str, JsonValue],
+    wait_for_approval: float,
+    poll_seconds: float,
+) -> Answer:
+    steps = _steps(wait_for_approval, poll_seconds)
+    answer: Answer | None = None
+    while True:
+        try:
+            step = steps.send(answer)
+        except StopIteration as done:
+            return cast(Answer, done.value)
+        answer = None
+        if isinstance(step, _Ask):
+            answer = client.evaluate(tool, arguments, step.approval_id)
+        else:
+            time.sleep(step.seconds)
+
+
+async def _decide_async(
+    client: WardenClient,
+    tool: str,
+    arguments: dict[str, JsonValue],
+    wait_for_approval: float,
+    poll_seconds: float,
+) -> Answer:
+    """Each question runs in a thread; waiting between them does not, so waiting calls
+    don't use up the thread pool, and cancelling stops the questions."""
+    steps = _steps(wait_for_approval, poll_seconds)
+    answer: Answer | None = None
+    while True:
+        try:
+            step = steps.send(answer)
+        except StopIteration as done:
+            return cast(Answer, done.value)
+        answer = None
+        if isinstance(step, _Ask):
+            answer = await asyncio.to_thread(client.evaluate, tool, arguments, step.approval_id)
+        else:
+            await asyncio.sleep(step.seconds)
 
 
 def _still_waiting(answer: Answer) -> bool:
@@ -155,13 +215,17 @@ async def run_guarded_async[R](
     wait_for_approval: float = 0,
     poll_seconds: float = 2.0,
 ) -> R:
-    """Like run_guarded, for `async def` tools. Never blocks the event loop."""
+    """Like run_guarded, for `async def` tools. Never blocks the event loop.
+
+    Cancelling it while it waits stops the polling, so a later approval stays unused. If
+    it is cancelled exactly while a question is on its way to Warden, that question may
+    still use up the approval although the tool doesn't run: a human must approve again
+    (it never runs twice)."""
     frozen = freeze(arguments)
     if frozen is None:
         raise _refused("arguments are not plain JSON values, so they can't be checked")
     client = client or default_client()
-    answer = await asyncio.to_thread(_decide, client, tool, frozen, wait_for_approval, poll_seconds)
-    _final(answer)
+    _final(await _decide_async(client, tool, frozen, wait_for_approval, poll_seconds))
     return await fn(**frozen)
 
 
