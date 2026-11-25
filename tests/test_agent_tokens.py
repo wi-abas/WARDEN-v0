@@ -5,6 +5,7 @@ import json
 import os
 import secrets
 import stat
+import sys
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -368,3 +369,21 @@ def test_cli_agent_uses_warden_agents(
     monkeypatch.setenv("WARDEN_AGENTS", "")  # empty = not set, as everywhere else
     assert cli.main(["agent", "add", "third"]) == 0
     assert load_agents(tmp_path / "warden-agents.json").agent_ids == ["third"]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX permissions")
+@pytest.mark.parametrize("action", [["list"], ["add", "x"], ["remove", "x"]])
+def test_cli_agent_unusable_file_is_a_clear_error(
+    tmp_path: Path, action: list[str], capsys: pytest.CaptureFixture[str]
+) -> None:
+    closed = tmp_path / "closed"
+    closed.mkdir(mode=0o000)
+    try:
+        assert cli.main(["agent", *action, "--agents", str(closed / "a.json")]) == 2
+    finally:
+        closed.chmod(0o700)
+    out = capsys.readouterr()
+    assert out.err.startswith("warden: ") and out.out == ""  # no token for a failed add
+    missing = str(tmp_path / "no-such-folder" / "a.json")
+    assert cli.main(["agent", "add", "x", "--agents", missing]) == 2
+    assert capsys.readouterr().out == ""

@@ -81,7 +81,10 @@ def _anchors(conn: sqlite3.Connection) -> dict[str, tuple[int, str]]:
     rows = conn.execute(
         "SELECT table_name, last_deleted_id, last_deleted_hash FROM audit_anchors"
     ).fetchall()
-    return {str(t): (int(i), str(h)) for t, i, h in rows}
+    try:
+        return {str(t): (int(i), str(h)) for t, i, h in rows}
+    except ValueError as exc:  # pragma: no cover - verify_chain already refused it
+        raise CheckpointError("audit_anchors contains invalid values (edited?)") from exc
 
 
 def make_checkpoint(path: Path, now: datetime | None = None) -> Checkpoint:
@@ -199,12 +202,12 @@ def to_line(checkpoint: Checkpoint) -> str:
 
 def run_head(path: Path) -> int:
     """`warden audit head`: print one checkpoint line. 0 ok, 1 chain broken, 2 can't read."""
-    if not path.is_file():
-        print(f"warden: no audit database at {path}", file=sys.stderr)
-        return 2
     try:
+        if not path.is_file():
+            print(f"warden: no audit database at {path}", file=sys.stderr)
+            return 2
         checkpoint = make_checkpoint(path)
-    except sqlite3.Error as exc:
+    except (sqlite3.Error, OSError) as exc:
         print(f"warden: can't read {path}: {type(exc).__name__}", file=sys.stderr)
         return 2
     except CheckpointError as exc:

@@ -564,9 +564,9 @@ def verify_chain(path: Path) -> ChainReport:
     heads: dict[str, str] = {}
     problems: list[str] = []
     with closing(sqlite3.connect(uri, uri=True, timeout=5)) as conn:  # mutation-ok: timeout
-        anchors = dict(
-            conn.execute("SELECT table_name, last_deleted_hash FROM audit_anchors").fetchall()
-        )
+        anchors, anchors_ok = _read_anchors(conn)
+        if not anchors_ok:
+            problems.append("audit_anchors: contains values Warden never writes (edited?)")
         old_rows = _unchained_limits(conn)
         for table in _TABLES:
             count, legacy, head, problem = _verify_table(
@@ -577,6 +577,16 @@ def verify_chain(path: Path) -> ChainReport:
                 problems.append(problem)
         problems += _verify_anchors(conn, anchors)
     return ChainReport(checked=checked, unchained=unchained, heads=heads, problems=problems)
+
+
+def _read_anchors(conn: sqlite3.Connection) -> tuple[dict[str, str], bool]:
+    """Last deleted hash per table, and whether every anchor has the right types (SQLite
+    columns accept any type, so an edited database can hold anything here)."""
+    rows = conn.execute(
+        "SELECT table_name, last_deleted_id, last_deleted_hash FROM audit_anchors"
+    ).fetchall()
+    good = {t: h for t, i, h in rows if type(t) is str and type(i) is int and type(h) is str}
+    return good, len(good) == len(rows)
 
 
 def _unchained_limits(conn: sqlite3.Connection) -> dict[str, int]:
@@ -617,7 +627,11 @@ def _verify_table(
         if prev != expected:
             return checked, legacy, expected, f"{where}: doesn't follow the previous row "
             "(a row before it was deleted, inserted or edited)"
-        if row_hash(table, row_id, prev, values) != stored:
+        try:
+            actual = row_hash(table, row_id, prev, values)
+        except (TypeError, ValueError):  # e.g. a BLOB: a value Warden never writes
+            actual = None
+        if actual != stored:
             return checked, legacy, expected, f"{where}: contents changed after writing"
         chained = True
         checked += 1

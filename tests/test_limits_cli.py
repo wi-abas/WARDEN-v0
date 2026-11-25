@@ -3,6 +3,7 @@
 import json
 import os
 import stat
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -280,3 +281,46 @@ def test_reset_without_a_rejection_window_says_nothing_about_it(tmp_path: Path) 
     path = write(tmp_path)
     change(path, None, pending=7)
     assert "kept" not in change(path, None, reset=True)
+
+
+@pytest.mark.parametrize("raw", [b"\xff{}", b'{"rules": [], "x": ' + b"9" * 5000 + b"}"])
+@pytest.mark.parametrize("action", [[], ["set", "--pending", "1"], ["reset"]])
+def test_unreadable_policy_text_is_a_clear_error(
+    tmp_path: Path, raw: bytes, action: list[str], capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = tmp_path / "policy.json"
+    path.write_bytes(raw)
+    assert main(["limits", "--policy", str(path), *action]) == 2
+    assert capsys.readouterr().err.startswith("warden: ")
+    assert path.read_bytes() == raw
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX permissions")
+@pytest.mark.parametrize("mode", [0o500, 0o000])
+def test_folder_without_access_is_a_clear_error(
+    tmp_path: Path, mode: int, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = write(tmp_path)
+    before = path.read_text()
+    tmp_path.chmod(mode)
+    try:
+        assert main(["limits", "--policy", str(path), "set", "--pending", "1"]) == 2
+    finally:
+        tmp_path.chmod(0o700)
+    assert "PermissionError" in capsys.readouterr().err
+    assert path.read_text() == before and [p.name for p in tmp_path.iterdir()] == ["policy.json"]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX permissions")
+def test_agents_file_in_a_closed_folder_only_warns(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = write(tmp_path)
+    closed = tmp_path / "closed"
+    closed.mkdir(mode=0o000)
+    flags = ["set", "--agent", "a", "--pending", "1", "--agents", str(closed / "a.json")]
+    try:
+        assert main(["limits", "--policy", str(path), *flags]) == 0
+    finally:
+        closed.chmod(0o700)
+    assert "warning: " in capsys.readouterr().err

@@ -27,7 +27,7 @@ from pydantic import ValidationError
 from warden.agents import DEFAULT_AGENTS_PATH, AgentsError, read_agents_file
 from warden.check import check_policy
 from warden.limits import Limits
-from warden.policy import DuplicateKeyError, describe_errors, no_duplicate_keys, parse_policy
+from warden.policy import describe_errors, no_duplicate_keys, parse_policy
 
 
 class LimitsEditError(Exception):
@@ -35,16 +35,16 @@ class LimitsEditError(Exception):
 
 
 def _read(path: Path) -> dict[str, Any]:
-    if path.is_symlink():
-        raise LimitsEditError(f"{path} is a symlink; edit the file it points to")
     try:
+        if path.is_symlink():
+            raise LimitsEditError(f"{path} is a symlink; edit the file it points to")
         raw = path.read_text(encoding="utf-8")
-    except OSError as exc:
+    except (OSError, UnicodeDecodeError) as exc:
         raise LimitsEditError(f"can't read {path}: {type(exc).__name__}") from exc
     try:
         data = json.loads(raw, object_pairs_hook=no_duplicate_keys)
         parse_policy(raw)
-    except (json.JSONDecodeError, RecursionError, DuplicateKeyError, ValidationError) as exc:
+    except (ValueError, RecursionError) as exc:  # bad JSON, duplicate keys, not a policy
         raise LimitsEditError(f"{path} is invalid; fix it first (warden check {path})") from exc
     if not isinstance(data, dict):  # pragma: no cover - parse_policy already refused it
         raise LimitsEditError(f"{path} is invalid")
@@ -152,7 +152,11 @@ def agent_warning(agent: str, agents_path: Path | None, already_limited: bool) -
     only a NEW entry gets a reminder to check the spelling. A warning, not a refusal:
     setting limits before `warden agent add` is legitimate and loosens nothing."""
     path = agents_path or Path(os.environ.get("WARDEN_AGENTS") or DEFAULT_AGENTS_PATH)
-    if not path.exists():
+    try:
+        exists = path.exists()
+    except OSError as exc:
+        return f"warning: can't check agent {agent!r}: can't read {path} ({type(exc).__name__})"
+    if not exists:
         if already_limited:
             return None
         return (
@@ -193,6 +197,9 @@ def run(args: argparse.Namespace) -> int:
         )
     except LimitsEditError as exc:
         print(f"warden: {exc}", file=sys.stderr)
+        return 2
+    except OSError as exc:  # e.g. a folder Warden may not write to; nothing was replaced
+        print(f"warden: can't use {args.policy}: {type(exc).__name__}", file=sys.stderr)
         return 2
     if warning:
         print(warning, file=sys.stderr)
