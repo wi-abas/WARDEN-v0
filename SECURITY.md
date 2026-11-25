@@ -45,8 +45,9 @@ Assuming the agent runtime calls Warden and obeys the answer:
   escaped in the approval list; two argument names never display the same.
 - **Parser tricks**: request bodies that repeat a JSON key are refused, so Warden and the
   tool can't read different values.
-- **A writable policy**: `warden serve` refuses a policy file other users could change
-  (same for the agents file).
+- **A writable policy**: `warden serve` refuses a policy or agents file that its group or
+  other users can write, that another non-root user owns, or that is reached through a
+  folder or symlink they could replace. ACLs aren't checked, and only startup is.
 - **Agent impersonation** (with `--agents`): the agent id comes from a token; only hashes
   are stored; lookups are constant-time; one agent can't use another's approval.
 - **Flooding by one agent**: per-agent rate limits and pending-approval caps.
@@ -109,7 +110,16 @@ Assuming the agent runtime calls Warden and obeys the answer:
 - **Whoever can edit the audit database.** The hash chain shows edits, but someone who
   rewrites every later hash too (or cuts off the newest rows) is only caught by comparing
   with checkpoints kept elsewhere (`warden audit head`, `warden audit verify --expect`). They can also change approval state
-  stored in the same file.
+  stored in the same file. A trigger can't make Warden allow without a record, but one
+  added and removed again leaves no trace.
+- **Text read differently by the tool.** Email rules don't decode MIME encoded-words
+  (`=?utf-8?q?...?=@x.com`) or refuse local parts starting with `-` or `|`. URL rules refuse
+  known disguised dot segments but don't decode URLs. `..` is refused for `startswith` and
+  for rule values containing `/`; other text comparisons don't interpret paths, so denying
+  exactly `.env` doesn't stop `./.env`.
+- **Floods without a valid token.** Invalid requests count toward a budget only with a valid
+  agent token; others, and 411/413 refusals, are not rate limited.
+- **URL paths in logs.** They are kept in the audit and access logs (query strings are not).
 - **Re-asking with a slightly different action.** A sticky rejection covers the exact
   action only: one changed character in the arguments (or, without agent tokens, a new
   `agent_id`) is a new approval. Rate limits and pending quotas bound how often.
