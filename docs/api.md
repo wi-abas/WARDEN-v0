@@ -222,7 +222,7 @@ No token or a wrong one: 401 with `"decision": "deny"`. The SDK and the MCP prox
 token from `WARDEN_AGENT_TOKEN`. Approvals can only be used by the agent that asked.
 
 `warden agent list` and `warden agent remove <id>` manage the file (`--agents FILE`,
-default `warden-agents.json`, mode 600). To rotate a token: remove, add, restart Warden.
+then `WARDEN_AGENTS`, then `warden-agents.json`; mode 600). To rotate a token: remove, add, restart Warden.
 Changes take effect on restart. Design: [design/agent-tokens.md](design/agent-tokens.md).
 
 **Tokens are identity; per-agent rules are permissions.** A rule with

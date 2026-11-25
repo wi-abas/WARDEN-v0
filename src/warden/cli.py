@@ -66,7 +66,12 @@ def main(argv: list[str] | None = None) -> int:
     agent = commands.add_parser("agent", help="manage agent tokens")
     agent.add_argument("action", choices=["add", "list", "remove"])
     agent.add_argument("agent_id", nargs="?")
-    agent.add_argument("--agents", type=Path, default=DEFAULT_AGENTS_PATH, help="agents file")
+    agent.add_argument(
+        "--agents",
+        type=Path,
+        default=Path(os.environ.get("WARDEN_AGENTS") or DEFAULT_AGENTS_PATH),
+        help=f"agents file (default WARDEN_AGENTS or {DEFAULT_AGENTS_PATH})",
+    )
     audit_parser = commands.add_parser("audit", help="audit log tools")
     audit_parser.add_argument("action", choices=["verify", "head"])
     audit_parser.add_argument("--expect", type=Path, help="checkpoint file from `audit head`")
