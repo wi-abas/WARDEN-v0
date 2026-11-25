@@ -29,6 +29,7 @@ import sys
 import threading
 import time
 from collections.abc import Awaitable, Callable
+from concurrent.futures import CancelledError
 from pathlib import Path
 from typing import Annotated, Any, BinaryIO, Literal, Protocol
 
@@ -318,14 +319,20 @@ class McpProxy:
     async def run(self) -> int:
         """Start the server, relay until either side ends. Returns the server's exit code."""
         spec = self.config.server
-        process = await asyncio.create_subprocess_exec(
-            spec.command,
-            *spec.args,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            env=server_env(spec.env, dict(os.environ)),
-            limit=MAX_LINE_BYTES,
-        )
+        try:
+            process = await asyncio.create_subprocess_exec(
+                spec.command,
+                *spec.args,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                env=server_env(spec.env, dict(os.environ)),
+                limit=MAX_LINE_BYTES,
+            )
+        except (OSError, ValueError) as exc:  # no such command, NUL byte in an argument, ...
+            # Not the error's own text: it may quote the arguments or the environment.
+            raise ConfigError(
+                f"can't start the MCP server {_safe_name(spec.command)} ({type(exc).__name__})"
+            ) from None
         # mutation-ok: both are set (PIPE); the assert only informs the type checker
         assert process.stdin is not None and process.stdout is not None  # noqa: S101 (PIPE)
         self._server_in = process.stdin
@@ -717,7 +724,7 @@ def stdin_reader(
             put = queue.put(line)
             try:
                 asyncio.run_coroutine_threadsafe(put, loop).result()
-            except RuntimeError:  # the loop is gone: we're shutting down
+            except (RuntimeError, CancelledError):  # the loop is gone: we're shutting down
                 put.close()
                 return
             if line == b"":
@@ -734,6 +741,16 @@ def stdout_writer(stream: BinaryIO) -> Callable[[bytes], None]:
         stream.flush()
 
     return write
+
+
+def own_stdin() -> BinaryIO:
+    """Standard input through a reader of our own, when it is a real file. The stdin thread
+    may still be blocked reading at exit (the server stopped, the client didn't), and
+    Python aborts if that thread holds the lock of sys.stdin's own buffer."""
+    try:
+        return open(sys.stdin.fileno(), "rb", closefd=False)
+    except (OSError, ValueError):  # not a real file (tests)
+        return sys.stdin.buffer
 
 
 def serve_stdio(config: ProxyConfig) -> int:
@@ -753,10 +770,14 @@ def serve_stdio(config: ProxyConfig) -> int:
         proxy = McpProxy(
             config,
             checker,
-            stdin_reader(loop, sys.stdin.buffer),
+            stdin_reader(loop, own_stdin()),
             stdout_writer(sys.stdout.buffer),
             agent_from_token=token is not None,
         )
         return await proxy.run()
 
-    return asyncio.run(main())
+    try:
+        return asyncio.run(main())
+    except ConfigError as exc:
+        print(f"warden proxy: {exc}", file=sys.stderr)
+        return 2

@@ -71,6 +71,9 @@ Unknown keys are an error, so a typo can't silently weaken the setup. Without a 
 file, flags work too: `warden proxy --agent-id cursor --tool-prefix fs. -- npx -y
 @modelcontextprotocol/server-filesystem /Users/me/workspace`.
 
+If the server can't be started (no such command, for example), the proxy says so on stderr
+and exits with code 2. Nothing is relayed.
+
 ## 3. Point your client at the proxy
 
 **Claude Desktop** (`claude_desktop_config.json`; Cursor's `~/.cursor/mcp.json` has the
