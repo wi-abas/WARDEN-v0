@@ -115,7 +115,12 @@ def parse_answer(data: Any) -> Answer:
 
 
 class WardenClient:
-    """Asks a local Warden server for decisions. Never raises from `evaluate`."""
+    """Asks a local Warden server for decisions. Never raises from `evaluate`.
+
+    With a `token`, the agent id comes from the token and `agent_id` is NOT used, not
+    even if you give both: the proxy and the SDK always have an agent_id (a default or
+    from the environment), so both together is normal, and Warden decides who a token
+    belongs to anyway. `repr(client)` shows which one counts."""
 
     def __init__(
         self,
@@ -134,7 +139,8 @@ class WardenClient:
 
     def __repr__(self) -> str:  # never show the token
         token = "<set>" if self._token else None
-        return f"WardenClient(url={self.url!r}, agent_id={self.agent_id!r}, token={token})"
+        agent = repr(self.agent_id) if self._token is None else "<from token>"
+        return f"WardenClient(url={self.url!r}, agent_id={agent}, token={token})"
 
     def evaluate(
         self,

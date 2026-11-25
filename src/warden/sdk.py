@@ -59,7 +59,8 @@ class ApprovalPending(NotAllowed):
 
 def default_client() -> WardenClient:
     """A client from WARDEN_URL, WARDEN_AGENT_ID and WARDEN_AGENT_TOKEN
-    (defaults: local Warden, "agent", no token)."""
+    (defaults: local Warden, "agent", no token). With a token, the agent id comes from
+    the token and WARDEN_AGENT_ID is not used."""
     return WardenClient(
         os.environ.get("WARDEN_URL", DEFAULT_URL),
         os.environ.get("WARDEN_AGENT_ID", "agent"),
