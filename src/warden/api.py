@@ -1093,8 +1093,19 @@ def create_app(
     return app
 
 
+def drop_query(record: logging.LogRecord) -> bool:
+    """Log filter: "GET /v1/approvals?x=y" becomes "GET /v1/approvals". Whatever a caller
+    puts in a query string (maybe a secret) must not stay in the log."""
+    # Uvicorn's access log: (client, method, path with query, HTTP version, status).
+    if isinstance(record.args, tuple) and len(record.args) == 5:
+        client, method, path, version, status = record.args
+        record.args = (client, method, str(path).partition("?")[0], version, status)
+    return True
+
+
 def log_config() -> dict[str, Any]:
-    """Uvicorn's logging setup, plus Warden's own loggers at INFO.
+    """Uvicorn's logging setup, plus Warden's own loggers at INFO, and no query strings
+    in the access log.
 
     Without this, Warden's log lines (decisions, policy errors) are not shown.
     They go through the same handler and format as Uvicorn's own lines.
@@ -1105,6 +1116,8 @@ def log_config() -> dict[str, Any]:
         "level": "INFO",
         "propagate": False,  # mutation-ok: True would only print lines twice
     }
+    config["filters"] = {"drop_query": {"()": lambda: drop_query}}
+    config["loggers"]["uvicorn.access"]["filters"] = ["drop_query"]
     return config
 
 

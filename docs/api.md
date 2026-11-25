@@ -255,7 +255,8 @@ written. Warden refuses a database with triggers, views or virtual tables: don't
 A second table, `events`, records everything else: a human approving or denying (if that
 record can't be written, the approval doesn't happen), failed approve/deny attempts, and
 rejected requests (wrong admin key, bad input, oversized body, errors), with method and URL
-path but never the body or query string. Failed approval retries keep the `approval_id`
+path but never the body or query string (the server's access log leaves query strings out
+too). Failed approval retries keep the `approval_id`
 that was tried, so misuse is visible.
 
 **Retention:** entries older than 90 days are deleted at startup and then once a day.

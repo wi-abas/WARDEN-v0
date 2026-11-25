@@ -83,3 +83,33 @@ def test_decision_lines_appear_with_the_config(
     finally:
         logging.getLogger("warden").handlers.clear()
         logging.getLogger("warden").propagate = True
+
+
+def test_access_log_has_no_query_strings(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    import http.client
+    from urllib.parse import urlsplit
+
+    from helpers import live_server
+
+    with live_server(create_app(BASIC_POLICY)) as url:
+        # After the server's own logging setup, as `warden serve` has it.
+        logging.config.dictConfig(log_config())
+        connection = http.client.HTTPConnection(urlsplit(url).netloc, timeout=10)
+        for path in ("/health?q=sk-live-FAKE-123", "/nothing?a?b=sk-live-FAKE-123", "/health"):
+            connection.request("GET", path)
+            connection.getresponse().read()
+        connection.close()
+    logged = capsys.readouterr()
+    text = logged.out + logged.err
+    assert '"GET /health HTTP/1.1" 200' in text  # the request itself is still logged
+    assert '"GET /nothing HTTP/1.1" 404' in text
+    assert "sk-live" not in text and "?" not in text
+
+
+def test_access_log_filter_leaves_unknown_records_alone() -> None:
+    from warden.api import drop_query
+
+    record = logging.LogRecord("uvicorn.access", logging.INFO, "f", 1, "%s", ("x",), None)
+    assert drop_query(record) is True and record.args == ("x",)
