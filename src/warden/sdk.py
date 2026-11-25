@@ -188,6 +188,16 @@ def _still_waiting(answer: Answer) -> bool:
     return answer.decision is Decision.REQUIRE_APPROVAL or answer.retry_after is not None
 
 
+def _is_async(fn: Callable[..., Any]) -> bool:
+    """True if calling `fn` gives a coroutine (nothing runs until it is awaited): also
+    for functools.partial, staticmethod and objects with an `async def __call__`."""
+    while isinstance(fn, functools.partial | staticmethod):
+        fn = fn.func if isinstance(fn, functools.partial) else fn.__func__
+    return inspect.iscoroutinefunction(fn) or inspect.iscoroutinefunction(
+        getattr(type(fn), "__call__", None)  # noqa: B004 (the method, not "is it callable")
+    )
+
+
 def run_guarded[R](
     tool: str,
     arguments: dict[str, Any],
@@ -198,6 +208,8 @@ def run_guarded[R](
     poll_seconds: float = 2.0,
 ) -> R:
     """Check `tool` with `arguments`; on allow, return fn(**frozen copy). Else raise."""
+    if _is_async(fn):
+        raise TypeError("run_guarded takes a plain function; use run_guarded_async for async")
     frozen = freeze(arguments)
     if frozen is None:
         raise _refused("arguments are not plain JSON values, so they can't be checked")
@@ -220,7 +232,12 @@ async def run_guarded_async[R](
     Cancelling it while it waits stops the polling, so a later approval stays unused. If
     it is cancelled exactly while a question is on its way to Warden, that question may
     still use up the approval although the tool doesn't run: a human must approve again
-    (it never runs twice)."""
+    (it never runs twice).
+
+    `fn` must be recognisably async: a plain function that returns an awaitable is refused
+    with TypeError (wrap it in `async def`, or mark it: inspect.markcoroutinefunction)."""
+    if not _is_async(fn):
+        raise TypeError("run_guarded_async takes an `async def` function; use run_guarded")
     frozen = freeze(arguments)
     if frozen is None:
         raise _refused("arguments are not plain JSON values, so they can't be checked")
@@ -234,8 +251,9 @@ def _check_signature(fn: Callable[..., Any]) -> inspect.Signature:
     for param in signature.parameters.values():
         if param.kind in {param.POSITIONAL_ONLY, param.VAR_POSITIONAL}:
             raise TypeError(
-                f"@guard can't name parameter {param.name!r} of {fn.__name__}() for the "
-                "policy: use normal or keyword parameters"
+                f"@guard can't name parameter {param.name!r} of "
+                f"{getattr(fn, '__name__', type(fn).__name__)}() for the policy: "
+                "use normal or keyword parameters"
             )
     return signature
 
@@ -270,7 +288,9 @@ def guard[**P, R](
     """
 
     def decorate(fn: Callable[P, R]) -> Callable[P, R]:
-        name = tool or fn.__name__
+        name = tool or getattr(fn, "__name__", None)
+        if name is None:
+            raise TypeError("@guard needs a tool name for this callable: guard('name')")
         if not re.fullmatch(TOOL_NAME_PATTERN, name):
             raise ValueError(f"tool name {name!r} isn't valid for Warden ({TOOL_NAME_PATTERN})")
         signature = _check_signature(fn)
@@ -280,12 +300,14 @@ def guard[**P, R](
             "poll_seconds": poll_seconds,
         }
 
-        if inspect.iscoroutinefunction(fn):
+        if _is_async(fn):
 
             @functools.wraps(fn)
             async def async_wrapper(*args: P.args, **kwargs: P.kwargs) -> Any:
                 named = _named_arguments(signature, args, kwargs)
-                return await run_guarded_async(name, named, fn, **options)
+                return await run_guarded_async(
+                    name, named, cast(Callable[..., Awaitable[Any]], fn), **options
+                )
 
             return cast(Callable[P, R], async_wrapper)
 
