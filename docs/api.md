@@ -82,7 +82,8 @@ stricter, so it stays quick; a sent `action_hash` is still checked. After a rest
 hash is still known (it is stored), so a restarted approval can still be rejected.
 
 In `GET /v1/approvals`, hidden or look-alike characters in arguments (zero-width spaces,
-right-to-left overrides, full-width letters, and everything else Unicode may draw as
+right-to-left overrides, full-width letters, line separators, blanks other than a
+plain space, private-use and unassigned characters, and everything else Unicode may draw as
 nothing, such as variation selectors like the one in some emoji) are shown as visible
 `\uXXXX` escapes (`\UXXXXXXXX` above U+FFFF) and
 the item gets a `warnings` entry, so an agent can't make you approve something that

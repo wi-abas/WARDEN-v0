@@ -310,11 +310,23 @@ class CrashGuard:
                 await _deny_response(500, "internal error")(scope, receive, send)
 
 
+# Line and paragraph separators, spaces other than " ", private use (a font decides what
+# it draws) and unassigned: they break a line or may show as a blank.
+_BLANK_CATEGORIES = frozenset({"Zl", "Zp", "Zs", "Co", "Cn"})
+# Letters, marks and symbols that are defined to draw nothing.
+_BLANK_CHARS = frozenset("\u2800\U00013441\U00013442\U00016fe4\U0001d159")
+
+
 def _is_deceptive_char(ch: str) -> bool:
     """Characters that make text DISPLAY differently from what it is: invisible or
-    control characters, direction overrides (U+202E reverses what follows), and
-    compatibility look-alikes such as the full-width "ｅ"."""
-    return is_invisible(ch) or unicodedata.normalize("NFKC", ch) != ch
+    control characters, direction overrides (U+202E reverses what follows), blanks that
+    aren't a plain space, and compatibility look-alikes such as the full-width "ｅ"."""
+    return (
+        is_invisible(ch)
+        or (ch != " " and unicodedata.category(ch) in _BLANK_CATEGORIES)
+        or ch in _BLANK_CHARS
+        or unicodedata.normalize("NFKC", ch) != ch
+    )
 
 
 # What an escape looks like, written out as plain text: shown raw, the text "\\u200b"

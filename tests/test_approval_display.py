@@ -3,6 +3,7 @@
 import re
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 from helpers import BASIC_POLICY
 from hypothesis import given, settings
@@ -10,6 +11,8 @@ from hypothesis import strategies as st
 
 from warden.api import _display_safe, create_app
 from warden.audit import SQLiteAuditLog
+from warden.fingerprint import fingerprint
+from warden.models import ActionRequest
 
 KEY = "k" * 32
 ADMIN = {"X-Warden-Admin-Key": KEY}
@@ -125,3 +128,42 @@ def test_tricky_names_never_merge(arguments: dict[str, int]) -> None:
     shown = _display_safe([dict(arguments)], [])
     assert isinstance(shown, list) and isinstance(shown[0], dict)
     assert len(shown[0]) == len(arguments)
+
+
+# --- Characters that draw as blank space or break the line ----------------------------
+
+
+@pytest.mark.parametrize(
+    "ch",
+    [
+        " ",  # line separator
+        " ",  # paragraph separator
+        "⠀",  # braille blank
+        " ",  # ogham space mark
+        " ",  # no-break space
+        "　",  # ideographic space
+        "\U0001d159",  # null notehead
+        "\U00013441",  # Egyptian full blank
+        "\U00013442",  # Egyptian half blank
+        "\U00016fe4",  # Khitan filler
+        "",  # private use: draws whatever the font likes
+        "͸",  # unassigned
+    ],
+)
+def test_blank_characters_are_escaped_with_a_warning(tmp_path: Path, ch: str) -> None:
+    arguments: dict[str, object] = {"to": "a@b.com", "note": f"pay{ch}now", f"k{ch}": 1}
+    item = pending(tmp_path, arguments)
+    escape = f"\\U{ord(ch):08x}" if ord(ch) > 0xFFFF else f"\\u{ord(ch):04x}"
+    assert item["arguments"] == {"to": "a@b.com", "note": f"pay{escape}now", f"k{escape}": 1}
+    assert item["warnings"] == ["contains hidden or look-alike characters (shown as \\uXXXX)"]
+    # Only the display is escaped: the approval is bound to the real action.
+    real = ActionRequest.model_validate(
+        {"agent_id": "a", "tool": "send_email", "arguments": arguments}
+    )
+    assert item["action_hash"] == fingerprint(real)
+
+
+def test_ordinary_spaces_and_braille_are_untouched(tmp_path: Path) -> None:
+    arguments: dict[str, object] = {"to": "a@b.com", "note": "a b  c ⠁⠃ ᚁ"}
+    item = pending(tmp_path, arguments)
+    assert item["arguments"] == arguments and item["warnings"] == []
