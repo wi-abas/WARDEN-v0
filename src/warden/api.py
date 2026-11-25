@@ -257,12 +257,23 @@ def _is_deceptive_char(ch: str) -> bool:
     return is_invisible(ch) or unicodedata.normalize("NFKC", ch) != ch
 
 
+# What an escape looks like, written out as plain text: shown raw, the text "\\u200b"
+# would look exactly like an escaped zero-width space. "\\U" only counts with 8 hex
+# digits (the shape of our own escapes), so "C:\\Users" stays readable.
+_LOOKS_ESCAPED = re.compile(r"\\(?:u|U[0-9A-Fa-f]{8})")
+
+
 def _needs_escape(text: str, index: int) -> bool:
-    """Deceptive characters, and a real backslash followed by "u": shown raw, the text
-    "\\u200b" would look exactly like an escaped zero-width space, so two different
-    keys could display the same and one would hide the other."""
-    ch = text[index]
-    return _is_deceptive_char(ch) or (ch == "\\" and text[index + 1 : index + 2] == "u")
+    """Deceptive characters, and a real backslash that would read as an escape: otherwise
+    two different keys could display the same and one would hide the other."""
+    return _is_deceptive_char(text[index]) or _LOOKS_ESCAPED.match(text, index) is not None
+
+
+def _escape(ch: str) -> str:
+    """\\uXXXX, or \\UXXXXXXXX above U+FFFF. Always a fixed length: "\\u1d400" could be
+    U+1D400, or U+1D40 followed by "0"."""
+    code = ord(ch)
+    return f"\\U{code:08x}" if code > 0xFFFF else f"\\u{code:04x}"
 
 
 def _display_safe(value: JsonValue, warnings: list[str]) -> JsonValue:
@@ -274,16 +285,17 @@ def _display_safe(value: JsonValue, warnings: list[str]) -> JsonValue:
         if not any(escape):
             return value
         warnings.append("contains hidden or look-alike characters (shown as \\uXXXX)")
-        return "".join(
-            f"\\u{ord(ch):04x}" if hit else ch for ch, hit in zip(value, escape, strict=True)
-        )
+        return "".join(_escape(ch) if hit else ch for ch, hit in zip(value, escape, strict=True))
     if isinstance(value, list):
         return [_display_safe(item, warnings) for item in value]
     if isinstance(value, dict):
         out: dict[str, JsonValue] = {}
         for key, item in value.items():
-            safe_key = _display_safe(key, warnings)
-            out[safe_key if isinstance(safe_key, str) else key] = _display_safe(item, warnings)
+            safe_key = str(_display_safe(key, warnings))
+            if safe_key in out:  # pragma: no cover - escaping is one-to-one (tested)
+                # Never overwrite: a vanished argument would be approved unseen.
+                raise ValueError("two argument names would display the same")
+            out[safe_key] = _display_safe(item, warnings)
         return out
     return value
 

@@ -1,10 +1,11 @@
 """The approval list shows the human what the action really is: no hidden characters."""
 
+import re
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 from helpers import BASIC_POLICY
-from hypothesis import given
+from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from warden.api import _display_safe, create_app
@@ -73,3 +74,54 @@ def test_display_never_merges_two_keys(arguments: dict[str, int]) -> None:
     shown = _display_safe(dict(arguments), [])
     assert isinstance(shown, dict)
     assert len(shown) == len(arguments)
+
+
+# --- Characters above U+FFFF (they need 8 hex digits) ---------------------------------
+
+
+def test_astral_characters_use_a_fixed_length_escape(tmp_path: Path) -> None:
+    item = pending(tmp_path, {"to": "boss@company.com", "note": "a\U0001d400b\U000e0100c"})
+    assert item["arguments"] == {
+        "to": "boss@company.com",
+        "note": "a\\U0001d400b\\U000e0100c",
+    }
+
+
+def test_astral_key_cant_hide_another_argument(tmp_path: Path) -> None:
+    # Before the fix both names displayed as "ᵀ0" and one value vanished.
+    keys = {"\U0001d400": "WIRE $9999", "ᵀ0": "harmless"}
+    item = pending(tmp_path, {**keys, "nested": [dict(keys)]})
+    expected = {"\\U0001d400": "WIRE $9999", "\\u1d400": "harmless"}
+    assert item["arguments"] == {**expected, "nested": [expected]}
+
+
+def test_escape_looking_text_with_capital_u_is_escaped(tmp_path: Path) -> None:
+    item = pending(tmp_path, {"\\U0001d400": "harmless", "\U0001d400": "WIRE $9999"})
+    assert item["arguments"] == {"\\u005cU0001d400": "harmless", "\\U0001d400": "WIRE $9999"}
+
+
+_TRICKY = st.lists(
+    st.sampled_from([*"\\uU01dD4ef", "0001d400", "ᵀ", "\U0001d400", "​", "\U000e0100"]),
+    max_size=12,
+).map("".join)
+
+
+@settings(max_examples=500)
+@given(_TRICKY)
+def test_display_can_be_decoded_back(text: str) -> None:
+    """One-to-one: undoing the escapes gives the exact original text."""
+    shown = _display_safe(text, [])
+    assert isinstance(shown, str)
+    decoded = re.sub(
+        r"\\u([0-9a-f]{4})|\\U([0-9a-fA-F]{8})",
+        lambda m: chr(int(m[1] or m[2], 16)),
+        shown,
+    )
+    assert decoded == text
+
+
+@given(st.dictionaries(_TRICKY, st.just(0), max_size=6))
+def test_tricky_names_never_merge(arguments: dict[str, int]) -> None:
+    shown = _display_safe([dict(arguments)], [])
+    assert isinstance(shown, list) and isinstance(shown[0], dict)
+    assert len(shown[0]) == len(arguments)
