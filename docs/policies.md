@@ -91,7 +91,8 @@ A rule can add `when` conditions. It then matches only if **all** of them hold:
   `{ "arg": "url", "op": "host_in", "value": ["evil.net", ".evil.net"] }`. International host
   names must be written in punycode (`xn--strae-oqa.de`, not `straße.de`), both in the
   policy and in requests; the Unicode form is refused because different software
-  converts it differently.
+  converts it differently. A host with characters that can't be in a host name
+  (`evil.net;.example.com`) denies the request, also when a text rule compares a URL.
 - **`host_in` and URL schemes.** By default `host_in` only accepts `http://` and
   `https://` URLs (any case). Any other scheme (`ftp://`, `gopher://`, `file://`,
   `ws://`, ...) can't be checked by the condition, and **the whole request is denied**,

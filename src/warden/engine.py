@@ -211,6 +211,13 @@ def _valid_port(port: str) -> bool:
     return port.isascii() and port.isdigit() and not port.startswith("0") and int(port) <= 65535
 
 
+# Letters (also non-ASCII ones: host_in refuses those itself), digits, "-", "_" and ".".
+# Anything else is not a host name, and loose parsers stop at it: "evil.net;.good.com"
+# reaches evil.net.
+_HOST_NAME = re.compile(r"[a-z0-9._\-\u0080-\U0010ffff]+", re.IGNORECASE)
+_IPV6 = re.compile(r"[0-9a-f:.]+", re.IGNORECASE)
+
+
 def _is_clean_url(text: str) -> bool:
     """scheme://host[:port]/clean/path, with no tricks in the host part.
 
@@ -229,7 +236,11 @@ def _is_clean_url(text: str) -> bool:
     # but don't match it as text. Allowed: name, name:port, [ipv6], [ipv6]:port.
     if host.startswith("["):
         name, bracket, after = host[1:].partition("]")
-        if not bracket or not name or (after and not (after[0] == ":" and _valid_port(after[1:]))):
+        if (
+            not bracket
+            or not _IPV6.fullmatch(name)
+            or (after and not (after[0] == ":" and _valid_port(after[1:])))
+        ):
             return False
     else:
         name, colon, port = host.partition(":")
@@ -239,6 +250,8 @@ def _is_clean_url(text: str) -> bool:
             return False
         # The host ends at "?" or "#" when there is no path ("https://evil.net.?x").
         labels = re.split("[?#]", name, maxsplit=1)[0]
+        if not _HOST_NAME.fullmatch(labels):
+            return False
         # An empty label (".evil.net", "a..evil.net") is not a host name, and libraries
         # disagree about it.
         if labels.endswith(".") or labels.startswith(".") or ".." in labels:

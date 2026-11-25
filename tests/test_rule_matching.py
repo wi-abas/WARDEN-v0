@@ -146,3 +146,45 @@ def test_harmless_dots_are_fine(value: str) -> None:
 
 def test_long_runs_of_dots_are_checked_quickly() -> None:
     assert ask(allow("startswith", "wait"), "wait/" + "." * 50_000 + "x") == Decision.ALLOW
+
+
+# --- Hosts: characters that can't be in a host name --------------------------------------
+
+
+@pytest.mark.parametrize("char", list(";'\"|^`{}<>,&*=$()!~+ "))
+def test_illegal_host_characters_are_denied(char: str) -> None:
+    # A loose URL parser (Node's url.parse) stops at the character and reaches evil.net.
+    assert ask(allow("host_in", [".example.com"]), f"http://evil.net{char}.example.com/") == (
+        Decision.DENY
+    )
+    assert ask(deny("host_in", [".evil.net"]), f"http://evil.net{char}x/") == Decision.DENY
+    evil_text = deny("startswith", "http://evil.net/", ignore_case=True)
+    assert ask(evil_text, f"http://evil.net{char}x/") == Decision.DENY
+
+
+@pytest.mark.parametrize("host", ["[::1;x]", "[v1.x]", "[::1%25eth0]", "[fe80::1']"])
+def test_odd_bracketed_hosts_are_denied(host: str) -> None:
+    assert ask(deny("host_in", ["evil.net"]), f"http://{host}/") == Decision.DENY
+    assert ask(deny("startswith", "http://evil.net/"), f"http://{host}/") == Decision.DENY
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://a-b_c.example.com:8080/x;y='z'",
+        "http://EXAMPLE.com",
+        "http://xn--strae-oqa.de/",
+        "http://example.com?q=a;b",
+        "http://example.com#a!b",
+        "http://10.0.0.1/",
+        "http://[::1]:8000/x",
+        "http://[2001:DB8::ffff:1.2.3.4]/",
+    ],
+)
+def test_legitimate_hosts_still_work(url: str) -> None:
+    assert ask(deny("host_in", ["evil.net"]), url) == Decision.ALLOW
+    assert ask(deny("startswith", "http://evil.net/"), url) == Decision.ALLOW
+
+
+def test_international_hosts_still_work_in_text_rules() -> None:
+    assert ask(allow("startswith", "https://例え.jp/"), "https://例え.jp/x") == Decision.ALLOW
