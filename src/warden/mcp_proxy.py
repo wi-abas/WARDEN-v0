@@ -21,6 +21,7 @@ stdout is the MCP channel, so everything human-readable goes to stderr.
 """
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -44,6 +45,7 @@ logger = logging.getLogger(__name__)
 MAX_LINE_BYTES = 16 * 1024 * 1024  # one JSON-RPC message
 MAX_IN_FLIGHT = 64  # tool calls being checked (or waiting for approval) at once
 MAX_UNANSWERED = 10_000  # client requests without an answer whose ids are remembered
+RETIRED_BITS = 2**23  # memory for the ids of cancelled requests that made room (1 MiB)
 MAX_ID_TEXT = 256
 MAX_WAITING_LINES = 10_000  # client lines read but not handled yet ...
 MAX_WAITING_BYTES = 2 * MAX_LINE_BYTES  # ... and their size
@@ -292,6 +294,28 @@ def rpc_error(request_id: JsonValue, code: int, message: str) -> dict[str, JsonV
     return {"jsonrpc": "2.0", "id": request_id, "error": {"code": code, "message": message}}
 
 
+class _RetiredIds:
+    """Ids that may never be used again, in a fixed amount of memory (a Bloom filter).
+
+    It never forgets an id. It may say "seen" for a new one (1% after about 870,000 ids,
+    more and more after that): such a request is refused, so it fails closed."""
+
+    def __init__(self) -> None:
+        self._bits = bytearray(RETIRED_BITS // 8)
+
+    @staticmethod
+    def _places(key: str) -> list[int]:
+        digest = hashlib.sha256(key.encode()).digest()
+        return [int.from_bytes(digest[i : i + 4]) % RETIRED_BITS for i in range(0, 28, 4)]
+
+    def add(self, key: str) -> None:
+        for place in self._places(key):
+            self._bits[place // 8] |= 1 << place % 8
+
+    def __contains__(self, key: str) -> bool:
+        return all(self._bits[place // 8] & 1 << place % 8 for place in self._places(key))
+
+
 class McpProxy:
     """Relays one client <-> server session. All I/O is injected, so tests can drive it."""
 
@@ -318,6 +342,10 @@ class McpProxy:
         # Requests the client has no answer to yet: _id_key -> the exact id. An id in here
         # can't be used again: two answers under one id could be mixed up.
         self._unanswered: dict[str, str] = {}
+        # Those of them the client cancelled (oldest first). The server may never answer
+        # these, so when space runs out the oldest is dropped and its id retired for good.
+        self._cancelled: dict[str, None] = {}
+        self._retired = _RetiredIds()
         self._backlog_warned = False
         self._client_gone = asyncio.Event()  # the client closed its input (or crashed)
         self._needed_approval: set[str] = set()  # ids of calls that needed a human
@@ -410,6 +438,7 @@ class McpProxy:
                 key = _id_key(message["id"])
                 if self._unanswered.get(key) == json.dumps(message["id"]):
                     del self._unanswered[key]
+                    self._cancelled.pop(key, None)
             self._reply(message)
         elif message["method"] == "ping":
             self._answer_server({"jsonrpc": "2.0", "id": message["id"], "result": {}})
@@ -475,7 +504,7 @@ class McpProxy:
                 raise _Refused(INVALID_REQUEST, "batches and non-object messages not supported")
         except _Refused as refused:
             request_id = recover_id(line) if refused.duplicate_key else None
-            if _id_key(request_id) in self._unanswered:  # not an answer to that request
+            if self._id_in_use(request_id):  # not an answer to that request
                 request_id = None
             self._reply(rpc_error(request_id, refused.code, refused.message))
             return
@@ -506,7 +535,7 @@ class McpProxy:
             if not _usable_id(request_id):
                 self._reply(rpc_error(None, INVALID_REQUEST, "request id is too long or too large"))
                 return
-            if _id_key(request_id) in self._unanswered or _id_key(request_id) in self._calls:
+            if self._id_in_use(request_id):
                 self._reply(rpc_error(None, INVALID_REQUEST, "request id already in use"))
                 return
         if not set(message) <= REQUEST_KEYS:
@@ -523,7 +552,7 @@ class McpProxy:
                 # e.g. "tools/call" without an id: a server might still run it.
                 logger.warning("dropped notification %s (not allowed)", _safe_name(method))
             return
-        if len(self._unanswered) >= MAX_UNANSWERED:
+        if not self._make_room():
             self._reply(rpc_error(request_id, INVALID_REQUEST, "too many unanswered requests"))
         elif method == "tools/call":
             self._start_call(request_id, message)
@@ -560,14 +589,36 @@ class McpProxy:
 
         task.add_done_callback(done)
 
+    def _id_in_use(self, request_id: JsonValue) -> bool:
+        key = _id_key(request_id)
+        return key in self._unanswered or key in self._calls or key in self._retired
+
+    def _make_room(self) -> bool:
+        """Whether one more request may go unanswered. If it's full, the oldest cancelled
+        request makes room. Its id stays refused, so a late answer (which still passes:
+        the client ignores it) can't be taken for another request's."""
+        if len(self._unanswered) < MAX_UNANSWERED:
+            return True
+        if not self._cancelled:
+            return False
+        oldest = next(iter(self._cancelled))
+        del self._cancelled[oldest]
+        del self._unanswered[oldest]
+        self._retired.add(oldest)
+        return True
+
     def _cancel(self, params: object) -> None:
         """The client gave up on a request: stop waiting for its approval. Once the call
         is being written, it's too late (and _forward must stay to watch over it)."""
         if isinstance(params, dict) and _valid_id(params.get("requestId")):
-            key = _id_key(params.get("requestId"))
+            request_id = params.get("requestId")
+            key = _id_key(request_id)
             task = self._calls.get(key)
-            if task is not None and key in self._held:
-                task.cancel()
+            if key in self._held:
+                if task is not None:
+                    task.cancel()
+            elif self._unanswered.get(key) == json.dumps(request_id):
+                self._cancelled[key] = None
 
     async def _tool_call(self, request_id: JsonValue, message: dict[str, Any]) -> None:
         params = message.get("params")

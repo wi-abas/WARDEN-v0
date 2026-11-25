@@ -255,3 +255,60 @@ def test_too_many_unanswered_requests(tmp_path: Path, monkeypatch: pytest.Monkey
     session, _ = run_session(silent_config(tmp_path), FakeWarden(), script)
     sent = [m["id"] for m in session.server_saw() if "id" in m]
     assert json.dumps(sent) == "[1, 2, 5]"
+
+
+def test_cancelled_requests_make_room_but_their_ids_stay_taken(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(proxy_module, "MAX_UNANSWERED", 2)
+
+    async def script(s: Session) -> None:
+        for n in range(1, 8):  # far more than fit; the server never answers
+            s.send({**PING, "id": n} if n % 2 else call("echo", {}, request_id=n))
+            await asyncio.sleep(0.1)
+            s.send(cancel(n))
+        for n in range(1, 8):  # none can be used again, by value or by look-alike
+            await refused(s, call("echo", {"again": n}, request_id=n))
+            await refused(s, {**PING, "id": str(n)})
+        s.send_raw(b'{"jsonrpc":"2.0","id":1,"method":"ping","method":"x"}\n')
+        assert (await s.recv())["id"] is None
+        # A late answer is still answer number 1's: nothing else has that id.
+        s.send(answer(1))
+        assert (await s.recv())["id"] == 1
+        await refused(s, {**PING, "id": 1})
+        assert len(s.proxy._unanswered) == 2 and len(s.proxy._cancelled) == 2
+
+    session, _ = run_session(silent_config(tmp_path), FakeWarden(), script)
+    assert [m["id"] for m in session.server_saw() if "id" in m] == list(range(1, 8))
+
+
+def test_only_cancelled_requests_make_room(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(proxy_module, "MAX_UNANSWERED", 3)
+
+    async def script(s: Session) -> None:
+        s.send(call("slow", {}, request_id=1))  # held by Warden
+        s.send({**PING, "id": 2})
+        s.send({**PING, "id": 3})
+        s.send(cancel("2"))  # a look-alike cancels nothing
+        s.send(cancel(99))
+        assert "too many" in (await s.roundtrip({**PING, "id": 4}))["error"]["message"]
+        s.send(cancel(3))
+        s.send({**PING, "id": 5})
+        await refused(s, {**PING, "id": 3})
+        assert "too many" in (await s.roundtrip({**PING, "id": 6}))["error"]["message"]
+        s.send(cancel(5))
+        s.send(answer(5))  # answered after all: free again, and nothing left to drop
+        assert (await s.recv())["id"] == 5
+        s.send({**PING, "id": 5})
+        assert "too many" in (await s.roundtrip({**PING, "id": 7}))["error"]["message"]
+
+    run_session(silent_config(tmp_path), FakeWarden({"slow": [pending()]}), script)
+
+
+def test_retired_ids_are_never_forgotten() -> None:
+    assert proxy_module.RETIRED_BITS == 2**23
+    retired = proxy_module._RetiredIds()
+    for n in range(2000):
+        assert str(n) not in retired
+        retired.add(str(n))
+    assert all(str(n) in retired for n in range(2000))

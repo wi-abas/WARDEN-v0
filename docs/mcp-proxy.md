@@ -164,7 +164,10 @@ If Warden restarts during a wait, the proxy keeps asking until the approval time
   hasn't answered it yet (also after a cancel, since the server may still answer). `1` and
   `"1"` count as the same id. The error has id `null`, so it can't be taken for the first
   request's answer. Ids over 256 characters or beyond ±(2^53 − 1), and requests past
-  10,000 unanswered ones, are refused too.
+  10,000 unanswered ones, are refused too. When those 10,000 are reached, the oldest
+  *cancelled* request makes room (servers usually don't answer one). Its id can't be used
+  again in that session. These ids are remembered in a fixed 1 MiB: after very many
+  (1% after about 870,000) a new id can be refused as "already in use" by mistake.
 - A `tools/call` sent as a notification (no `id`): dropped.
 - A `tools/call` whose `_meta` holds anything but keys from `allow_meta_keys` (default
   only `progressToken`), each with short printable text (1-256 characters) or a whole
