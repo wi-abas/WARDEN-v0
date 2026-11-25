@@ -131,6 +131,10 @@ MCP clients have their own time limit per tool call. If yours gives up before yo
 approve, use `"mode": "error"`: the model is told approval is pending, and retrying the
 same call after you approve goes through (once).
 
+If the client disconnects (closes the proxy's input) while a call waits for approval, the
+call is refused and never runs, even if you approve it later. The approval itself stays
+in Warden until it expires: the same agent asking for the same action again could use it.
+
 ## What the proxy refuses
 
 - Any MCP method other than `tools/call` (checked) and the protocol basics

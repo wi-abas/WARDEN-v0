@@ -305,6 +305,7 @@ class McpProxy:
         self._calls: dict[str, asyncio.Task[None]] = {}  # in-flight tool calls by id
         self._held: set[str] = set()  # ids of tool calls not (yet) sent to the server
         self._backlog_warned = False
+        self._client_gone = asyncio.Event()  # the client closed its input (or crashed)
         self._server_in: asyncio.StreamWriter | None = None
 
     # --- Session ----------------------------------------------------------------------
@@ -329,7 +330,8 @@ class McpProxy:
         # mutation-ok: `or` differs only if both sides end at the very same moment
         if client_side.done() and not server_side.done():
             # The client closed its input. Calls already accepted still get their answer
-            # (each one ends: Warden has a timeout, approvals have a deadline).
+            # (each one ends: Warden has a timeout, and calls that need an approval are
+            # refused at once, see _decide).
             # mutation-ok: calls never raise (they answer errors themselves)
             await asyncio.gather(*self._calls.values(), return_exceptions=True)
         else:
@@ -391,6 +393,12 @@ class McpProxy:
             )
 
     async def _relay_client(self) -> None:
+        try:
+            await self._relay_client_lines()
+        finally:  # end of input, or the reader failed: either way nobody is there any more
+            self._client_gone.set()
+
+    async def _relay_client_lines(self) -> None:
         while True:
             line = await self.read_client()
             if line == b"":
@@ -533,8 +541,15 @@ class McpProxy:
         approval_id = answer.approval_id
         if approval_id is None:
             return Answer(Decision.DENY, "approval needed, but Warden gave no approval id")
+        # From here on the call needs a human. If the client leaves, it must not run: not
+        # on a later approval, nor on one used by a question that was already on its way.
+        gone = Answer(Decision.DENY, "the client disconnected before this was approved")
+        if self._client_gone.is_set():  # and don't use up an approval by asking
+            return gone
         # Maybe a human already approved this exact action (Warden reuses the id).
         answer = await self._ask(tool, arguments, approval_id)
+        if self._client_gone.is_set():
+            return gone
         settings = self.config.approval
         if answer.decision is Decision.REQUIRE_APPROVAL:
             url = f"--warden-url {self.config.warden_url}"
@@ -560,8 +575,15 @@ class McpProxy:
         while answer.decision is Decision.REQUIRE_APPROVAL or answer.retry_after is not None:
             if time.monotonic() >= deadline:  # mutation-ok: equal floats never happen
                 return Answer(Decision.DENY, "timed out waiting for a human to approve")
-            await asyncio.sleep(max(settings.poll_seconds, answer.retry_after or 0.0))
+            try:  # a sleep that ends early if the client leaves
+                pause = max(settings.poll_seconds, answer.retry_after or 0.0)
+                await asyncio.wait_for(self._client_gone.wait(), pause)
+                return gone
+            except TimeoutError:
+                pass
             answer = await self._ask(tool, arguments, approval_id)
+            if self._client_gone.is_set():
+                return gone
         return answer
 
     # --- Output -----------------------------------------------------------------------
@@ -682,7 +704,10 @@ def stdin_reader(
 
     def worker() -> None:
         while True:
-            line = read_line(stream)
+            try:
+                line = read_line(stream)
+            except (OSError, ValueError):  # unreadable or closed: the client is gone
+                line = b""
             put = queue.put(line)
             try:
                 asyncio.run_coroutine_threadsafe(put, loop).result()
