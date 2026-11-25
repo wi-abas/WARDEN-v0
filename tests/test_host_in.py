@@ -231,12 +231,28 @@ def test_empty_host_labels_are_refused(url: str) -> None:
         ("https://api.good.com?range=1..2", Decision.ALLOW),  # dots in a query or path are fine
         ("https://api.good.com#a..b", Decision.ALLOW),
         ("https://api.good.com/v1..2", Decision.ALLOW),
-        # One trailing dot: refused before a path, dropped before a query (as before).
+        ("https://api.good.com?x.", Decision.DENY),  # stays refused, to be safe
+        # One trailing dot: refused, also when a query or fragment follows directly.
         ("https://api.good.com./", Decision.DENY),
-        ("https://api.good.com.?x", Decision.ALLOW),
+        ("https://api.good.com.?x", Decision.DENY),
+        ("https://api.good.com.#x", Decision.DENY),
     ],
 )
-def test_dots_outside_the_host_and_one_trailing_dot_are_unchanged(
+def test_dots_outside_the_host_are_fine_but_a_trailing_dot_is_not(
     url: str, decision: Decision
 ) -> None:
     assert ask(ONLY, url) is decision
+
+
+@pytest.mark.parametrize("url", ["https://evil.org.?", "https://evil.org.#x", "https://evil.org."])
+def test_a_trailing_dot_cannot_dodge_a_text_deny_rule(url: str) -> None:
+    rules: Any = [
+        {"id": "all", "tool": "fetch", "effect": "allow"},
+        {
+            "id": "block",
+            "tool": "fetch",
+            "effect": "deny",
+            "when": [{"arg": "url", "op": "eq", "value": "https://evil.org"}],
+        },
+    ]
+    assert ask(rules, url) is Decision.DENY

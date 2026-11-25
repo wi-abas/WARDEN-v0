@@ -17,7 +17,8 @@
 - The client and `warden approvals` refuse all HTTP redirects.
 - Servers sharing one database can't each use the same approval; a newer rejection or
   revocation always beats restoring one.
-- URLs whose host has an empty label (`https://..evil.net/`) are refused.
+- URLs whose host has an empty label (`https://..evil.net/`), or that ends in a dot
+  right before `?` or `#` (`https://evil.net.?x`), are refused.
 - A crash no longer puts the exception message or traceback (possibly tool arguments) in
   Uvicorn's log.
 - `serve` checks the policy and agents file paths through symlinks and every folder.
