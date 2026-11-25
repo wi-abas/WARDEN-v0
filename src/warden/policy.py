@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Annotated, Self
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic_core import PydanticCustomError
 
 from warden.limits import Limits
 from warden.models import RULE_ID_PATTERN, TOOL_NAME_PATTERN, Rule, ToolSpec
@@ -110,7 +111,8 @@ def no_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
     seen: dict[str, object] = {}
     for key, value in pairs:
         if key in seen:
-            raise DuplicateKeyError(f"duplicate key '{key}' (one value would silently win)")
+            # ascii(): a lone surrogate in a key can't be printed
+            raise DuplicateKeyError(f"duplicate key {ascii(key)} (one value would silently win)")
         seen[key] = value
     return seen
 
@@ -119,8 +121,17 @@ def parse_policy(raw: str) -> Policy:
     """Validate policy JSON. Raises DuplicateKeyError or pydantic's ValidationError."""
     try:
         json.loads(raw, object_pairs_hook=no_duplicate_keys)
+    except DuplicateKeyError:
+        raise
     except (json.JSONDecodeError, RecursionError):
         pass  # not valid JSON, or nested too deeply: let pydantic report it
+    except ValueError:
+        # An integer longer than Python parses (4300 digits). Refused here: pydantic might
+        # read it, and the duplicate-key check above didn't get to the end of the file.
+        problem = PydanticCustomError("number_too_long", "a number has too many digits")
+        raise ValidationError.from_exception_data(
+            "Policy", [{"type": problem, "input": None}]
+        ) from None
     return Policy.model_validate_json(raw)
 
 
