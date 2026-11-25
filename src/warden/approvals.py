@@ -63,6 +63,9 @@ class Approval:
     created_at: float = 0.0  # store's clock; only used to sort lists
     decided_at: float | None = None  # store's clock; when a human last decided it
     revision: int = 0  # goes up with every saved change; 0 = not saved yet
+    # Memory only: the revision this server's own use() gave it. restore() may only undo
+    # exactly that use; any newer change (or a human's "no") wins.
+    used_revision: int | None = None
 
 
 class DecideError(Exception):
@@ -427,6 +430,8 @@ class ApprovalStore:
                 raise DecideError(not_found=True)
             revoking = approval.status is Status.APPROVED and not approve
             if approval.status is not Status.PENDING and not revoking:
+                if approval.status is Status.USED and not approve:
+                    self._cancel_restore(approval)
                 raise DecideError(not_found=False)
             if require_hash and expected_hash is None and not revoking:
                 raise DecideError(not_found=False, hash_required=True)
@@ -446,6 +451,27 @@ class ApprovalStore:
             expires_at = now + self._ttl if approve else self._denied_until(approval, now)
             self._save(replace(approval, status=new_status, expires_at=expires_at, decided_at=now))
             return new_status
+
+    def _cancel_restore(self, approval: Approval) -> None:
+        """A human said no to an approval that is being used right now. Too late to
+        revoke it, but if that use is undone (restore) it must stay spent: no server may
+        restore it after this."""
+        approval.used_revision = None
+        self._save(replace(approval))  # a new revision: other servers' restores lose
+
+    def _superseded(self, approval: Approval) -> bool:
+        """True if a human rejected this exact action after this approval was approved
+        (through another approval, created while this one counted as used)."""
+        return any(
+            a.status is Status.DENIED
+            and secrets.compare_digest(a.action_hash, approval.action_hash)
+            and (
+                a.decided_at is None
+                or approval.decided_at is None
+                or a.decided_at >= approval.decided_at
+            )
+            for a in self._items.values()
+        )
 
     def rejections(self) -> list[tuple[Approval, float, float]]:
         """Rejections that still stand: (approval, seconds left, seconds since the
@@ -480,9 +506,19 @@ class ApprovalStore:
             if approval.status is not Status.DENIED:
                 raise DecideError(not_found=False)
             before_commit(approval)
+            # With it goes any older approval of the same action it beat: otherwise
+            # lifting would bring that approval back, and nobody would be asked again.
+            gone = [approval_id] + [
+                a.approval_id
+                for a in self._items.values()
+                if a.status is Status.APPROVED
+                and a.action_hash == approval.action_hash
+                and self._superseded(a)
+            ]
             if self._db is not None:
-                self._db.delete([approval_id])
-            del self._items[approval_id]
+                self._db.delete(gone)
+            for key in gone:
+                del self._items[key]
 
     def pending_groups(self) -> list[tuple[tuple[str, str], list[tuple[Approval, float]]]]:
         """Pending approvals grouped by (agent_id, tool), groups sorted by that key,
@@ -537,6 +573,8 @@ class ApprovalStore:
                 if key != group:
                     failed.append((approval_id, GroupReason.MIXED))
                 elif approval.status is not Status.PENDING:
+                    if approval.status is Status.USED and not approve:
+                        self._cancel_restore(approval)
                     failed.append((approval_id, GroupReason.DECIDED))
                 elif approve and approval.arguments is None:
                     failed.append((approval_id, GroupReason.NO_ARGUMENTS))
@@ -592,6 +630,8 @@ class ApprovalStore:
             self._recall(approval, arguments)
             status = approval.status
             if status is Status.APPROVED:
+                if self._superseded(approval):
+                    return Status.DENIED
                 # Persist "used" BEFORE granting: a crash right after can't replay it.
                 # Conditional: of several servers sharing the database, only one can.
                 try:
@@ -603,18 +643,30 @@ class ApprovalStore:
                     if current is None or current.status is Status.APPROVED:
                         return None
                     return current.status
+                approval.used_revision = approval.revision
             return status
 
     def restore(self, approval_id: str) -> None:
         """Undo a use: the allow it produced was never delivered (e.g. the audit write
-        failed and the agent got deny instead), so the approval isn't spent."""
+        failed and the agent got deny instead), so the approval isn't spent.
+
+        Only the use this server made, unchanged since. A newer "no" from a human wins,
+        for this approval or for the same action under another id. On any doubt it
+        stays used: the agent asks for a new approval (fail closed)."""
         with self._lock:
-            approval = self._items.get(approval_id)
-            if approval is not None and approval.status is Status.USED:
-                try:
-                    self._save(replace(approval, status=Status.APPROVED))
-                except (sqlite3.Error, StaleApproval):
-                    return  # stays used: the agent asks for a new approval (fail closed)
+            try:
+                self._refresh(self._clock())
+                approval = self._items.get(approval_id)
+                if (
+                    approval is None
+                    or approval.status is not Status.USED
+                    or approval.used_revision != approval.revision
+                    or self._superseded(approval)
+                ):
+                    return
+                self._save(replace(approval, status=Status.APPROVED))
+            except (sqlite3.Error, StaleApproval):
+                return
 
     def consume(self, approval_id: str, action_hash: str) -> bool:
         """Use an approval. True only once, only for the exact approved action."""

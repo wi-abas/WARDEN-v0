@@ -162,8 +162,8 @@ def test_group_approve_is_all_or_nothing_across_servers(two: Two) -> None:
     before_next_save(a, lambda: b.decide(ids[2], approve=False))
     with pytest.raises(StaleApproval):
         a.decide_group(ids, approve=True)
-    assert [i for i, _ in a.pending()] == [i for i, _ in a.pending()]
-    assert {i.approval_id for i, _ in b.pending()} == set(ids[:2])
+    for store in two:
+        assert {i.approval_id for i, _ in store.pending()} == set(ids[:2])
 
 
 def test_decisions_are_seen_by_the_other_server(two: Two) -> None:

@@ -38,6 +38,11 @@ approval. Now the database is the truth:
   decision is one transaction: all of it or nothing.
 - A new approval is inserted only if no pending or approved row for the same action
   exists, so two servers asked at once hand out the same approval.
+- `restore` (the allow was never delivered, e.g. the audit write failed) only undoes the
+  server's own use at the revision it wrote. If a human said no meanwhile, to this
+  approval (refused as "already decided", but remembered) or to the same action under a
+  newer id, it stays used. `use` also refuses an approval whose action was rejected after
+  it was approved, and lifting that rejection removes the beaten approval.
 - A locked or failing database raises, which the API turns into a deny.
 
 Chosen over an exclusive lock because it is small, needs no lock file that could stay
