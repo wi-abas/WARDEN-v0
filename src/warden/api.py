@@ -932,7 +932,8 @@ def create_app(
         record_in_background=RECORD_REJECTIONS_IN_BACKGROUND,
     )
 
-    app = FastAPI(title="Warden", version=__version__)
+    # No redirects: "/v1/evaluate/" is a plain 404 deny, not an empty 307.
+    app = FastAPI(title="Warden", version=__version__, redirect_slashes=False)
     app.state.warden = w  # for tests and debugging
     # Middleware runs in reverse order of adding: HostCheck, then BodySizeLimit, then
     # DuplicateKeyCheck (which may read the body, so it must come after the size limit).
