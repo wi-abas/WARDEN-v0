@@ -72,6 +72,7 @@ TARGETS: dict[str, list[str]] = {
     ],
     "agents": [
         "test_agent_tokens.py",
+        "test_server_identity.py",
         "test_mutation_gaps.py",
     ],
     "client": [
@@ -124,6 +125,7 @@ TARGETS: dict[str, list[str]] = {
         "test_sticky_rejections.py",
         "test_crash_logging.py",
         "test_default_ignorable.py",
+        "test_server_identity.py",
     ],
     "audit": [
         "test_audit.py",

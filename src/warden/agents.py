@@ -1,12 +1,17 @@
 """Per-agent tokens: who is asking, proven by a secret instead of self-declared.
 
-The agents file stores, per agent, the SHA-256 hash of its token, never the token:
-    {"agents": [{"id": "billing-agent", "token_sha256": "<64 hex characters>"}]}
+The agents file stores, per agent, the SHA-256 hash of its token, never the token, and
+the key Warden proves itself to that agent with (see warden.identity):
+    {"agents": [{"id": "billing-agent", "token_sha256": "<64 hex characters>",
+                 "server_key": "<64 hex characters>"}]}
+
+`server_key` is a secret: whoever reads the file can imitate Warden to the agents (but
+not an agent to Warden).
 
 Tokens are 256-bit random values ("wdn_" + 43 URL-safe characters), so a fast hash is
 safe (there's nothing to brute-force). Every lookup compares against EVERY stored hash
 with secrets.compare_digest, so timing reveals nothing about which hash came close.
-See docs/design/agent-tokens.md.
+See docs/design/agent-tokens.md and docs/design/server-identity.md.
 """
 
 import hashlib
@@ -19,6 +24,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
+from warden.identity import key_id, proof_key
 from warden.models import AGENT_ID_PATTERN
 from warden.policy import DuplicateKeyError, describe_errors, no_duplicate_keys
 
@@ -37,6 +43,8 @@ class AgentEntry(BaseModel):
 
     id: str = Field(pattern=AGENT_ID_PATTERN)
     token_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    # identity.proof_key(token), as hex. repr=False: never in a log or a traceback.
+    server_key: str = Field(pattern=r"^[0-9a-f]{64}$", repr=False)
 
 
 class AgentsFile(BaseModel):
@@ -52,6 +60,8 @@ class AgentsFile(BaseModel):
         hashes = [a.token_sha256 for a in self.agents]
         if len(set(hashes)) != len(hashes):
             raise ValueError("two agents share a token")
+        if len({a.server_key for a in self.agents}) != len(self.agents):
+            raise ValueError("two agents share a server_key")
         return self
 
 
@@ -68,6 +78,8 @@ class AgentRegistry:
 
     def __init__(self, entries: tuple[AgentEntry, ...]) -> None:
         self._entries = entries
+        self._keys = {entry.id: bytes.fromhex(entry.server_key) for entry in entries}
+        self._key_ids = [(key_id(key).encode(), agent) for agent, key in self._keys.items()]
 
     @property
     def agent_ids(self) -> list[str]:
@@ -83,6 +95,19 @@ class AgentRegistry:
             if secrets.compare_digest(presented, entry.token_sha256.encode()):
                 found = entry.id
         return found
+
+    def server_key(self, agent_id: str) -> bytes:
+        """The key that proves Warden to this agent."""
+        return self._keys[agent_id]
+
+    def find_key(self, wanted: str) -> tuple[str, bytes] | None:
+        """(agent id, key) for a key_id, or None. Constant time over all agents."""
+        presented = wanted.encode()
+        found: str | None = None
+        for known, agent in self._key_ids:  # no early exit, as in identify
+            if secrets.compare_digest(presented, known):
+                found = agent
+        return None if found is None else (found, self._keys[found])
 
     def identify_header(self, authorization: str | None) -> str | None:
         """Agent id from an "Authorization: Bearer <token>" header, or None."""
@@ -102,9 +127,26 @@ def read_agents_file(path: Path) -> AgentsFile:
     except DuplicateKeyError as exc:
         raise AgentsError(f"{path}: {exc}") from None
     except ValidationError as exc:
+        if old := _without_server_key(exc, raw):
+            raise AgentsError(
+                f"{path}: no server_key for {', '.join(old)} (Warden's proof of identity, made "
+                "with the token). Delete those entries (or the whole file) and add the agents "
+                "again with `warden agent add`: they get new tokens"
+            ) from None
         raise AgentsError(f"{path}: {'; '.join(describe_errors(exc))}") from None
     except (OSError, ValueError, RecursionError) as exc:
         raise AgentsError(f"{path}: can't read it ({type(exc).__name__})") from None
+
+
+def _without_server_key(exc: ValidationError, raw: str) -> list[str]:
+    """Agents whose entry is only missing its server_key (at most 20 are named). Empty if
+    anything else is wrong too: then every problem is reported."""
+    errors = exc.errors(include_input=False)
+    if any(e["type"] != "missing" or e["loc"][-1] != "server_key" for e in errors):
+        return []
+    entries = json.loads(raw)["agents"]
+    names = [str(entries[e["loc"][1]]["id"]) for e in errors]  # valid ids: no other error
+    return names[:20] + (["..."] if len(names) > 20 else [])
 
 
 def load_agents(path: Path) -> AgentRegistry:
@@ -134,7 +176,9 @@ def add_agent(path: Path, agent_id: str) -> str:
     if agent_id in [a.id for a in current.agents]:
         raise AgentsError(f"agent {agent_id!r} already exists (remove it first to rotate)")
     token = new_token()
-    entry = AgentEntry(id=agent_id, token_sha256=hash_token(token))
+    entry = AgentEntry(
+        id=agent_id, token_sha256=hash_token(token), server_key=proof_key(token).hex()
+    )
     _write_private(path, AgentsFile(agents=(*current.agents, entry)))
     return token
 

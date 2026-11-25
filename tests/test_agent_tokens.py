@@ -33,6 +33,7 @@ from warden.api import StartupError, create_app
 from warden.approvals import ApprovalStore, Status
 from warden.audit import SQLiteAuditLog
 from warden.client import WardenClient
+from warden.identity import proof_key
 from warden.models import ActionRequest
 from warden.sdk import default_client
 from warden.settings import Settings, SettingsError, resolve
@@ -51,8 +52,8 @@ def test_tokens_identify_their_agent_only() -> None:
     a, b = new_token(), new_token()
     registry = AgentRegistry(
         (
-            AgentEntry(id="a", token_sha256=hash_token(a)),
-            AgentEntry(id="b", token_sha256=hash_token(b)),
+            AgentEntry(id="a", token_sha256=hash_token(a), server_key=proof_key(a).hex()),
+            AgentEntry(id="b", token_sha256=hash_token(b), server_key=proof_key(b).hex()),
         )
     )
     assert registry.identify(a) == "a" and registry.identify(b) == "b"
@@ -69,7 +70,10 @@ def test_tokens_identify_their_agent_only() -> None:
 def test_lookup_compares_every_entry(monkeypatch: pytest.MonkeyPatch) -> None:
     tokens = [new_token() for _ in range(5)]
     registry = AgentRegistry(
-        tuple(AgentEntry(id=f"a{i}", token_sha256=hash_token(t)) for i, t in enumerate(tokens))
+        tuple(
+            AgentEntry(id=f"a{i}", token_sha256=hash_token(t), server_key=proof_key(t).hex())
+            for i, t in enumerate(tokens)
+        )
     )
     calls = []
     real = secrets.compare_digest
@@ -132,19 +136,27 @@ def test_failed_write_leaves_no_temp_file(tmp_path: Path, monkeypatch: pytest.Mo
     assert list(tmp_path.iterdir()) == []
 
 
+KEY_1, KEY_2 = (f'", "server_key": "{digit * 64}' for digit in "12")
+
+
 @pytest.mark.parametrize(
     ("text", "message"),
     [
         ('{"agents": [], "agents": []}', "duplicate key"),
         (
-            '{"agents": [{"id": "a", "token_sha256": "' + "a" * 64 + '"}, '
-            '{"id": "a", "token_sha256": "' + "b" * 64 + '"}]}',
+            '{"agents": [{"id": "a", "token_sha256": "' + "a" * 64 + KEY_1 + '"}, '
+            '{"id": "a", "token_sha256": "' + "b" * 64 + KEY_2 + '"}]}',
             "listed twice",
         ),
         (
-            '{"agents": [{"id": "a", "token_sha256": "' + "a" * 64 + '"}, '
-            '{"id": "b", "token_sha256": "' + "a" * 64 + '"}]}',
+            '{"agents": [{"id": "a", "token_sha256": "' + "a" * 64 + KEY_1 + '"}, '
+            '{"id": "b", "token_sha256": "' + "a" * 64 + KEY_2 + '"}]}',
             "share a token",
+        ),
+        (
+            '{"agents": [{"id": "a", "token_sha256": "' + "a" * 64 + KEY_1 + '"}, '
+            '{"id": "b", "token_sha256": "' + "b" * 64 + KEY_1 + '"}]}',
+            "share a server_key",
         ),
         ('{"agents": [{"id": "a", "token_sha256": "wdn_plaintext"}]}', "token_sha256"),
         ('{"agents": [{"id": "a", "token": "x", "token_sha256": "' + "a" * 64 + '"}]}', "token"),

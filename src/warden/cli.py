@@ -13,7 +13,7 @@ warden test FILE [--policy FILE]        run policy tests (example requests + exp
 warden limits [--policy FILE]           show rate limits and approval quotas
 warden limits set [--agent ID] [--requests-per-minute N] [--pending N]
 warden limits reset [--agent ID]        change them in the policy file
-warden agent add ID     create an agent token (printed once; only its hash is stored)
+warden agent add ID     create an agent token (printed once, never stored)
 warden agent list | remove ID     manage the agents file (--agents FILE)
 warden audit verify [--audit-db FILE] [--expect FILE]   check the audit log's hash chain
 warden audit head [--audit-db FILE]     print a checkpoint to keep elsewhere

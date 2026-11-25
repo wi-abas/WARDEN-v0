@@ -4,6 +4,9 @@ Endpoints:
 - GET  /health       -> "ok", or "degraded" (HTTP 503) when no rules loaded: everything is denied
 - POST /v1/evaluate  -> send an EvaluateRequest, get an EvaluationResult
                         (with --agents: needs "Authorization: Bearer <agent token>")
+- POST /v1/hello     -> proves to whoever holds an agent token or the admin key that this
+                        is Warden (see warden.identity); answers to a request that carries
+                        "Warden-Nonce" and the right secret are signed ("Warden-Mac")
 
 Admin only (header "X-Warden-Admin-Key", printed in the terminal at startup):
 - GET  /v1/approvals                  -> pending approvals, with their arguments
@@ -28,6 +31,7 @@ Run it with `uv run warden` (listens on 127.0.0.1 only: this machine, not the ne
 
 import copy
 import functools
+import hashlib
 import json
 import logging
 import logging.config
@@ -65,7 +69,7 @@ from starlette.datastructures import Headers
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from warden import __version__, audit
+from warden import __version__, audit, identity
 from warden.agents import AgentRegistry, AgentsError, load_agents
 from warden.approvals import (
     MAX_GROUP,
@@ -79,7 +83,7 @@ from warden.approvals import (
 )
 from warden.audit import AuditEntry, AuditEvent, AuditLog, EventKind, SQLiteAuditLog
 from warden.engine import evaluate
-from warden.limits import RateLimiter
+from warden.limits import Limits, LimitSpec, RateLimiter
 from warden.models import (
     AGENT_ID_PATTERN,
     APPROVAL_ID_PATTERN,
@@ -106,6 +110,14 @@ HOST = "127.0.0.1"
 MAX_BODY_BYTES = 64 * 1024  # 64 KB is far more than any real tool call needs
 REJECTIONS_PER_MINUTE = 60
 EVALUATE_PATH = "/v1/evaluate"
+APPROVALS_PATH = "/v1/approvals"
+# How often one agent (or the admin) may say hello. Every question needs one, so agents
+# with higher request limits get more: see _hello_limits.
+HELLOS_PER_MINUTE = 6000
+# Hellos nobody's key belongs to. A budget of their own, so a program without a token
+# can't use up the agents'.
+UNKNOWN_HELLOS_PER_MINUTE = 600
+CANT_PROVE = "can't prove Warden's identity on this connection"
 # Rejected requests are recorded by a background worker, never on the server's main
 # loop: if the database is locked (e.g. someone has it open), a synchronous write would
 # freeze EVERY request for up to 5 seconds. Tests switch this off to read events at once.
@@ -313,6 +325,110 @@ class CrashGuard:
                 await _deny_response(500, "internal error")(scope, receive, send)
 
 
+def single_header(scope: Scope, name: str) -> str | None:
+    """The header's value if it was sent exactly once. Sent twice, one part of Warden
+    might look at the first and another at the second."""
+    wanted = name.lower().encode()
+    values = [value for header, value in scope["headers"] if header.lower() == wanted]
+    return values[0].decode("latin-1") if len(values) == 1 else None
+
+
+def connection_ends(scope: Scope) -> tuple[str, str]:
+    """(server address, client address) of this connection. ValueError if unknown, or if
+    the client address may not be the real one: Uvicorn can take it from X-Forwarded-For,
+    where an impostor that passes requests on could write its victim's address."""
+    if any(name.lower() == b"x-forwarded-for" for name, _ in scope["headers"]):
+        raise ValueError("forwarded request")
+    return identity.address(scope.get("server")), identity.address(scope.get("client"))
+
+
+class AnswerSigner:
+    """Adds "Warden-Mac" to answers, for requests with one valid "Warden-Nonce" and the
+    secret that `key_for` finds a key for. Everything else passes unchanged (and a client
+    that demands proof then denies).
+
+    The MAC covers the exact bytes of question and answer. An answer given before the
+    whole request was read (e.g. 413) can't be signed, so it isn't. The answer is held
+    back until it is complete: if anything fails, nothing was sent and CrashGuard, around
+    this, answers 500 without a MAC.
+    """
+
+    def __init__(
+        self,
+        app: ASGIApp,
+        key_for: Callable[[Scope], bytes | None],
+        on_reject: Callable[[Scope, int, str], None] = lambda scope, status, reason: None,
+    ) -> None:
+        self.app = app
+        self.key_for = key_for
+        self.on_reject = on_reject
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        nonce = single_header(scope, identity.NONCE_HEADER) if scope["type"] == "http" else None
+        if nonce is None or not identity.is_nonce(nonce):
+            await self.app(scope, receive, send)
+            return
+        key = self.key_for(scope)
+        if key is None:
+            await self.app(scope, receive, send)
+            return
+        try:
+            server, client = connection_ends(scope)
+        except ValueError:  # refused unread: an unsigned allow could waste an approval
+            self.on_reject(scope, 400, CANT_PROVE)
+            await _deny_response(400, CANT_PROVE)(scope, receive, send)
+            return
+        digest = hashlib.sha256()
+        # Without a declared body there is none (Transfer-Encoding is refused, unread).
+        declared = {value for name, value in scope["headers"] if name == b"content-length"}
+        chunked = any(name == b"transfer-encoding" for name, _ in scope["headers"])
+        whole = declared <= {b"0"} and not chunked
+        start: Message | None = None
+        sent = False
+        answer = bytearray()
+
+        async def hashed() -> Message:
+            nonlocal whole
+            message = await receive()
+            if message["type"] == "http.request":
+                digest.update(message.get("body", b""))
+                whole = not message.get("more_body", False)
+            return message
+
+        async def held_back(message: Message) -> None:
+            nonlocal start, sent
+            if message["type"] == "http.response.start":
+                start = message
+                return
+            answer.extend(message.get("body", b""))
+            if message.get("more_body", False) or start is None:
+                return
+            if whole:
+                retry = [v for n, v in start["headers"] if n.lower() == b"retry-after"]
+                query = scope["query_string"]
+                mac = identity.answer_mac(
+                    key,
+                    nonce=nonce,
+                    server=server,
+                    client=client,
+                    method=scope["method"],
+                    target=scope["raw_path"] + (b"?" + query if query else b""),
+                    request_sha256=digest.hexdigest(),
+                    status=start["status"],
+                    retry_after=b",".join(retry),
+                    body=bytes(answer),
+                )
+                signed = (identity.MAC_HEADER.lower().encode(), mac.encode())
+                start["headers"] = [*start["headers"], signed]
+            sent = True
+            await send(start)
+            await send({"type": "http.response.body", "body": bytes(answer)})
+
+        await self.app(scope, hashed, held_back)
+        if start is not None and not sent:
+            raise RuntimeError("unfinished answer")  # never signed: CrashGuard answers
+
+
 # Line and paragraph separators, spaces other than " ", private use (a font decides what
 # it draws) and unassigned: they break a line or may show as a blank.
 _BLANK_CATEGORIES = frozenset({"Zl", "Zp", "Zs", "Co", "Cn"})
@@ -436,6 +552,29 @@ class GroupDecision(BaseModel):
         return self
 
 
+class Hello(BaseModel):
+    """Body of POST /v1/hello: which key to prove, and a fresh random nonce."""
+
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+
+    key_id: str = Field(pattern=identity.KEY_ID_PATTERN)
+    nonce: str = Field(pattern=identity.NONCE_PATTERN)
+
+
+def _hello_limits(limits: Limits, agent_ids: list[str]) -> Limits:
+    """Four hellos per allowed request, and at least HELLOS_PER_MINUTE: an agent over its
+    request limit must still get its (signed) 429, not run out of hellos first."""
+    specs = {
+        agent: LimitSpec(
+            requests_per_minute=min(
+                100_000, max(HELLOS_PER_MINUTE, 4 * limits.requests_per_minute(agent))
+            )
+        )
+        for agent in agent_ids
+    }
+    return Limits(default=LimitSpec(requests_per_minute=HELLOS_PER_MINUTE), agents=specs)
+
+
 class StartupError(Exception):
     """Warden can't start; the message says why (and never contains secrets)."""
 
@@ -466,7 +605,7 @@ class _Warden:
     policy: Policy
     audit_log: AuditLog
     approvals: ApprovalStore
-    admin_key: str
+    admin_key: str = field(repr=False)
     # None = no agent tokens: agent_id is self-declared (the old behaviour).
     agents: AgentRegistry | None = None
     limiter: RateLimiter | None = None  # None = built from the policy's limits
@@ -490,16 +629,63 @@ class _Warden:
     def __post_init__(self) -> None:
         if self.limiter is None:
             self.limiter = RateLimiter(self.policy.limits)
+        known = [] if self.agents is None else self.agents.agent_ids
+        self._hellos = RateLimiter(_hello_limits(self.policy.limits, known))
+        unknown = LimitSpec(requests_per_minute=UNKNOWN_HELLOS_PER_MINUTE)
+        self._unknown_hellos = RateLimiter(Limits(default=unknown))
+        self._admin_proof = identity.proof_key(self.admin_key)
+        self._admin_key_id = identity.key_id(self._admin_proof)
         # How long a human "no" sticks, per agent, from the policy's limits.
         self.approvals.rejection_window = self.policy.limits.rejection_window_seconds
 
     # --- Access control and rejected requests ------------------------------------------
 
     def require_admin(self, x_warden_admin_key: str | None = Header(default=None)) -> None:
-        if x_warden_admin_key is None or not secrets.compare_digest(
-            x_warden_admin_key.encode(), self.admin_key.encode()
-        ):
+        if not self._is_admin_key(x_warden_admin_key):
             raise _AdminKeyError
+
+    def _is_admin_key(self, presented: str | None) -> bool:
+        return presented is not None and secrets.compare_digest(
+            presented.encode(), self.admin_key.encode()
+        )
+
+    # --- Proving that this is Warden (see warden.identity) -------------------------------
+
+    def hello(self, body: Hello, request: Request) -> JSONResponse:
+        """Prove this is Warden, on this very connection, to whoever holds the secret
+        behind key_id. No secret is sent here: the caller doesn't trust us yet."""
+        found = self._find_key(body.key_id)
+        if found is None:
+            if wait := self._unknown_hellos.acquire(":unknown"):
+                return self.refuse_rate_limited(request.scope, wait)
+            return self.reject(request, 401, "unknown key_id")
+        name, key = found
+        if wait := self._hellos.acquire(name):
+            return self.refuse_rate_limited(request.scope, wait)
+        try:
+            server, client = connection_ends(request.scope)
+        except ValueError:
+            return self.reject(request, 400, CANT_PROVE)
+        return JSONResponse({"mac": identity.hello_mac(key, body.nonce, server, client)})
+
+    def _find_key(self, key_id: str) -> tuple[str, bytes] | None:
+        agent = None if self.agents is None else self.agents.find_key(key_id)
+        if secrets.compare_digest(key_id.encode(), self._admin_key_id.encode()):
+            return ":admin", self._admin_proof  # ":" can't be in an agent id
+        return agent
+
+    def answer_key(self, scope: Scope) -> bytes | None:
+        """The key to sign the answer with: that of the secret this request carries (one
+        that is valid for this path), else None. The same for every kind of answer, also
+        one given before a route ran."""
+        path = str(scope.get("path", ""))
+        if path == EVALUATE_PATH and self.agents is not None:
+            agent = self.agents.identify_header(single_header(scope, "authorization"))
+            return None if agent is None else self.agents.server_key(agent)
+        if path == APPROVALS_PATH or path.startswith(APPROVALS_PATH + "/"):
+            admin = self._is_admin_key(single_header(scope, "x-warden-admin-key"))
+            return self._admin_proof if admin else None
+        return None
 
     def record_rejection(self, scope: Scope, status: int, reason: str) -> None:
         """Audit a refused request: method and URL path only, never the body."""
@@ -1037,9 +1223,13 @@ def create_app(
     app.add_middleware(BodySizeLimit, on_reject=w.record_rejection)
     # Added after those, so it runs before them: refuse foreign Host headers first.
     app.add_middleware(HostCheck, allowed=ALLOWED_HOSTS, on_reject=w.record_rejection)
-    # Around everything: a crash anywhere becomes a 500 deny. Not an exception handler
+    # Around those: a crash anywhere becomes a 500 deny. Not an exception handler
     # for Exception: Starlette re-raises after calling it, and Uvicorn then logs the full
     # traceback with the exception's message, which may hold tool arguments.
+    app.add_middleware(CrashGuard, on_reject=w.record_rejection)
+    # Around that, so refusals and crashes are signed too; and a crash guard for the
+    # signing itself (an answer without a MAC, which clients deny).
+    app.add_middleware(AnswerSigner, key_for=w.answer_key, on_reject=w.record_rejection)
     app.add_middleware(CrashGuard, on_reject=w.record_rejection)
 
     @app.exception_handler(RequestValidationError)
@@ -1070,6 +1260,11 @@ def create_app(
 
     admin = [Depends(w.require_admin)]
     app.get("/health")(w.health)
+
+    @app.post(identity.HELLO_PATH)
+    async def hello(body: Hello, request: Request) -> JSONResponse:
+        return w.hello(body, request)
+
     app.post(EVALUATE_PATH, response_model=EvaluationResult)(w.evaluate)
     app.get("/v1/approvals", dependencies=admin, response_model=None)(w.list_approvals)
     app.post("/v1/approvals/decide", dependencies=admin)(w.decide_group)
@@ -1161,7 +1356,8 @@ def main(settings: Settings | None = None) -> None:
         print(f"\nWarden: {len(agents.agent_ids)} agents with tokens\n", file=sys.stderr)
     else:
         print(
-            "\nWarden: no agent tokens (--agents): any local program can claim any agent_id\n",
+            "\nWarden: no agent tokens (--agents): any local program can claim any agent_id, and "
+            "agents can't tell Warden from another program on this port\n",
             file=sys.stderr,
         )
     if settings.admin_key is not None:
@@ -1173,4 +1369,5 @@ def main(settings: Settings | None = None) -> None:
         admin_key=settings.admin_key,
         agents=agents,
     )
-    uvicorn.run(app, host=HOST, port=settings.port, log_config=config)
+    # proxy_headers: there is no proxy in front, so nobody may change the client address.
+    uvicorn.run(app, host=HOST, port=settings.port, log_config=config, proxy_headers=False)
