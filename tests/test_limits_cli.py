@@ -244,3 +244,39 @@ def test_defaults_never_warn_about_agents(
     assert main(["limits", "--policy", str(path), "set", *flags]) == 0
     assert main(["limits", "--policy", str(path), "set", "--pending", "3"]) == 0
     assert "warning" not in capsys.readouterr().err
+
+
+def test_show_includes_the_rejection_window(tmp_path: Path) -> None:
+    assert "rejected actions stay refused for 900 seconds" in show(write(tmp_path))
+    extra = {
+        "limits": {
+            "default": {"rejection_window_seconds": 3600},
+            "agents": {"billing": {"rejection_window_seconds": 0}},
+        }
+    }
+    default, billing = show(write(tmp_path, extra)).split("  billing:")
+    assert "rejected actions stay refused for 3600 seconds" in default
+    assert "rejected actions stay refused for 0 seconds (off)" in billing
+
+
+def test_reset_keeps_the_rejection_window(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`warden limits` can't set it, so it must not quietly undo it either: that could
+    shorten how long a human's "no" lasts."""
+    spec = {"requests_per_minute": 5, "rejection_window_seconds": 86400}
+    path = write(tmp_path, {"limits": {"default": spec, "agents": {"billing": spec}}})
+    kept = {"rejection_window_seconds": 86400}
+    args = ["limits", "--policy", str(path), "reset"]
+    assert main([*args, "--agent", "billing"]) == 0
+    assert "kept rejection_window_seconds" in capsys.readouterr().out
+    assert limits_of(path) == {"default": spec, "agents": {"billing": kept}}
+    assert main(args) == 0
+    assert limits_of(path) == {"default": kept, "agents": {"billing": kept}}
+    assert "86400 seconds" in capsys.readouterr().out
+
+
+def test_reset_without_a_rejection_window_says_nothing_about_it(tmp_path: Path) -> None:
+    path = write(tmp_path)
+    change(path, None, pending=7)
+    assert "kept" not in change(path, None, reset=True)

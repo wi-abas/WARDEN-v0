@@ -3,6 +3,7 @@
 warden limits                                  show the limits that apply
 warden limits set [--agent ID] [--requests-per-minute N] [--pending N]
 warden limits reset [--agent ID]               remove one agent's values, or the defaults
+                                               (rejection_window_seconds stays: edit the file)
 
 --policy FILE works before or after set/reset. `set --agent ID` warns if ID isn't in
 the agents file (--agents FILE, WARDEN_AGENTS or warden-agents.json).
@@ -71,19 +72,31 @@ def _write(path: Path, data: dict[str, Any]) -> None:
         tmp.unlink(missing_ok=True)
 
 
+def _rejection_line(limits: Limits, agent: str) -> str:
+    seconds = limits.rejection_window_seconds(agent)
+    return f"    rejected actions stay refused for {seconds} seconds" + (
+        "" if seconds else " (off): the agent may ask again at once"
+    )
+
+
 def show(path: Path) -> str:
     limits = Limits.model_validate(_read(path).get("limits", {}))
+    built_in = (
+        limits.default.requests_per_minute is None and limits.default.max_pending_approvals is None
+    )
     lines = [
         f"Limits in {path} (restart Warden after changes):",
         f"  default: {limits.requests_per_minute('')} requests/minute, "
         f"{limits.max_pending_approvals('')} pending approvals"
-        + ("" if limits.default.model_fields_set else "  (built-in)"),
+        + ("  (built-in)" if built_in else ""),
+        _rejection_line(limits, ""),
     ]
     for agent in sorted(limits.agents):
         lines.append(
             f"  {agent}: {limits.requests_per_minute(agent)} requests/minute, "
             f"{limits.max_pending_approvals(agent)} pending approvals"
         )
+        lines.append(_rejection_line(limits, agent))
     return "\n".join(lines)
 
 
@@ -94,17 +107,24 @@ def change(
     pending: int | None = None,
     reset: bool = False,
 ) -> str:
-    """Set (or with reset=True remove) values for `agent`, or the defaults if None."""
+    """Set (or with reset=True remove) values for `agent`, or the defaults if None.
+
+    A reset keeps rejection_window_seconds: this command can't set it, and removing it
+    could quietly shorten how long a human's rejection lasts."""
     if not reset and requests_per_minute is None and pending is None:
         raise LimitsEditError("nothing to set: give --requests-per-minute and/or --pending")
     data = _read(path)
     limits: dict[str, Any] = dict(data.get("limits") or {})
     agents: dict[str, Any] = dict(limits.get("agents") or {})
     entry: dict[str, Any] = dict((agents.get(agent) if agent else limits.get("default")) or {})
+    kept = ""
     if reset:
         if agent and agent not in agents:
             raise LimitsEditError(f"no limits for agent {agent!r} in {path}")
-        entry = {}
+        window = entry.get("rejection_window_seconds")
+        entry = {} if window is None else {"rejection_window_seconds": window}
+        if entry:
+            kept = "\nkept rejection_window_seconds (edit the policy file to change it)"
     if requests_per_minute is not None:
         entry["requests_per_minute"] = requests_per_minute
     if pending is not None:
@@ -121,7 +141,7 @@ def change(
     if not data["limits"]:
         del data["limits"]
     _write(path, data)
-    return show(path)
+    return show(path) + kept
 
 
 def agent_warning(agent: str, agents_path: Path | None, already_limited: bool) -> str | None:
