@@ -110,8 +110,8 @@ Assuming the agent runtime calls Warden and obeys the answer:
   limits are per server.
 - **A cancelled async call** can use up its approval if cancelled while a question is on
   its way to Warden (the tool doesn't run).
-- **An MCP server that stops reading its input** can leave the proxy stuck writing, so it
-  notices a disconnected client late; a call approved in that moment could still run.
+- **A call that already left the proxy.** It sits in the operating system's pipe, and the
+  MCP server can still read and run it after the client disconnected.
 - **A disconnected client's approval** stays valid until it expires, for the same agent
   and action.
 - **Argument names that differ only in case**, if the tool ignores case: use tool

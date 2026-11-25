@@ -6,8 +6,8 @@
 - `warden proxy` refuses client requests and notifications with any top-level key other
   than `jsonrpc`, `id`, `method`, `params`, and look-alikes of `tools/call` in
   `allow_methods`. A hidden `Method`/`Params` pair could reach the server unchecked.
-- `warden proxy` never runs a call waiting for approval once the client disconnected, and
-  refuses a request id still in use (`1` and `"1"` are the same), overlong ids and more
+- `warden proxy` never runs a call waiting for approval once the client disconnected, also
+  when the server had stopped reading (it is cut off instead), and refuses a request id still in use (`1` and `"1"` are the same), overlong ids and more
   than 10,000 unanswered requests.
 - Every character Unicode may draw as nothing (variation selectors, Hangul fillers,
   U+034F, ...) counts as hidden in compared text, rule values and the approval list.

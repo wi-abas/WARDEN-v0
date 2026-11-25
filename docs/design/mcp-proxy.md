@@ -45,6 +45,8 @@ trusted to handle its own protocol).
 Config is a strict JSON file (unknown keys rejected). The Warden URL must be on this
 machine (`127.0.0.1`, `localhost`, `::1`), so tool arguments are never sent elsewhere.
 
+See also [proxy-stuck-server.md](proxy-stuck-server.md) (a server that stops reading).
+
 ## Threat model
 
 Protects against (assuming the client only reaches the server through the proxy):

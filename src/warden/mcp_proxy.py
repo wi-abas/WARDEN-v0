@@ -45,6 +45,9 @@ MAX_LINE_BYTES = 16 * 1024 * 1024  # one JSON-RPC message
 MAX_IN_FLIGHT = 64  # tool calls being checked (or waiting for approval) at once
 MAX_UNANSWERED = 10_000  # client requests without an answer whose ids are remembered
 MAX_ID_TEXT = 256
+MAX_WAITING_LINES = 10_000  # client lines read but not handled yet ...
+MAX_WAITING_BYTES = 2 * MAX_LINE_BYTES  # ... and their size
+STALLED_SECONDS = 30.0  # after the client left: how long the server may take nothing
 SHUTDOWN_GRACE_SECONDS = 5.0  # how long the server gets to exit after the client leaves
 MAX_ANSWER_BACKLOG = 1024 * 1024  # unsent bytes before the proxy's own answers are dropped
 
@@ -317,6 +320,9 @@ class McpProxy:
         self._unanswered: dict[str, str] = {}
         self._backlog_warned = False
         self._client_gone = asyncio.Event()  # the client closed its input (or crashed)
+        self._needed_approval: set[str] = set()  # ids of calls that needed a human
+        self._waiting_bytes = 0
+        self._write_lock = asyncio.Lock()  # one message at a time; first come, first served
         self._server_in: asyncio.StreamWriter | None = None
 
     # --- Session ----------------------------------------------------------------------
@@ -341,6 +347,9 @@ class McpProxy:
         # mutation-ok: both are set (PIPE); the assert only informs the type checker
         assert process.stdin is not None and process.stdout is not None  # noqa: S101 (PIPE)
         self._server_in = process.stdin
+        # drain() waits until everything left the proxy: what isn't written yet waits in
+        # _forward, where it can still be dropped (docs/design/proxy-stuck-server.md).
+        process.stdin.transport.set_write_buffer_limits(high=0)
         server_side = asyncio.create_task(self._relay_server(process.stdout))
         client_side = asyncio.create_task(self._relay_client())
         await asyncio.wait({server_side, client_side}, return_when=asyncio.FIRST_COMPLETED)
@@ -414,14 +423,40 @@ class McpProxy:
             )
 
     async def _relay_client(self) -> None:
+        """Handle client lines in order. Reading them is a task of its own: handling may
+        wait for a server that isn't reading, and the end of input must be noticed anyway."""
+        lines: asyncio.Queue[bytes | None] = asyncio.Queue()
+        reader = asyncio.create_task(self._read_client(lines))
         try:
-            await self._relay_client_lines()
-        finally:  # end of input, or the reader failed: either way nobody is there any more
+            await self._relay_client_lines(lines)
+        finally:
+            reader.cancel()
             self._client_gone.set()
 
-    async def _relay_client_lines(self) -> None:
+    async def _read_client(self, lines: asyncio.Queue[bytes | None]) -> None:
+        try:
+            while (line := await self.read_client()) != b"":
+                size = len(line or b"")
+                if (
+                    lines.qsize() >= MAX_WAITING_LINES
+                    or self._waiting_bytes + size > MAX_WAITING_BYTES
+                ):
+                    logger.warning("refused a client message (too many are waiting)")
+                    self._reply(rpc_error(None, INVALID_REQUEST, "too many messages waiting"))
+                else:
+                    self._waiting_bytes += size
+                    lines.put_nowait(line)
+                await asyncio.sleep(0)  # let the handler run between two lines
+        except Exception as exc:
+            logger.error("can't read from the client: %s", type(exc).__name__)
+        finally:  # end of input, or the reader failed: either way nobody is there any more
+            self._client_gone.set()
+            lines.put_nowait(b"")
+
+    async def _relay_client_lines(self, lines: asyncio.Queue[bytes | None]) -> None:
         while True:
-            line = await self.read_client()
+            line = await lines.get()
+            self._waiting_bytes -= len(line or b"")
             if line == b"":
                 return
             if line is None:
@@ -518,6 +553,7 @@ class McpProxy:
 
         def done(_: object) -> None:
             self._calls.pop(key, None)
+            self._needed_approval.discard(key)
             if key in self._held:  # never sent to the server, so nothing else answers it
                 self._held.discard(key)
                 self._unanswered.pop(key, None)
@@ -525,10 +561,12 @@ class McpProxy:
         task.add_done_callback(done)
 
     def _cancel(self, params: object) -> None:
-        """The client gave up on a request: stop waiting for its approval."""
+        """The client gave up on a request: stop waiting for its approval. Once the call
+        is being written, it's too late (and _forward must stay to watch over it)."""
         if isinstance(params, dict) and _valid_id(params.get("requestId")):
-            task = self._calls.get(_id_key(params.get("requestId")))
-            if task is not None:
+            key = _id_key(params.get("requestId"))
+            task = self._calls.get(key)
+            if task is not None and key in self._held:
                 task.cancel()
 
     async def _tool_call(self, request_id: JsonValue, message: dict[str, Any]) -> None:
@@ -554,7 +592,11 @@ class McpProxy:
                 return
         name: str = params["name"]
         try:
-            answer = await self._decide(self.config.tool_prefix + name, arguments)
+            answer = await self._decide(
+                self.config.tool_prefix + name,
+                arguments,
+                lambda: self._needed_approval.add(_id_key(request_id)),
+            )
         except Exception as exc:  # fail closed, whatever went wrong
             logger.error("check failed: %s", type(exc).__name__)
             answer = Answer(Decision.DENY, "check failed")
@@ -562,18 +604,22 @@ class McpProxy:
         if answer.allowed:
             # Forward the SAME parsed object Warden checked, re-encoded: never the raw
             # bytes, so the server can't read anything Warden didn't see.
-            self._held.discard(_id_key(request_id))
             await self._forward(message)
+            if _id_key(request_id) in self._held:  # dropped instead of written
+                self._reply(tool_error(request_id, "Blocked by Warden: not sent to the server"))
         else:
             self._reply(tool_error(request_id, f"Blocked by Warden: {answer.reason}"))
 
     async def _ask(self, tool: str, arguments: dict[str, Any], approval_id: str | None) -> Answer:
         return await asyncio.to_thread(self.checker.evaluate, tool, arguments, approval_id)
 
-    async def _decide(self, tool: str, arguments: dict[str, Any]) -> Answer:
+    async def _decide(
+        self, tool: str, arguments: dict[str, Any], on_needs_human: Callable[[], None]
+    ) -> Answer:
         answer = await self._ask(tool, arguments, None)
         if answer.decision is not Decision.REQUIRE_APPROVAL:
             return answer
+        on_needs_human()
         approval_id = answer.approval_id
         if approval_id is None:
             return Answer(Decision.DENY, "approval needed, but Warden gave no approval id")
@@ -651,14 +697,43 @@ class McpProxy:
             logger.error("MCP server is no longer reading its input")
 
     async def _forward(self, message: dict[str, Any]) -> None:
-        writer = self._server_in
-        if writer is None or writer.is_closing():
-            return
+        """Send one message to the server and wait until it left the proxy. A call that
+        needed an approval is dropped if the client is gone. A call that was dropped is
+        still in _held."""
+        key = _id_key(message.get("id")) if message.get("method") == "tools/call" else None
+        async with self._write_lock:
+            approved = key in self._needed_approval
+            writer = self._server_in
+            if writer is None or writer.is_closing():
+                return
+            if approved and self._client_gone.is_set():
+                return
+            if key is not None:
+                self._held.discard(key)
+            try:
+                writer.write(encode(message))
+                await self._drain(writer, patience=0.0 if approved else STALLED_SECONDS)
+            except (ConnectionError, RuntimeError):
+                logger.error("MCP server is no longer reading its input")
+
+    async def _drain(self, writer: asyncio.StreamWriter, patience: float) -> None:
+        """Wait until the server's input took everything. If the client leaves meanwhile,
+        wait `patience` seconds more, then cut the server's input off: what is still in
+        the proxy must not reach a server that wakes up later."""
+        drained = asyncio.ensure_future(writer.drain())
+        gone = asyncio.ensure_future(self._client_gone.wait())
         try:
-            writer.write(encode(message))
-            await writer.drain()
-        except (ConnectionError, RuntimeError):
-            logger.error("MCP server is no longer reading its input")
+            await asyncio.wait({drained, gone}, return_when=asyncio.FIRST_COMPLETED)
+            if not drained.done():
+                await asyncio.wait({drained}, timeout=patience)
+            if drained.done():
+                await drained  # raises if the connection broke
+            else:
+                logger.warning("MCP server isn't reading and the client left; cut it off")
+                writer.transport.abort()
+        finally:
+            drained.cancel()
+            gone.cancel()
 
 
 def _meta_problem(meta: object, allowed_keys: tuple[str, ...]) -> str | None:
