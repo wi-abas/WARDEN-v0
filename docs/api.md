@@ -243,6 +243,9 @@ Every decision is saved to `warden-audit.db` (SQLite, in the folder you start Wa
 time, agent, tool, decision, reason, matched rule and `action_hash`.
 **Tool arguments are never stored.** If the log can't be written, Warden answers
 `deny` (HTTP 503), so nothing is allowed without a record.
+A row that SQLite says it stored but didn't (e.g. because of a trigger) counts as not
+written. Warden refuses a database with triggers, views or virtual tables: don't add any
+(extra indexes and ordinary tables are fine).
 
 A second table, `events`, records everything else: a human approving or denying (if that
 record can't be written, the approval doesn't happen), failed approve/deny attempts, and

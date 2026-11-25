@@ -27,6 +27,16 @@ nothing would show it.
   other row without hashes is reported as broken. So nulling the hashes after editing
   rows doesn't pass, and deleting or nulling that event only makes `verify` stricter.
 
+- **A write counts only if it landed.** SQLite can report success without storing a row
+  (a trigger with `RAISE(IGNORE)`, a rebuilt table with `ON CONFLICT IGNORE`). So, in the
+  transaction that writes a row, Warden (1) refuses a database with any trigger, view or
+  virtual table (it creates none), and (2) reads the newest row back and requires exactly
+  the id, values and hashes it wrote, with no other row changed. Otherwise the write
+  fails: the answer is a 503 deny and a just-used approval is restored. Retention makes
+  check (1) too, startup refuses such a database, and `audit verify` and `audit head`
+  report it. Don't add views or triggers to the audit database (extra tables and indexes
+  are fine). Cost: about 0.05 ms per evaluate.
+
 ## Threat model
 
 Detects: editing any field of a row, deleting or inserting rows in the middle,
@@ -42,6 +52,11 @@ reordering, editing anchors to hide extra deletions, unchained rows added later.
   (see "Checkpoints" below).
 - **Cutting the tail** (deleting the newest rows) leaves a valid, shorter chain. Again
   only a saved checkpoint shows it.
+- **A trigger that was added and removed again**: `verify` sees only what is in the
+  database now. While Warden runs, writes are refused as long as it is there, so no
+  allow goes unrecorded.
+- Someone who can write the database can still change approval rows (they aren't
+  chained), or swap the whole file.
 - Rows deleted by retention are gone; the chain only proves the rest is intact.
 - It's evidence, not prevention: Warden doesn't stop anyone from editing the file.
 

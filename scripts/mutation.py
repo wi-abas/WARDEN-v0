@@ -124,6 +124,7 @@ TARGETS: dict[str, list[str]] = {
         "test_audit_chain.py",
         "test_audit_events.py",
         "test_audit_permissions.py",
+        "test_audit_triggers.py",
         "test_retention.py",
         "test_locked_database.py",
         "test_group_approvals_api.py",
