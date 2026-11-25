@@ -180,3 +180,24 @@ def test_only_one_purge_runs_at_a_time(tmp_path: Path) -> None:
     release.set()
     log.wait_for_purge()
     assert len(calls) == 2
+
+
+@pytest.mark.parametrize("bad", [-1, 0, 36501, 10**10, True, 1.5])
+def test_purge_refuses_a_bad_number_of_days(tmp_path: Path, bad: object) -> None:
+    """A negative age would put the cutoff in the future and delete everything."""
+    log = SQLiteAuditLog(tmp_path / "a.db", retention_days=None, clock=Clock())
+    log.record(entry(START))
+    with pytest.raises(ValueError, match="whole number"):
+        log.purge_older_than(bad)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="whole number"):
+        SQLiteAuditLog(tmp_path / "b.db", retention_days=bad)  # type: ignore[arg-type]
+    assert len(log.recent()) == 1
+
+
+def test_longest_retention_purges_nothing_recent(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    log = SQLiteAuditLog(tmp_path / "a.db", retention_days=36500, clock=Clock())
+    log.record(entry(START - timedelta(days=3650)))
+    assert log.purge_older_than(36500) == 0
+    assert len(log.recent()) == 1 and "purge failed" not in caplog.text

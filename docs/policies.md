@@ -234,17 +234,20 @@ list, so an agent can't add an argument no rule looks at (like `bcc`).
 `"git status"` is allowed but `"git status; rm -rf /"`, `"ls -la"` and `["ls"]` (a list, not
 text) are denied. Anything not listed falls through to "no matching rule": deny.
 
-**Email only to your own domain** (`email-colleagues`). `endswith` with `ignore_case`
-allows `Ann@MyCompany.com` and denies `bob@gmail.com` and the look-alike
-`ann@mycompany.com.evil.net`. A `bcc` is denied by the argument list.
+**Email to your own domain** (`email-colleagues`, its `when`). `endswith` with
+`ignore_case` allows `Ann@MyCompany.com`, but not `bob@gmail.com` or the look-alike
+`ann@mycompany.com.evil.net`. A `bcc`, or a missing `to`, is denied by the argument list.
+To deny outsiders instead of asking a human, remove `otherwise`.
 
 **Shell with a tripwire** (`shell-*`). Every command needs a human, and commands
 containing `rm -rf` or `mkfs` are denied outright, so a tired approver can't wave them
 through. `contains` compares text (`rm -fr` slips past it), so it only ever makes the
 answer stricter here; the approval is the real control.
 
-**External email needs approval** (`email-colleagues`, `otherwise`). The same rule
-allows `Ann@MyCompany.com` and sends `bob@gmail.com` (or a missing `to`) to a human.
+**External email needs approval** (`email-colleagues`, its `otherwise`). The same rule
+sends `bob@gmail.com` and the look-alike to a human. A missing `to` never gets that far:
+`to` is in `required`, so it's denied (`"missing required argument 'to'"`). Without
+`required`, `otherwise` would send it to a human too.
 
 **Payment thresholds** (`pay-*`). Up to 100: allow. 101 to 5000: approval. Over 5000:
 deny. Note the `gte 0` on the allow rule: without it, `-500` is "less than 100" and
@@ -270,10 +273,13 @@ Test your own version the same way (`policy` is relative to the test file):
       "expect": "deny" },
     { "name": "look-alike domain",
       "request": { "tool": "send_email", "arguments": { "to": "ann@mycompany.com.evil.net" } },
-      "expect": "deny" },
-    { "name": "outsider via the external tool",
-      "request": { "tool": "send_external_email", "arguments": { "to": "bob@gmail.com" } },
-      "expect": "require_approval", "rule": "email-outside" },
+      "expect": "require_approval", "rule": "email-colleagues" },
+    { "name": "outsider",
+      "request": { "tool": "send_email", "arguments": { "to": "bob@gmail.com" } },
+      "expect": "require_approval", "rule": "email-colleagues" },
+    { "name": "missing recipient",
+      "request": { "tool": "send_email", "arguments": { "subject": "hi" } },
+      "expect": "deny", "rule": null, "reason": "missing required argument 'to'" },
     { "name": "medium payment",
       "request": { "tool": "pay_invoice", "arguments": { "vendor": "acme", "amount": 101 } },
       "expect": "require_approval", "rule": "pay-medium" },

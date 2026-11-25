@@ -125,7 +125,9 @@ Before calling a change done, run (no pipes that hide exit codes):
 - `examples/`: demo, example agent, proxy config (all exercised by tests).
 - `scripts/`: benchmark, demo SVG, mutation tester.
 - CI (`.github/workflows/`): `ci.yml` (lint, types, tests, policies, demo),
-  `security.yml` (pip-audit), `mutation.yml` (weekly). Actions pinned to commit SHAs.
+  `security.yml` (pip-audit), `mutation.yml` (weekly mutation tests), `fuzz.yml` (weekly
+  Atheris fuzzing), `release.yml` (publish to PyPI on a version tag). Actions pinned to
+  commit SHAs.
 
 ## Git
 

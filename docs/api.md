@@ -225,7 +225,7 @@ token from `WARDEN_AGENT_TOKEN`; with a token they don't send their `agent_id`
 (`WARDEN_AGENT_ID`, `agent_id=`, the proxy's `agent_id`): the token alone decides. Approvals can only be used by the agent that asked.
 
 `warden agent list` and `warden agent remove <id>` manage the file (`--agents FILE`,
-default `warden-agents.json`, mode 600). To rotate a token: remove, add, restart Warden.
+then `WARDEN_AGENTS`, then `warden-agents.json`; mode 600). To rotate a token: remove, add, restart Warden.
 Changes take effect on restart. Design: [design/agent-tokens.md](design/agent-tokens.md).
 
 **Tokens are identity; per-agent rules are permissions.** A rule with
@@ -278,7 +278,7 @@ WARDEN_ADMIN_KEY="$(openssl rand -base64 32)" \
 | Policy file | `--policy` | `WARDEN_POLICY` | `policies/default.json` |
 | Port | `--port` | `WARDEN_PORT` | `8000` |
 | Audit database | `--audit-db` | `WARDEN_AUDIT_DB` | `warden-audit.db` |
-| Audit retention | `--retention-days` (`0` = forever) | `WARDEN_RETENTION_DAYS` | `90` |
+| Audit retention | `--retention-days` (1 to 36500, `0` = forever) | `WARDEN_RETENTION_DAYS` | `90` |
 | Admin key | *(no flag)* | `WARDEN_ADMIN_KEY` (32+ characters) | random, printed at startup |
 | Agent tokens | `--agents` | `WARDEN_AGENTS` | none (agent_id self-declared) |
 
