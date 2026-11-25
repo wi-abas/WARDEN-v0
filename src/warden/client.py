@@ -78,7 +78,7 @@ class AnswerTooLarge(Exception):
     """The answer is over the caller's limit, so it was not read to its end."""
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True)  # mutation-ok: nothing assigns to it
 class Reply:
     """An HTTP answer. From `ask_proven`: its MAC was right."""
 
@@ -95,7 +95,7 @@ class _DeadlineSocket(socket.socket):
 
     def _limit(self) -> None:
         left = self.deadline - time.monotonic()
-        if left <= 0:
+        if left <= 0:  # mutation-ok: equal floats never happen
             raise TimeoutError("timed out")
         self.settimeout(left)
 
@@ -144,7 +144,8 @@ def ask_proven(
     connection was refused or lost."""
     parts = urlsplit(url)
     deadline = time.monotonic() + timeout
-    connection = _OneConnection(parts.hostname or "", parts.port or 0, deadline)
+    host, port = parts.hostname or "", parts.port or 0  # mutation-ok: check_url wants both
+    connection = _OneConnection(host, port, deadline)
     try:
         try:
             connection.connect()
@@ -158,7 +159,7 @@ def ask_proven(
         _check_hello(connection, key, nonce, server, client)
         connection.request(method, path, body, {**headers, identity.NONCE_HEADER: nonce})
         response = connection.getresponse()
-        raw = response.read(limit + 1)
+        raw = response.read(limit + 1)  # mutation-ok: one byte over is enough to tell
         if len(raw) > limit:
             raise AnswerTooLarge
         if response.length:  # closed early: lost, like a refused connection
@@ -192,7 +193,7 @@ def _check_hello(
     try:
         connection.request("POST", identity.HELLO_PATH, hello, {"content-type": "application/json"})
         response = connection.getresponse()
-        raw = response.read(MAX_HELLO_BYTES + 1)
+        raw = response.read(MAX_HELLO_BYTES + 1)  # mutation-ok: one over is enough to tell
     except TimeoutError:
         raise ProofTimeout("no answer in time") from None
     except OSError:

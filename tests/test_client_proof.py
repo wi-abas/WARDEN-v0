@@ -28,6 +28,8 @@ from warden.approvals import ApprovalDB, ApprovalStore
 from warden.audit import SQLiteAuditLog
 from warden.client import (
     MAX_HELLO_BYTES,
+    MAX_REQUEST_BYTES,
+    MAX_RESPONSE_BYTES,
     NOT_PROVEN,
     Answer,
     NotProven,
@@ -488,6 +490,48 @@ def test_oversized_and_cut_off_answers_are_denied() -> None:
 
     answer = fake_answer(cut_off)  # Warden died while answering: a wait may go on
     assert not answer.allowed and answer.unreachable
+
+
+def test_exact_limits() -> None:
+    reply = OK + b" " * (MAX_RESPONSE_BYTES - len(OK))
+    assert fake_answer(lambda fake: fake.reply(200, reply)).allowed
+    over = fake_answer(lambda fake: fake.reply(200, reply + b" "))
+    assert over.reason == "answer from Warden too large"
+
+    for extra in (0, 1):
+
+        def act(sock: socket.socket, extra: int = extra) -> None:
+            hello = valid_hello(sock)
+            sock.sendall(http_answer(hello + b" " * (MAX_HELLO_BYTES - len(hello) + extra)))
+            read_message(sock)
+            sock.close()
+
+        with raw_impostor(act) as (port, received):
+            answer = ask(f"http://127.0.0.1:{port}")
+        assert answer.unreachable is (extra == 0)  # i.e. accepted, then lost
+        assert (TOKEN.encode() in received) is (extra == 0)
+
+
+def test_the_largest_request_is_still_sent() -> None:
+    spare = MAX_REQUEST_BYTES - len(b'{"tool": "t", "arguments": {"x": ""}}')
+    handler = type("Handler", (Fake,), {"do": lambda fake: fake.reply(200, OK)})
+    with serving(handler) as url:
+        client = WardenClient(url, token=TOKEN, timeout=5)
+        assert client.evaluate("t", {"x": "x" * spare}).allowed
+        assert "too large" in client.evaluate("t", {"x": "x" * (spare + 1)}).reason
+
+
+def test_a_signed_redirect_is_not_an_allow() -> None:
+    assert fake_answer(lambda fake: fake.reply(300, OK)).reason == "Warden returned HTTP 300"
+
+
+@pytest.mark.parametrize("status", ["401 Unauthorized", "404 Not Found"])
+def test_only_a_401_says_the_key_is_unknown(status: str) -> None:
+    with raw_impostor(lambda s: s.sendall(http_answer(b"{}", status))) as (port, _):
+        args: Any = (f"http://127.0.0.1:{port}", KEY, "GET", "/", None, {})
+        with pytest.raises(NotProven) as caught:
+            ask_proven(*args, timeout=2, limit=10)
+    assert caught.value.unknown_key is status.startswith("401")
 
 
 def test_an_old_answer_cant_be_replayed() -> None:
