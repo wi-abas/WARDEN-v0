@@ -49,7 +49,7 @@ uv run warden serve     # starts Warden on http://127.0.0.1:8000
 (With pip, drop the `uv run`.) Once released on PyPI the package will be called
 `agent-warden`; the import name stays `warden`.
 
-To stay on one version, add the tag: `"agent-warden @ git+https://github.com/wi-abas/agent-warden@v0.4.0"`.
+To stay on one version, add the tag: `"agent-warden @ git+https://github.com/wi-abas/agent-warden@v0.4.1"`.
 
 ## Use it from your agent
 
@@ -348,6 +348,8 @@ approvals, `warden check`, settings, demo, CI. See [CHANGELOG.md](https://github
 Done in v0.3.0 (alpha): MCP proxy, Python SDK, agent tokens, rate limits, persistent
 approvals, group approvals (`warden approvals`), tamper-evident audit log with
 checkpoints, policy tests (`warden test`), nested argument conditions.
+
+Done in v0.4.1 (alpha): security and bug fixes, see the changelog.
 
 Done in v0.4.0 (alpha): per-agent rules, sticky rejections, `otherwise` and `contains`
 in rules, `host_in` limited to http/https with port checks, approvals need the

@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.4.1 (2026-11-25, alpha)
 
 ### Security
 - `warden proxy` refuses client requests and notifications with any top-level key other
