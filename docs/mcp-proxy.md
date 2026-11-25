@@ -106,7 +106,9 @@ If Warden uses agent tokens (`--agents`), give the proxy its token through the
 environment, never the config file: in Claude Desktop / Cursor add
 `"env": {"WARDEN_AGENT_TOKEN": "wdn_..."}` next to `"args"`. The agent id then comes from
 the token. Leave `agent_id` out of the config, or set it to the token's agent: if they
-don't match, every call is denied.
+don't match, every call is denied. With a token, Warden must also prove that it is Warden
+before the token or any argument is sent (otherwise every call is denied); without one, the
+proxy trusts whatever listens on `warden_url`. See [api.md](api.md#is-it-really-warden).
 
 ## Approving
 

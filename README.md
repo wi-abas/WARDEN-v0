@@ -183,6 +183,10 @@ else:
     print("Not allowed:", answer["reason"])  # deny, require_approval, or an error
 ```
 
+This short version doesn't check that it is Warden that answers. Use `WardenClient` with a
+token for that, or implement the two steps in
+[docs/design/server-identity.md](https://github.com/wi-abas/agent-warden/blob/main/docs/design/server-identity.md).
+
 [`examples/agent.py`](https://github.com/wi-abas/agent-warden/blob/main/examples/agent.py) is a complete version: a small agent loop that
 also waits for human approval (polling with the `approval_id`) and gives up after a timeout.
 
@@ -277,11 +281,14 @@ Each of these is covered by tests in `tests/`.
 - Per-agent rate limits and caps on pending approvals (default 1,200 requests a minute
   and 100 waiting approvals; change them with `warden limits set`).
 - The SDK and the MCP proxy run a tool with exactly the arguments that were checked.
+- With agent tokens, Warden proves that it is Warden before the SDK or the MCP proxy sends
+  the token or any argument (`warden approvals`: the admin key).
 
 ## Known limitations
 
 - **Agent tokens are optional.** Without `--agents`, any process on this machine can call
-  `/v1/evaluate` with any `agent_id` (and dodge per-agent limits by inventing new ones).
+  `/v1/evaluate` with any `agent_id` (and dodge per-agent limits by inventing new ones), and
+  agents can't tell Warden from another program that took its port.
 - **Per-agent rules need agent tokens.** A rule can list the agents it applies to
   (`"agents": ["billing-agent"]`), but only with `--agents`: without tokens `warden serve`
   refuses to start, since anyone could claim any agent id. A stolen token is that agent,
