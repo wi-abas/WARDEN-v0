@@ -38,6 +38,7 @@ TARGETS: dict[str, list[str]] = {
         "test_endswith.py",
         "test_unicode_tricks.py",
         "test_percent_encoding.py",
+        "test_rule_matching.py",
         "test_tool_specs.py",
         "test_mutation_gaps.py",
         "test_contains.py",

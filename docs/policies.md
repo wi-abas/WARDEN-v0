@@ -82,6 +82,9 @@ A rule can add `when` conditions. It then matches only if **all** of them hold:
 - Add `"ignore_case": true` to compare text without caring about upper/lower case
   (works with `eq`, `neq`, `in`, `startswith`, `endswith`, `contains`). Use it for email domains:
   `{ "arg": "to", "op": "endswith", "value": "@mycompany.com", "ignore_case": true }`.
+  Where software disagrees about case and it would change the answer (`ß` and `ss`, `ς`
+  and `σ`, Turkish `İ`/`ı` and `i`), **the whole request is denied**: `eve@busineß.com`
+  is not at `@business.com`, and must not dodge a rule about it either.
 - **Blocking or allowing sites:** use `host_in`, not `startswith`. It compares the URL's
   real host, so `http://`, ports, upper case and trailing dots can't dodge it:
   `{ "arg": "url", "op": "host_in", "value": ["evil.net", ".evil.net"] }`. International host

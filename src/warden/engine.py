@@ -30,7 +30,7 @@ Security properties (each one is tested in tests/test_engine.py):
 import logging
 import re
 import unicodedata
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from urllib.parse import urlsplit
 
 from pydantic import JsonValue
@@ -81,6 +81,7 @@ _UNCLEAN_PATH = "not a clean path: '..', '.', '//', '%', backslash or edge space
 _UNCLEAN_URL = "not a clean URL"
 _UNCLEAN_EMAIL = "not one plain email address"
 _UNCLEAN_HOST = "not a clean host name"
+_AMBIGUOUS_CASE = "upper/lower case is ambiguous"
 _SCHEME_NOT_ALLOWED = "URL scheme not accepted by the rule"
 
 
@@ -89,11 +90,43 @@ def _comparable(a: JsonValue, b: JsonValue) -> bool:
     return (is_number(a) and is_number(b)) or type(a) is type(b)
 
 
-def _fold(text: str, condition: Condition) -> str:
-    """Same Unicode form on both sides (NFC: a macOS "é" made of two characters equals
-    the usual one), then lower-case (casefold handles e.g. German ß) if ignore_case."""
-    text = unicodedata.normalize("NFC", text)
-    return text.casefold() if condition.ignore_case else text
+def _nfc(text: str) -> str:
+    """One Unicode form: a macOS "é" made of two characters equals the usual one."""
+    return unicodedata.normalize("NFC", text)
+
+
+# Three readings of "the same text in another case", from strict to loose. They differ for
+# few letters, but there it matters: full case folding makes "ß" equal "ss" (two different
+# domains), and software that upper-cases makes "ı" equal "i".
+def _fold_letters(text: str) -> str:
+    # "İ" is the one letter that lower() splits in two ("i" and a dot): keep it whole.
+    return _nfc("".join(ch if len(ch.lower()) > 1 else ch.lower() for ch in text))
+
+
+def _fold_loosely(text: str) -> str:
+    return text.upper().casefold().replace("i\u0307", "i")
+
+
+_FOLDS: tuple[Callable[[str], str], ...] = (_fold_letters, str.casefold, _fold_loosely)
+
+
+def _any_match(
+    actual: str,
+    expected: Iterable[str],
+    condition: Condition,
+    matches: Callable[[str, str], bool],
+) -> bool:
+    """True if `matches(actual, e)` for any expected text, after normalizing both.
+
+    With ignore_case, every reading must give the same answer. If they disagree, both a
+    match and a miss would be a guess: the text can't be checked."""
+    text, options = _nfc(actual), [_nfc(e) for e in expected]
+    if not condition.ignore_case:
+        return any(matches(text, option) for option in options)
+    answers = {any(matches(fold(text), fold(o)) for o in options) for fold in _FOLDS}
+    if len(answers) > 1:
+        raise _UncheckableArgument(condition.label, _AMBIGUOUS_CASE)
+    return answers.pop()
 
 
 # Dots that URL and mail software treat as "." (IDNA): "evil。net" is "evil.net".
@@ -108,10 +141,14 @@ def _check_unicode(actual: str, condition: Condition) -> None:
       drops the soft hyphen.
     - Compatibility look-alikes that software folds into plain letters: the
       full-width "ｅ" in "ｅvil.net" becomes "e" (NFKC).
+    - Non-ASCII characters that normalizing turns into ASCII (the Kelvin sign becomes
+      "K"): the rule would compare a text the tool never received.
     """
     if any(is_invisible(ch) for ch in actual):
         raise _UncheckableArgument(condition.label, _HIDDEN_CHARS)
-    if unicodedata.normalize("NFKC", actual) != unicodedata.normalize("NFC", actual):
+    if unicodedata.normalize("NFKC", actual) != _nfc(actual):
+        raise _UncheckableArgument(condition.label, _HIDDEN_CHARS)
+    if any(not ch.isascii() and _nfc(ch).isascii() for ch in actual):
         raise _UncheckableArgument(condition.label, _HIDDEN_CHARS)
 
 
@@ -276,12 +313,6 @@ def _check_text_shape(actual: str, expected: list[str], condition: Condition) ->
         raise _UncheckableArgument(condition.label, _UNCLEAN_EMAIL)
 
 
-def _same(actual: JsonValue, expected: JsonValue, condition: Condition) -> bool:
-    if isinstance(actual, str) and isinstance(expected, str):
-        return _fold(actual, condition) == _fold(expected, condition)
-    return _comparable(actual, expected) and actual == expected
-
-
 def _lookup(condition: Condition, arguments: dict[str, JsonValue]) -> JsonValue:
     """Follow the condition's path (["headers", "to"]) into the arguments.
 
@@ -351,8 +382,8 @@ def _holds(condition: Condition, arguments: dict[str, JsonValue]) -> bool:
             raise ValueError("policy value is not text")
         _check_unicode(actual, condition)
         _check_text_shape(actual, [expected], condition)
-        text, affix = _fold(actual, condition), _fold(expected, condition)
-        return text.startswith(affix) if op is Op.STARTSWITH else text.endswith(affix)
+        affix_test = str.startswith if op is Op.STARTSWITH else str.endswith
+        return _any_match(actual, [expected], condition, affix_test)
 
     if op is Op.CONTAINS:
         if not isinstance(actual, str):
@@ -366,17 +397,19 @@ def _holds(condition: Condition, arguments: dict[str, JsonValue]) -> bool:
         # argument is free text that merely contains something.)
         if any("." in str(n) for n in needles) and any(d in actual for d in _LOOKALIKE_DOTS):
             raise _UncheckableArgument(condition.label, _HIDDEN_CHARS)
-        text = _fold(actual, condition)
-        return any(_fold(str(n), condition) in text for n in needles)
+        return _any_match(actual, map(str, needles), condition, str.__contains__)
 
     # eq / neq / in: the argument must have the same type as the policy value(s).
     choices = expected if isinstance(expected, list) else [expected]
     if not any(_comparable(actual, choice) for choice in choices):
         raise _UncheckableArgument(condition.label)
     if isinstance(actual, str):
+        texts = [c for c in choices if isinstance(c, str)]
         _check_unicode(actual, condition)
-        _check_text_shape(actual, [c for c in choices if isinstance(c, str)], condition)
-    found = any(_same(actual, choice, condition) for choice in choices)
+        _check_text_shape(actual, texts, condition)
+        found = _any_match(actual, texts, condition, str.__eq__)
+    else:
+        found = any(_comparable(actual, choice) and actual == choice for choice in choices)
     if op is Op.NEQ:
         return not found
     return found  # Op.EQ, Op.IN
