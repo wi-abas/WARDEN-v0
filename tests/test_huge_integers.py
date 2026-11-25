@@ -16,7 +16,7 @@ from warden.audit import SQLiteAuditLog
 from warden.check import check_policy
 from warden.limits_cli import LimitsEditError, show
 from warden.policy import EMPTY_POLICY, load_policy, parse_policy
-from warden.policy_tests import PolicyTestError, load_policy_strict
+from warden.policy_tests import PolicyTestError, load_policy_strict, load_tests
 
 HUGE = "9" * 5000
 RULE = '{"id": "r", "tool": "t", "effect": "deny", "when": [{"arg": "a", "op": "gt", "value": %s}]}'
@@ -89,3 +89,10 @@ def test_duplicate_key_message_is_always_printable(tmp_path: Path) -> None:
     [error] = check_policy(path).errors
     assert error == "duplicate key '\\ud800' (one value would silently win)"
     error.encode("utf-8")
+
+
+def test_policy_test_file_with_a_huge_number_is_a_clear_error(tmp_path: Path) -> None:
+    path = tmp_path / "tests.json"
+    path.write_text('{"cases": [' + HUGE + "]}")
+    with pytest.raises(PolicyTestError, match="too many digits"):
+        load_tests(path)

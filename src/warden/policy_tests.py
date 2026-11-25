@@ -93,6 +93,8 @@ def load_tests(path: Path) -> CaseFile:
         raise PolicyTestError(f"{path}: {exc}") from exc
     except ValidationError as exc:
         raise PolicyTestError(f"{path}: {'; '.join(describe_errors(exc))}") from exc
+    except ValueError as exc:  # an integer longer than Python parses
+        raise PolicyTestError(f"{path}: a number has too many digits") from exc
     names = [case.name for case in tests.cases]
     if len(set(names)) != len(names):
         raise PolicyTestError(f"{path}: two cases have the same name")
