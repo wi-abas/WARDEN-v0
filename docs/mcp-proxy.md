@@ -153,6 +153,11 @@ in Warden until it expires: the same agent asking for the same action again coul
   and `params` (exact spelling), and responses that aren't exactly `jsonrpc`, `id` and one
   of `result` / `error`. A server that ignores case could read `"Method"` as `"method"`
   and run a call Warden never checked.
+- A request whose id is still in use: its first request is held by Warden, or the server
+  hasn't answered it yet (also after a cancel, since the server may still answer). `1` and
+  `"1"` count as the same id. The error has id `null`, so it can't be taken for the first
+  request's answer. Ids over 256 characters or beyond ±(2^53 − 1), and requests past
+  10,000 unanswered ones, are refused too.
 - A `tools/call` sent as a notification (no `id`): dropped.
 - A `tools/call` whose `_meta` holds anything but keys from `allow_meta_keys` (default
   only `progressToken`), each with short printable text (1-256 characters) or a whole

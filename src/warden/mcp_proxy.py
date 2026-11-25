@@ -43,6 +43,8 @@ logger = logging.getLogger(__name__)
 
 MAX_LINE_BYTES = 16 * 1024 * 1024  # one JSON-RPC message
 MAX_IN_FLIGHT = 64  # tool calls being checked (or waiting for approval) at once
+MAX_UNANSWERED = 10_000  # client requests without an answer whose ids are remembered
+MAX_ID_TEXT = 256
 SHUTDOWN_GRACE_SECONDS = 5.0  # how long the server gets to exit after the client leaves
 MAX_ANSWER_BACKLOG = 1024 * 1024  # unsent bytes before the proxy's own answers are dropped
 
@@ -310,6 +312,9 @@ class McpProxy:
         self.allowed_server_requests = frozenset(config.allow_server_requests)
         self._calls: dict[str, asyncio.Task[None]] = {}  # in-flight tool calls by id
         self._held: set[str] = set()  # ids of tool calls not (yet) sent to the server
+        # Requests the client has no answer to yet: _id_key -> the exact id. An id in here
+        # can't be used again: two answers under one id could be mixed up.
+        self._unanswered: dict[str, str] = {}
         self._backlog_warned = False
         self._client_gone = asyncio.Event()  # the client closed its input (or crashed)
         self._server_in: asyncio.StreamWriter | None = None
@@ -387,11 +392,15 @@ class McpProxy:
         kind = _server_message_kind(message)
         if kind is None:
             logger.warning("dropped a malformed message from the MCP server")
-        elif kind == "response" and json.dumps(message["id"]) in self._held:
+        elif kind == "response" and _id_key(message["id"]) in self._held:
             # The proxy hasn't sent that call yet (still checking or waiting for a
             # human): the server can't have answered it.
             logger.warning("dropped a server response to a call Warden hasn't forwarded")
         elif kind != "request" or message["method"] in self.allowed_server_requests:
+            if kind == "response":
+                key = _id_key(message["id"])
+                if self._unanswered.get(key) == json.dumps(message["id"]):
+                    del self._unanswered[key]
             self._reply(message)
         elif message["method"] == "ping":
             self._answer_server({"jsonrpc": "2.0", "id": message["id"], "result": {}})
@@ -431,6 +440,8 @@ class McpProxy:
                 raise _Refused(INVALID_REQUEST, "batches and non-object messages not supported")
         except _Refused as refused:
             request_id = recover_id(line) if refused.duplicate_key else None
+            if _id_key(request_id) in self._unanswered:  # not an answer to that request
+                request_id = None
             self._reply(rpc_error(request_id, refused.code, refused.message))
             return
 
@@ -454,6 +465,15 @@ class McpProxy:
         if not isinstance(method, str):
             self._reply(rpc_error(None, INVALID_REQUEST, "method must be text"))
             return
+        if has_id:
+            # Before anything that answers under this id. These refusals carry id null: an
+            # error under a reused id would look like the answer to the first request.
+            if not _usable_id(request_id):
+                self._reply(rpc_error(None, INVALID_REQUEST, "request id is too long or too large"))
+                return
+            if _id_key(request_id) in self._unanswered or _id_key(request_id) in self._calls:
+                self._reply(rpc_error(None, INVALID_REQUEST, "request id already in use"))
+                return
         if not set(message) <= REQUEST_KEYS:
             logger.warning("refused a message from the client (unexpected key)")
             if has_id:
@@ -468,13 +488,17 @@ class McpProxy:
                 # e.g. "tools/call" without an id: a server might still run it.
                 logger.warning("dropped notification %s (not allowed)", _safe_name(method))
             return
-        if method == "tools/call":
+        if len(self._unanswered) >= MAX_UNANSWERED:
+            self._reply(rpc_error(request_id, INVALID_REQUEST, "too many unanswered requests"))
+        elif method == "tools/call":
             self._start_call(request_id, message)
         elif method == "initialize":
+            self._unanswered[_id_key(request_id)] = json.dumps(request_id)
             await self._forward(
                 _without_refused_capabilities(message, self.allowed_server_requests)
             )
         elif method in self.allowed_methods:
+            self._unanswered[_id_key(request_id)] = json.dumps(request_id)
             await self._forward(message)
         else:
             logger.warning("refused method %s (not on the allow list)", _safe_name(method))
@@ -483,27 +507,27 @@ class McpProxy:
             )
 
     def _start_call(self, request_id: JsonValue, message: dict[str, Any]) -> None:
-        key = json.dumps(request_id)
+        key = _id_key(request_id)
         if len(self._calls) >= MAX_IN_FLIGHT:
             self._reply(tool_error(request_id, "Blocked by Warden: too many calls in progress"))
-            return
-        if key in self._calls:
-            self._reply(rpc_error(request_id, INVALID_REQUEST, "request id already in use"))
             return
         task = asyncio.create_task(self._tool_call(request_id, message))
         self._calls[key] = task
         self._held.add(key)
+        self._unanswered[key] = json.dumps(request_id)
 
         def done(_: object) -> None:
             self._calls.pop(key, None)
-            self._held.discard(key)
+            if key in self._held:  # never sent to the server, so nothing else answers it
+                self._held.discard(key)
+                self._unanswered.pop(key, None)
 
         task.add_done_callback(done)
 
     def _cancel(self, params: object) -> None:
         """The client gave up on a request: stop waiting for its approval."""
         if isinstance(params, dict) and _valid_id(params.get("requestId")):
-            task = self._calls.get(json.dumps(params.get("requestId")))
+            task = self._calls.get(_id_key(params.get("requestId")))
             if task is not None:
                 task.cancel()
 
@@ -538,7 +562,7 @@ class McpProxy:
         if answer.allowed:
             # Forward the SAME parsed object Warden checked, re-encoded: never the raw
             # bytes, so the server can't read anything Warden didn't see.
-            self._held.discard(json.dumps(request_id))
+            self._held.discard(_id_key(request_id))
             await self._forward(message)
         else:
             self._reply(tool_error(request_id, f"Blocked by Warden: {answer.reason}"))
@@ -692,6 +716,19 @@ def _is_response(message: dict[str, Any]) -> bool:
 def _valid_id(value: object) -> bool:
     """JSON-RPC ids are text, whole numbers or null (absent counts as valid)."""
     return value is None or isinstance(value, str) or (type(value) is int)
+
+
+def _usable_id(value: JsonValue) -> bool:
+    """Short enough to remember, and a number every JSON parser reads exactly (else two
+    different ids could be the same one to the server)."""
+    if isinstance(value, str):
+        return len(value) <= MAX_ID_TEXT
+    return not isinstance(value, int) or abs(value) <= MAX_META_INT
+
+
+def _id_key(value: object) -> str:
+    """What makes two ids "the same". 1 and "1" are: sloppy servers and clients mix them."""
+    return "null" if value is None else str(value)
 
 
 # --- Real stdin / stdout -------------------------------------------------------------
