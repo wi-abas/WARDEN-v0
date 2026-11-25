@@ -9,6 +9,7 @@ from helpers import BASIC_POLICY
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
+import warden.api
 from warden.api import _display_safe, create_app
 from warden.audit import SQLiteAuditLog
 from warden.fingerprint import fingerprint
@@ -167,3 +168,19 @@ def test_ordinary_spaces_and_braille_are_untouched(tmp_path: Path) -> None:
     arguments: dict[str, object] = {"to": "a@b.com", "note": "a b  c ⠁⠃ ᚁ"}
     item = pending(tmp_path, arguments)
     assert item["arguments"] == arguments and item["warnings"] == []
+
+
+def test_each_distinct_character_is_checked_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Before the fix every character was: 200 pending approvals of 60 KB took over 10 s.
+    checked: list[str] = []
+    real = warden.api._is_deceptive_char
+
+    def counting(ch: str) -> bool:
+        checked.append(ch)
+        return real(ch)
+
+    monkeypatch.setattr(warden.api, "_is_deceptive_char", counting)
+    warnings: list[str] = []
+    assert _display_safe("ab\u200b\\u" * 1000, warnings) == "ab\\u200b\\u005cu" * 1000
+    assert sorted(checked) == ["\\", "a", "b", "u", "\u200b"]
+    assert len(warnings) == 1

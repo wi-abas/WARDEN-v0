@@ -27,6 +27,7 @@ Run it with `uv run warden` (listens on 127.0.0.1 only: this machine, not the ne
 """
 
 import copy
+import functools
 import json
 import logging
 import logging.config
@@ -317,6 +318,7 @@ _BLANK_CATEGORIES = frozenset({"Zl", "Zp", "Zs", "Co", "Cn"})
 _BLANK_CHARS = frozenset("\u2800\U00013441\U00013442\U00016fe4\U0001d159")
 
 
+@functools.lru_cache(maxsize=65536)  # mutation-ok: speed only
 def _is_deceptive_char(ch: str) -> bool:
     """Characters that make text DISPLAY differently from what it is: invisible or
     control characters, direction overrides (U+202E reverses what follows), blanks that
@@ -331,14 +333,9 @@ def _is_deceptive_char(ch: str) -> bool:
 
 # What an escape looks like, written out as plain text: shown raw, the text "\\u200b"
 # would look exactly like an escaped zero-width space. "\\U" only counts with 8 hex
-# digits (the shape of our own escapes), so "C:\\Users" stays readable.
+# digits (the shape of our own escapes), so "C:\\Users" stays readable. Without escaping
+# these too, two different keys could display the same and one would hide the other.
 _LOOKS_ESCAPED = re.compile(r"\\(?:u|U[0-9A-Fa-f]{8})")
-
-
-def _needs_escape(text: str, index: int) -> bool:
-    """Deceptive characters, and a real backslash that would read as an escape: otherwise
-    two different keys could display the same and one would hide the other."""
-    return _is_deceptive_char(text[index]) or _LOOKS_ESCAPED.match(text, index) is not None
 
 
 def _escape(ch: str) -> str:
@@ -353,11 +350,14 @@ def _display_safe(value: JsonValue, warnings: list[str]) -> JsonValue:
     so an approver can't be shown something other than the real action. One-to-one:
     two different texts never display the same."""
     if isinstance(value, str):
-        escape = [_needs_escape(value, i) for i in range(len(value))]
-        if not any(escape):
-            return value
-        warnings.append("contains hidden or look-alike characters (shown as \\uXXXX)")
-        return "".join(_escape(ch) if hit else ch for ch, hit in zip(value, escape, strict=True))
+        # A backslash that would read as an escape first, so what is added next stays.
+        safe = _LOOKS_ESCAPED.sub(lambda match: _escape("\\") + match[0][1:], value)
+        # Each distinct character is checked once: arguments can be 64 KB, times many.
+        escapes = {ord(ch): _escape(ch) for ch in set(value) if _is_deceptive_char(ch)}
+        safe = safe.translate(escapes)
+        if safe != value:
+            warnings.append("contains hidden or look-alike characters (shown as \\uXXXX)")
+        return safe
     if isinstance(value, list):
         return [_display_safe(item, warnings) for item in value]
     if isinstance(value, dict):
