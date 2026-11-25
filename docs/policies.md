@@ -415,6 +415,8 @@ do what you meant:
 | W015 | Two agent names differ only in upper/lower case (`Billing` and `billing` are different agents) |
 | W016 | A rule with `otherwise` uses `neq` or `missing`: a double negative, easy to get backwards |
 | W017 | Two `host_in` conditions on the same argument of a tool accept different `schemes` |
+| W018 | A deny rule compares a host name case-sensitively (`EVIL.COM` slips past) |
+| W019 | An `allow` rule uses `endswith` with a bare domain (`"mycompany.com"` also matches `"evilmycompany.com"`) |
 
 `--agents FILE` checks the agent names that per-agent rules and `limits.agents` use.
 Without it, a policy with per-agent rules gets a note (not a warning) that

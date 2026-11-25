@@ -243,3 +243,57 @@ def test_w005_relative_path_prefix(
 ) -> None:
     cond = {"arg": arg, "op": "startswith", "value": value}
     assert codes(tmp_path, {"rules": [r("a", "t", "allow", cond)]}) == expected
+
+
+def blocks(op: str, arg: str, value: Any, **extra: Any) -> dict[str, Any]:
+    cond = {"arg": arg, "op": op, "value": value, **extra}
+    return {
+        "tools": {"t": {"arguments": [arg]}},
+        "rules": [r("all", "t", "allow"), r("block", "t", "deny", cond)],
+    }
+
+
+@pytest.mark.parametrize(
+    ("op", "arg", "value", "expected"),
+    [
+        ("eq", "host", "evil.com", ["W018"]),
+        ("endswith", "x", ".evil.com", ["W018"]),
+        ("in", "x", ["ok", "evil.com"], ["W018"]),
+        ("contains", "x", "evil.com", ["W018"]),
+        ("eq", "x", "v1.2.3", []),
+        ("eq", "x", "notes.txt", []),
+        ("eq", "path", "a.evil", []),
+        ("eq", "x", "evil", []),
+        ("neq", "x", "evil.com", []),
+    ],
+)
+def test_w018_host_name_compared_case_sensitively(
+    tmp_path: Path, op: str, arg: str, value: Any, expected: list[str]
+) -> None:
+    assert codes(tmp_path, blocks(op, arg, value)) == expected
+
+
+def test_w018_not_raised_when_it_cannot_matter(tmp_path: Path) -> None:
+    assert codes(tmp_path, blocks("eq", "x", "evil.com", ignore_case=True)) == []
+    only_deny = blocks("eq", "x", "evil.com")
+    only_deny["rules"] = only_deny["rules"][1:]
+    assert codes(tmp_path, only_deny) == []  # dodging it lands on "no matching rule"
+
+
+@pytest.mark.parametrize(
+    ("effect", "arg", "value", "expected"),
+    [
+        ("allow", "to", "mycompany.com", ["W019"]),
+        ("allow", "to", "@mycompany.com", ["W008"]),
+        ("allow", "host", ".mycompany.com", []),
+        ("allow", "x", "report.pdf", []),
+        ("allow", "filename", "a.report", []),
+        ("deny", "to", "mycompany.com", []),
+    ],
+)
+def test_w019_allowed_domain_without_a_boundary(
+    tmp_path: Path, effect: str, arg: str, value: str, expected: list[str]
+) -> None:
+    cond = {"arg": arg, "op": "endswith", "value": value}
+    policy = {"tools": {"t": {"arguments": [arg]}}, "rules": [r("a", "t", effect, cond)]}
+    assert codes(tmp_path, policy) == expected
