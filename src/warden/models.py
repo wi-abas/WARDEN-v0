@@ -22,6 +22,8 @@ from pydantic import (
     model_validator,
 )
 
+from warden.unicode_safety import is_invisible
+
 # Lowercase letters, digits, "_", "." and "-", 1 to 64 characters.
 # Strict on purpose: "Delete_File", "delete_file " or lookalike Unicode letters
 # must never sneak past a rule written for "delete_file".
@@ -161,7 +163,7 @@ def _check_policy_text(text: str, op: "Op") -> None:
     spaces at the edges, are refused, so a rule VALUE containing them could never match
     anything: a deny rule with such a typo would protect nothing, without any warning.
     """
-    if any(unicodedata.category(ch) in {"Cf", "Cc"} for ch in text):
+    if any(is_invisible(ch) for ch in text):
         raise ValueError("value contains an invisible or control character (typo?)")
     if unicodedata.normalize("NFKC", text) != unicodedata.normalize("NFC", text):
         raise ValueError("value contains a look-alike character such as a full-width letter")

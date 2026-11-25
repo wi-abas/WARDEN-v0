@@ -94,6 +94,7 @@ from warden.policy import (
     per_agent_problem,
 )
 from warden.settings import Settings
+from warden.unicode_safety import is_invisible
 
 logger = logging.getLogger(__name__)
 
@@ -253,7 +254,7 @@ def _is_deceptive_char(ch: str) -> bool:
     """Characters that make text DISPLAY differently from what it is: invisible or
     control characters, direction overrides (U+202E reverses what follows), and
     compatibility look-alikes such as the full-width "ｅ"."""
-    return unicodedata.category(ch) in {"Cf", "Cc"} or unicodedata.normalize("NFKC", ch) != ch
+    return is_invisible(ch) or unicodedata.normalize("NFKC", ch) != ch
 
 
 def _needs_escape(text: str, index: int) -> bool:
