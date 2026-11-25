@@ -77,6 +77,7 @@ TARGETS: dict[str, list[str]] = {
     ],
     "client": [
         "test_client.py",
+        "test_client_proof.py",
         "test_sdk.py",
         "test_agent_tokens.py",
         "test_client_redirects.py",
@@ -87,6 +88,7 @@ TARGETS: dict[str, list[str]] = {
     ],
     "sdk": [
         "test_sdk.py",
+        "test_client_proof.py",
         "test_agent_tokens.py",
         "test_mutation_gaps.py",
         "test_sdk_async_waits.py",

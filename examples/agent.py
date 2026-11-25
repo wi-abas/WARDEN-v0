@@ -3,7 +3,8 @@
 Copy `ask_warden` and `guarded` into your own agent: call `guarded(...)` instead of
 calling a tool directly. (Or use `warden.sdk`, which does the same for you.) WardenClient
 only talks to this machine, ignores proxy settings and refuses redirects, so the tool
-arguments can't end up anywhere else.
+arguments can't end up anywhere else. With an agent token (WARDEN_AGENT_TOKEN), Warden
+must also prove that it is Warden before the token or any argument is sent.
 
 Run it (two terminals):
     1)  WARDEN_ADMIN_KEY=$(openssl rand -hex 32) \\
@@ -32,7 +33,9 @@ def ask_warden(
     tool: str, arguments: dict[str, Any], approval_id: str | None = None, url: str = WARDEN_URL
 ) -> dict[str, Any]:
     # Fails closed: unreachable, a timeout, an error or garbage is a "deny" answer.
-    answer = WardenClient(url, "example-agent").evaluate(tool, arguments, approval_id)
+    token = os.environ.get("WARDEN_AGENT_TOKEN") or None
+    agent_id = "example-agent" if token is None else None  # the token says who we are
+    answer = WardenClient(url, agent_id, token=token).evaluate(tool, arguments, approval_id)
     return {
         "decision": answer.decision.value,
         "reason": answer.reason,
