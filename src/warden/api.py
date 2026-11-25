@@ -278,7 +278,10 @@ class CrashGuard:
             await self.app(scope, receive, watched_send)
         except Exception as exc:
             logger.error("unexpected error handling request: %s", type(exc).__name__)
-            self.on_reject(scope, 500, "internal error")
+            try:
+                self.on_reject(scope, 500, "internal error")
+            except Exception as record_error:  # must not bring the traceback back
+                logger.error("could not record the crash: %s", type(record_error).__name__)
             if not started:  # else: the server closes the unfinished answer
                 await _deny_response(500, "internal error")(scope, receive, send)
 

@@ -104,3 +104,25 @@ def test_non_http_traffic_passes_through() -> None:
     with pytest.raises(RuntimeError, match="startup failed"):  # must stop the server
         asyncio.run(CrashGuard(app)({"type": "lifespan"}, receive, send))
     assert seen == ["lifespan"]
+
+
+def test_crash_is_still_a_deny_when_recording_it_fails(caplog: pytest.LogCaptureFixture) -> None:
+    sent: list[Message] = []
+
+    async def app(scope: Scope, receive: Receive, send: Send) -> None:
+        raise RuntimeError(CANARY)
+
+    async def receive() -> Message:
+        raise AssertionError("not needed")
+
+    async def send(message: Message) -> None:
+        sent.append(message)
+
+    def broken(*args: Any) -> None:
+        raise RuntimeError(CANARY)
+
+    scope = {"type": "http", "method": "POST", "path": "/"}
+    asyncio.run(CrashGuard(app, on_reject=broken)(scope, receive, send))
+    assert sent[0]["status"] == 500
+    assert b'"deny"' in sent[1]["body"]
+    assert CANARY not in caplog.text
