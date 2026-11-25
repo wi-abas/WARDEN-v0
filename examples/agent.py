@@ -1,7 +1,9 @@
-"""A minimal agent loop guarded by Warden, using only Python's standard library.
+"""A minimal agent loop guarded by Warden, using WardenClient.
 
 Copy `ask_warden` and `guarded` into your own agent: call `guarded(...)` instead of
-calling a tool directly.
+calling a tool directly. (Or use `warden.sdk`, which does the same for you.) WardenClient
+only talks to this machine, ignores proxy settings and refuses redirects, so the tool
+arguments can't end up anywhere else.
 
 Run it (two terminals):
     1)  WARDEN_ADMIN_KEY=$(openssl rand -hex 32) \\
@@ -14,10 +16,10 @@ the same WARDEN_ADMIN_KEY set) with the command it prints.
 import json
 import os
 import time
-import urllib.error
-import urllib.request
 from collections.abc import Callable
 from typing import Any
+
+from warden.client import WardenClient
 
 WARDEN_URL = os.environ.get("WARDEN_URL", "http://127.0.0.1:8000")
 
@@ -29,22 +31,13 @@ class NotAllowed(Exception):
 def ask_warden(
     tool: str, arguments: dict[str, Any], approval_id: str | None = None, url: str = WARDEN_URL
 ) -> dict[str, Any]:
-    body: dict[str, Any] = {"agent_id": "example-agent", "tool": tool, "arguments": arguments}
-    if approval_id:
-        body["approval_id"] = approval_id
-    request = urllib.request.Request(  # noqa: S310 (URL is our own Warden server)
-        f"{url}/v1/evaluate",
-        data=json.dumps(body).encode(),
-        headers={"content-type": "application/json"},
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=5) as response:  # noqa: S310
-            answer: dict[str, Any] = json.load(response)
-            return answer
-    except urllib.error.HTTPError as error:  # Warden's error bodies also say "deny"
-        return {"decision": "deny", "reason": f"Warden returned HTTP {error.code}"}
-    except (OSError, ValueError):  # unreachable, timeout, garbage: fail closed
-        return {"decision": "deny", "reason": "Warden unreachable"}
+    # Fails closed: unreachable, a timeout, an error or garbage is a "deny" answer.
+    answer = WardenClient(url, "example-agent").evaluate(tool, arguments, approval_id)
+    return {
+        "decision": answer.decision.value,
+        "reason": answer.reason,
+        "approval_id": answer.approval_id,
+    }
 
 
 def guarded(

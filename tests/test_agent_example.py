@@ -117,3 +117,22 @@ def test_tool_runs_with_exactly_what_was_checked(monkeypatch: pytest.MonkeyPatch
     received: dict[str, object] = {}
     agent.guarded("send_email", original, lambda **kw: received.update(kw))
     assert received == {"to": "boss@company.com", "cc": ["team@company.com"]}
+
+
+def test_only_talks_to_this_machine() -> None:
+    agent = load_agent()
+    ran: list[object] = []
+    with pytest.raises(ValueError, match="this machine"):
+        agent.guarded("read_file", {"path": "/x"}, ran.append, url="http://example.com:8000")
+    assert ran == []
+
+
+def test_ignores_proxy_settings(
+    server: tuple[FastAPI, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, url = server
+    monkeypatch.setenv("http_proxy", "http://127.0.0.1:9")  # nothing listens there
+    monkeypatch.delenv("no_proxy", raising=False)
+    monkeypatch.delenv("NO_PROXY", raising=False)
+    answer = load_agent().ask_warden("read_file", {"path": "/data/report.txt"}, url=url)
+    assert answer["decision"] == "allow"
