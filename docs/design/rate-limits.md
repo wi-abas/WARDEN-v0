@@ -24,6 +24,10 @@ database without bound inside the retention window.
   randomness. Every `/v1/evaluate` call counts, approval polls included. Over the limit:
   HTTP 429, `"decision": "deny"`, `Retry-After` header, recorded as a rejected request
   (whose recording is itself capped, so a flood can't fill the disk).
+- **Refused requests** (422 or 400 invalid, 403 wrong `agent_id`) count only when a valid agent
+  token proves whose they are. A self-declared `agent_id` is never charged for them, so a
+  caller can't burn another agent's budget with junk. Bodies refused by size or framing
+  (411, 413) are not charged: they are refused before anything is read.
 - **Pending approvals per agent**: checked inside the approval store's lock, so racing
   requests can't overshoot. Over the quota: `deny`, "too many pending approvals for this
   agent". The global cap (1,000) still applies.

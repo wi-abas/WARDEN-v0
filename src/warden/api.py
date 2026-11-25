@@ -58,6 +58,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+from starlette.datastructures import Headers
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
@@ -101,6 +102,7 @@ logger = logging.getLogger(__name__)
 HOST = "127.0.0.1"
 MAX_BODY_BYTES = 64 * 1024  # 64 KB is far more than any real tool call needs
 REJECTIONS_PER_MINUTE = 60
+EVALUATE_PATH = "/v1/evaluate"
 # Rejected requests are recorded by a background worker, never on the server's main
 # loop: if the database is locked (e.g. someone has it open), a synchronous write would
 # freeze EVERY request for up to 5 seconds. Tests switch this off to read events at once.
@@ -186,10 +188,12 @@ class DuplicateKeyCheck:
     def __init__(
         self,
         app: ASGIApp,
-        on_reject: Callable[[Scope, int, str], None] = lambda scope, status, reason: None,
+        refuse: Callable[[Scope, str], JSONResponse] = lambda scope, reason: _deny_response(
+            422, reason
+        ),
     ) -> None:
         self.app = app
-        self.on_reject = on_reject
+        self.refuse = refuse
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http" or scope.get("method") not in {"POST", "PUT", "PATCH"}:
@@ -207,14 +211,12 @@ class DuplicateKeyCheck:
         # JSON in UTF-8 never holds a raw NUL byte (it must be escaped); UTF-16/32 does.
         if body.startswith(b"\xef\xbb\xbf") or b"\x00" in body:
             reason = "request body must be UTF-8 without a byte order mark"
-            self.on_reject(scope, 422, reason)
-            await _deny_response(422, reason)(scope, receive, send)
+            await self.refuse(scope, reason)(scope, receive, send)
             return
         try:
             json.loads(body, object_pairs_hook=no_duplicate_keys)
         except DuplicateKeyError:
-            self.on_reject(scope, 422, "duplicate key in request")
-            await _deny_response(422, "duplicate key in request")(scope, receive, send)
+            await self.refuse(scope, "duplicate key in request")(scope, receive, send)
             return
         except (ValueError, RecursionError):
             # Not valid JSON, or nested too deeply for Python's parser: request
@@ -536,6 +538,28 @@ class _Warden:
     def reject(self, request: Request, status: int, reason: str) -> JSONResponse:
         self.record_rejection(request.scope, status, reason)
         return _deny_response(status, reason)
+
+    def charge(self, scope: Scope) -> float:
+        """Take a request refused before `evaluate` from its agent's budget. Only when a
+        token proves who it is: a self-declared agent_id could burn another agent's
+        budget. Returns the seconds to wait if the budget is used up, else 0."""
+        if self.agents is None or self.limiter is None or scope.get("path") != EVALUATE_PATH:
+            return 0.0
+        agent_id = self.agents.identify_header(Headers(scope=scope).get("authorization"))
+        return 0.0 if agent_id is None else self.limiter.acquire(agent_id)
+
+    def refuse_invalid(self, scope: Scope, reason: str) -> JSONResponse:
+        """422 for a request that can't be evaluated; 429 over the agent's budget."""
+        if wait := self.charge(scope):
+            return self.refuse_rate_limited(scope, wait)
+        self.record_rejection(scope, 422, reason)
+        return _deny_response(422, reason)
+
+    def refuse_rate_limited(self, scope: Scope, wait: float) -> JSONResponse:
+        self.record_rejection(scope, 429, "rate limit exceeded")
+        response = _deny_response(429, "rate limit exceeded")
+        response.headers["Retry-After"] = str(max(1, math.ceil(wait)))
+        return response
 
     def _record_event_safely(self, event: AuditEvent) -> None:
         """For events that don't change the answer (it's already deny / an error)."""
@@ -995,7 +1019,7 @@ def create_app(
     app.state.warden = w  # for tests and debugging
     # Middleware runs in reverse order of adding: HostCheck, then BodySizeLimit, then
     # DuplicateKeyCheck (which may read the body, so it must come after the size limit).
-    app.add_middleware(DuplicateKeyCheck, on_reject=w.record_rejection)
+    app.add_middleware(DuplicateKeyCheck, refuse=w.refuse_invalid)
     app.add_middleware(BodySizeLimit, on_reject=w.record_rejection)
     # Added after those, so it runs before them: refuse foreign Host headers first.
     app.add_middleware(HostCheck, allowed=ALLOWED_HOSTS, on_reject=w.record_rejection)
@@ -1007,12 +1031,13 @@ def create_app(
     @app.exception_handler(RequestValidationError)
     async def invalid_request(request: Request, exc: RequestValidationError) -> JSONResponse:
         # FastAPI's default 422 echoes the input back, which may contain secrets.
-        return w.reject(request, 422, "invalid request")
+        return w.refuse_invalid(request.scope, "invalid request")
 
     @app.exception_handler(StarletteHTTPException)
     async def http_error(request: Request, exc: StarletteHTTPException) -> JSONResponse:
         # e.g. 404 unknown URL, 405 wrong method: answer with a deny body like every
         # other error, and record it (repeated 404s can mean someone is probing).
+        w.charge(request.scope)  # e.g. 400: JSON that Python's parser refuses
         reasons = {404: "not found", 405: "method not allowed"}
         return w.reject(request, exc.status_code, reasons.get(exc.status_code, "refused"))
 
@@ -1022,17 +1047,16 @@ def create_app(
 
     @app.exception_handler(_RateLimited)
     async def rate_limited(request: Request, exc: _RateLimited) -> JSONResponse:
-        response = w.reject(request, 429, "rate limit exceeded")
-        response.headers["Retry-After"] = str(max(1, math.ceil(exc.retry_after)))
-        return response
+        return w.refuse_rate_limited(request.scope, exc.retry_after)
 
     @app.exception_handler(_AgentTokenError)
     async def bad_agent_token(request: Request, exc: _AgentTokenError) -> JSONResponse:
+        w.charge(request.scope)  # a valid token with the wrong agent_id (403) counts too
         return w.reject(request, exc.status, exc.reason)
 
     admin = [Depends(w.require_admin)]
     app.get("/health")(w.health)
-    app.post("/v1/evaluate", response_model=EvaluationResult)(w.evaluate)
+    app.post(EVALUATE_PATH, response_model=EvaluationResult)(w.evaluate)
     app.get("/v1/approvals", dependencies=admin, response_model=None)(w.list_approvals)
     app.post("/v1/approvals/decide", dependencies=admin)(w.decide_group)
 
