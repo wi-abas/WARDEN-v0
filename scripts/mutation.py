@@ -139,6 +139,7 @@ TARGETS: dict[str, list[str]] = {
         "test_mcp_proxy_hardening.py",
         "test_mcp_proxy_edges.py",
         "test_mcp_proxy_disconnect.py",
+        "test_mcp_proxy_large_numbers.py",
         "test_approval_wait_deadline.py",
         "test_mcp_proxy_hint.py",
         "test_mcp_proxy_messages.py",

@@ -154,7 +154,8 @@ If Warden restarts during a wait, the proxy keeps asking until the approval time
   (`initialize`, `ping`, `tools/list`, `resources/list`, `resources/templates/list`,
   `prompts/list`, `logging/setLevel`, and `notifications/*`), unless listed in
   `allow_methods`. `tools/call` itself can't be listed, nor the same name in other case.
-- Messages that repeat a JSON key, JSON-RPC batches, `NaN`/`Infinity`, invalid JSON.
+- Messages that repeat a JSON key, JSON-RPC batches, `NaN`/`Infinity`, numbers too large
+  for a 64-bit float (`1e999`), invalid JSON.
   These could make the proxy and the server read different things.
 - Requests and notifications with any top-level key other than `jsonrpc`, `id`, `method`
   and `params` (exact spelling), and responses that aren't exactly `jsonrpc`, `id` and one
@@ -193,9 +194,10 @@ The proxy also removes the `sampling`, `elicitation` and `roots` capabilities fr
 client's `initialize` unless the matching request is allowed, so servers know not to ask.
 
 Responses and `notifications/*` from the server pass. Anything else from the server
-(invalid JSON, repeated keys, batches, a message that is both a request and a response,
+(invalid JSON, repeated keys, too large numbers, batches, a message that is both a request and a response,
 a "request" without an id, a response to a call Warden is still holding) is dropped and
-logged by type only.
+logged by type only. If a dropped answer with a repeated key or a too large number
+clearly belongs to one request, the client gets an error for that request instead.
 
 ## Limits
 
