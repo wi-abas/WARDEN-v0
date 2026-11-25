@@ -116,8 +116,9 @@ def replaceable_by_others(path: Path) -> str | None:
     file, a folder or a symlink) chooses the file Warden reads.
     - Group- or world-writable without the sticky bit: those users can replace any name
       in it. Groups count even if you are the only member: Warden can't know who joins.
-    - Writable with the sticky bit (/tmp): only a name's owner can, so the owner must be root
-      or the user running Warden.
+    - Writable with the sticky bit (/tmp): only a name's owner can.
+    - Owned by anyone but root or the user running Warden (the file, a folder or a
+      symlink): its owner can change it, whatever the mode says.
     Ordinary system symlinks such as macOS /tmp -> /private/tmp sit in folders that only
     root can change, so they pass. Anything that can't be checked is a problem.
     """
@@ -125,6 +126,8 @@ def replaceable_by_others(path: Path) -> str | None:
     todo = list(reversed(path.absolute().parts[1:]))
     links = 0
     try:
+        if problem := _owner_problem(path, current, current.stat()):
+            return problem
         while todo:
             name = todo.pop()
             if name == "..":
@@ -133,17 +136,16 @@ def replaceable_by_others(path: Path) -> str | None:
             entry = current / name
             info = entry.lstat()
             folder = current.stat()
-            if folder.st_mode & 0o022:
-                if not folder.st_mode & stat.S_ISVTX:
-                    who = "any user" if folder.st_mode & 0o002 else "members of its group"
-                    sudo = "" if folder.st_uid == os.geteuid() else "sudo "
-                    return (
-                        f"{path} is reached through {current}, where {who} can replace files "
-                        f"(mode {stat.S_IMODE(folder.st_mode):o}); fix: move it to a folder only "
-                        f"you can change, or {sudo}chmod go-w {shlex.quote(str(current))}"
-                    )
-                if info.st_uid not in {0, os.geteuid()}:
-                    return f"{path} is reached through {entry}, owned by another user"
+            if folder.st_mode & 0o022 and not folder.st_mode & stat.S_ISVTX:
+                who = "any user" if folder.st_mode & 0o002 else "members of its group"
+                sudo = "" if folder.st_uid == os.geteuid() else "sudo "
+                return (
+                    f"{path} is reached through {current}, where {who} can replace files "
+                    f"(mode {stat.S_IMODE(folder.st_mode):o}); fix: move it to a folder only "
+                    f"you can change, or {sudo}chmod go-w {shlex.quote(str(current))}"
+                )
+            if problem := _owner_problem(path, entry, info):
+                return problem
             if not stat.S_ISLNK(info.st_mode):
                 current = entry
                 continue
@@ -159,6 +161,17 @@ def replaceable_by_others(path: Path) -> str | None:
     except OSError as exc:
         return f"{path} can't be checked: {type(exc).__name__}"
     return None
+
+
+def _owner_problem(path: Path, entry: Path, info: os.stat_result) -> str | None:
+    euid = os.geteuid()
+    if info.st_uid in {0, euid}:
+        return None
+    return (  # chown -h: change a symlink itself, not what it points to
+        f"{path} is reached through {entry}, owned by another user (uid {info.st_uid}); "
+        f"fix: move it to a folder only you can change, "
+        f"or sudo chown -h {euid} {shlex.quote(str(entry))}"
+    )
 
 
 class DuplicateKeyError(ValueError):
