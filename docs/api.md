@@ -299,6 +299,7 @@ Warden** if they shouldn't be able to approve their own actions.
 
 An invalid setting, or a policy file that is invalid or has no rules, stops Warden with a
 clear message instead of starting a server that would deny everything. The host is always `127.0.0.1`.
+A port that is already in use also stops it (exit code 2), before an admin key is printed.
 
 ### How clients find Warden
 

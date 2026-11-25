@@ -32,8 +32,10 @@ import json
 import logging
 import logging.config
 import math
+import os
 import re
 import secrets
+import socket
 import sqlite3
 import sys
 import threading
@@ -1106,9 +1108,26 @@ def log_config() -> dict[str, Any]:
     return config
 
 
+def check_port(port: int) -> None:
+    """Raise StartupError if `port` is taken, before an admin key that would never work is
+    printed. Only a clearer error: the server still binds the port itself and stops if
+    another program takes it in between."""
+    with socket.socket() as probe:
+        if os.name == "posix":  # as the server does: a quick restart isn't "in use"
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            probe.bind((HOST, port))
+        except OSError as exc:
+            raise StartupError(
+                f"can't listen on {HOST}:{port} ({exc.strerror}): is Warden already "
+                "running? (--port picks another port)"
+            ) from None
+
+
 def main(settings: Settings | None = None) -> None:
     """Start the server on this machine only."""
     settings = settings or Settings()
+    check_port(settings.port)
     config = log_config()
     # Configure logging BEFORE building the app, so policy-file errors are shown.
     logging.config.dictConfig(config)

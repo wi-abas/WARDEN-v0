@@ -14,6 +14,9 @@ def _audit_db_in_tmp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(audit, "DEFAULT_AUDIT_PATH", tmp_path / "audit.db")
     # FastAPI's TestClient sends "Host: testserver".
     monkeypatch.setattr(warden.api, "ALLOWED_HOSTS", (*warden.api.ALLOWED_HOSTS, "testserver"))
+    # Tests of main() don't really listen (uvicorn.run is replaced), so a Warden running
+    # on this machine must not matter. test_startup_errors.py tests the real check.
+    monkeypatch.setattr(warden.api, "check_port", lambda port: None)
     # Write rejection events immediately, so tests can read them right away.
     monkeypatch.setattr(warden.api, "RECORD_REJECTIONS_IN_BACKGROUND", False)
 
