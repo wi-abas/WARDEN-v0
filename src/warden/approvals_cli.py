@@ -31,6 +31,7 @@ admin key, or the server can't be reached.
 """
 
 import argparse
+import http.client
 import json
 import os
 import re
@@ -77,12 +78,15 @@ def _call(url: str, key: str, method: str, path: str, body: Any = None) -> tuple
         method=method,
     )
     try:
-        with open_local(request, timeout=TIMEOUT_SECONDS) as response:
-            status, raw = response.status, response.read(_READ_LIMIT)
-    except urllib.error.HTTPError as error:
-        with error:
-            status, raw = error.code, error.read(_READ_LIMIT)
-    except (urllib.error.URLError, OSError) as exc:
+        try:
+            with open_local(request, timeout=TIMEOUT_SECONDS) as response:
+                status, raw = response.status, response.read(_READ_LIMIT)
+        except urllib.error.HTTPError as error:
+            with error:
+                status, raw = error.code, error.read(_READ_LIMIT)
+    except ValueError:  # http.client refuses the header; its message would show the key
+        raise _Unreachable("WARDEN_ADMIN_KEY contains characters that can't be sent") from None
+    except (OSError, http.client.HTTPException) as exc:  # OSError includes URLError
         raise _Unreachable(f"can't reach Warden at {url} ({type(exc).__name__})") from None
     if len(raw) > MAX_RESPONSE_BYTES:
         raise _Unreachable(
