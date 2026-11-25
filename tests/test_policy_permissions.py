@@ -186,3 +186,59 @@ def test_policy_in_a_locked_folder_is_a_clear_error(tmp_path: Path) -> None:
             resolve(policy=str(path), agents=str(path), env={})
     finally:
         (tmp_path / "p").chmod(0o755)
+
+
+# --- Group-writable folders ---------------------------------------------------------------
+
+
+@pytest.mark.parametrize("mode", [0o775, 0o770, 0o2775])
+@pytest.mark.parametrize("depth", ["folder", "grandparent"])
+def test_group_writable_folder_on_the_way_is_refused(tmp_path: Path, mode: int, depth: str) -> None:
+    shared = tmp_path / "shared folder"
+    shared.mkdir()
+    path = policy_in(shared if depth == "folder" else shared / "private", 0o600)
+    agents = path.with_name("agents.json")
+    agents.write_text('{"agents": []}')
+    agents.chmod(0o600)
+    safe = policy_in(tmp_path / "safe", 0o600)
+    assert accepted(path)
+    shared.chmod(mode)
+    try:
+        with pytest.raises(SettingsError, match="members of its group can replace") as caught:
+            resolve(policy=str(path), env={})
+        assert f"chmod go-w '{shared}'" in str(caught.value)  # exact folder, quoted
+        with pytest.raises(SettingsError, match="refusing to use the agents file"):
+            resolve(policy=str(safe), agents=str(agents), env={})
+    finally:
+        shared.chmod(0o755)
+
+
+def test_symlink_in_a_group_writable_folder_is_refused(tmp_path: Path) -> None:
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    link = shared / "policy.json"
+    link.symlink_to(policy_in(tmp_path / "private", 0o600))
+    assert accepted(link)
+    shared.chmod(0o775)
+    try:
+        assert not accepted(link)
+    finally:
+        shared.chmod(0o755)
+
+
+def test_sticky_group_writable_folder_is_accepted(tmp_path: Path) -> None:
+    folder = tmp_path / "sticky"
+    path = policy_in(folder, 0o644)
+    folder.chmod(0o1775)
+    try:
+        assert accepted(path)
+    finally:
+        folder.chmod(0o755)
+
+
+def test_permissions_are_not_checked_on_windows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = policy_in(tmp_path / "p", 0o666)
+    monkeypatch.setattr("warden.settings._POSIX", False)
+    assert accepted(path)

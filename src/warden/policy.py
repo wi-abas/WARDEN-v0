@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import re
+import shlex
 import stat
 from collections.abc import Iterable
 from pathlib import Path
@@ -113,8 +114,9 @@ def replaceable_by_others(path: Path) -> str | None:
     Walks the path the way the operating system does, one name at a time, through every
     symlink. Each folder on the way matters: whoever can replace one name in it (the
     file, a folder or a symlink) chooses the file Warden reads.
-    - World-writable without the sticky bit: anyone can replace any name in it.
-    - World-writable with it (/tmp): only a name's owner can, so the owner must be root
+    - Group- or world-writable without the sticky bit: those users can replace any name
+      in it. Groups count even if you are the only member: Warden can't know who joins.
+    - Writable with the sticky bit (/tmp): only a name's owner can, so the owner must be root
       or the user running Warden.
     Ordinary system symlinks such as macOS /tmp -> /private/tmp sit in folders that only
     root can change, so they pass. Anything that can't be checked is a problem.
@@ -130,10 +132,16 @@ def replaceable_by_others(path: Path) -> str | None:
                 continue
             entry = current / name
             info = entry.lstat()
-            folder_mode = current.stat().st_mode
-            if folder_mode & 0o002:
-                if not folder_mode & stat.S_ISVTX:
-                    return f"{path} is reached through {current}, where any user can replace files"
+            folder = current.stat()
+            if folder.st_mode & 0o022:
+                if not folder.st_mode & stat.S_ISVTX:
+                    who = "any user" if folder.st_mode & 0o002 else "members of its group"
+                    sudo = "" if folder.st_uid == os.geteuid() else "sudo "
+                    return (
+                        f"{path} is reached through {current}, where {who} can replace files "
+                        f"(mode {stat.S_IMODE(folder.st_mode):o}); fix: move it to a folder only "
+                        f"you can change, or {sudo}chmod go-w {shlex.quote(str(current))}"
+                    )
                 if info.st_uid not in {0, os.geteuid()}:
                     return f"{path} is reached through {entry}, owned by another user"
             if not stat.S_ISLNK(info.st_mode):
