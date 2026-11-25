@@ -164,6 +164,8 @@ def test_proxy_ends_although_the_server_never_reads(
     async def main() -> Session:
         session, running = start(frozen, FakeWarden())
         session.send(call("echo", {"pad": BIG}))
+        # Checks run in parallel: send the second only once the first is being written.
+        await until(lambda: bool(session.proxy._calls) and not session.proxy._held)
         session.send(call("echo", {"pad": BIG}, request_id=2))  # waits for the first
         session.send_raw(b"")
         await asyncio.wait_for(running, 10)
@@ -173,6 +175,7 @@ def test_proxy_ends_although_the_server_never_reads(
     # The second one never left the proxy, and says so.
     reply = session.outbox.get_nowait()
     assert reply["id"] == 2 and "not sent to the server" in json.dumps(reply)
+    assert session.outbox.empty()
     assert frozen.calls() == []
 
 
