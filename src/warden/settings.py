@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from warden.audit import DEFAULT_AUDIT_PATH, DEFAULT_RETENTION_DAYS
+from warden.audit import DEFAULT_AUDIT_PATH, DEFAULT_RETENTION_DAYS, MAX_RETENTION_DAYS
 from warden.policy import DEFAULT_POLICY_PATH
 
 DEFAULT_PORT = 8000
@@ -137,6 +137,10 @@ def resolve(
     if chosen := pick(retention_days, "WARDEN_RETENTION_DAYS"):
         raw, name = chosen
         days = _whole_number(name, raw)
+        if days > MAX_RETENTION_DAYS:
+            raise SettingsError(
+                f"{name} must be between 0 and {MAX_RETENTION_DAYS} (0 = keep forever), got {days}"
+            )
         values["retention_days"] = None if days == 0 else days
 
     if chosen := pick(agents, "WARDEN_AGENTS"):

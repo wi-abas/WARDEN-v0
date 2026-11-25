@@ -45,6 +45,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_AUDIT_PATH = Path("warden-audit.db")
 DEFAULT_RETENTION_DAYS = 90  # None = keep everything forever
+MAX_RETENTION_DAYS = 36_500  # 100 years: far more overflows the calendar, so purges fail
 PURGE_INTERVAL = timedelta(days=1)
 
 
@@ -275,6 +276,14 @@ def _make_private(path: Path) -> None:
         logger.warning("audit log %s was readable by others; restricted it to you (600)", path)
 
 
+def _check_days(days: int) -> None:
+    if type(days) is not int or not 1 <= days <= MAX_RETENTION_DAYS:
+        raise ValueError(
+            f"retention must be a whole number of days >= 1 and <= {MAX_RETENTION_DAYS}, "
+            "or None (forever)"
+        )
+
+
 class SQLiteAuditLog:
     """Audit log stored in a local SQLite file (standard library, no extra dependency).
 
@@ -288,12 +297,8 @@ class SQLiteAuditLog:
         retention_days: int | None = DEFAULT_RETENTION_DAYS,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
-        if retention_days is not None and (
-            not isinstance(retention_days, int)
-            or isinstance(retention_days, bool)
-            or retention_days < 1
-        ):
-            raise ValueError("retention_days must be a whole number of days >= 1, or None")
+        if retention_days is not None:
+            _check_days(retention_days)
         self.path = path
         self.retention_days = retention_days
         self._clock = clock
@@ -394,6 +399,7 @@ class SQLiteAuditLog:
         The deletion and an AUDIT_PURGED event explaining it are written in one
         transaction: history never disappears without a record saying why.
         """
+        _check_days(days)
         now = self._clock()
         cutoff = (now - timedelta(days=days)).isoformat()
         with closing(self._write()) as conn, conn:

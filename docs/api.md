@@ -275,7 +275,7 @@ WARDEN_ADMIN_KEY="$(openssl rand -base64 32)" \
 | Policy file | `--policy` | `WARDEN_POLICY` | `policies/default.json` |
 | Port | `--port` | `WARDEN_PORT` | `8000` |
 | Audit database | `--audit-db` | `WARDEN_AUDIT_DB` | `warden-audit.db` |
-| Audit retention | `--retention-days` (`0` = forever) | `WARDEN_RETENTION_DAYS` | `90` |
+| Audit retention | `--retention-days` (1 to 36500, `0` = forever) | `WARDEN_RETENTION_DAYS` | `90` |
 | Admin key | *(no flag)* | `WARDEN_ADMIN_KEY` (32+ characters) | random, printed at startup |
 | Agent tokens | `--agents` | `WARDEN_AGENTS` | none (agent_id self-declared) |
 

@@ -151,3 +151,17 @@ def test_symlinked_audit_db_is_a_settings_error(tmp_path: Path) -> None:
     link.symlink_to(tmp_path / "elsewhere.db")
     with pytest.raises(SettingsError, match="symlink"):
         resolve(audit_db=str(link), env={})
+
+
+@pytest.mark.parametrize("days", ["36501", "739999", "9999999999"])
+def test_huge_retention_is_refused(days: str) -> None:
+    """Beyond a date the calendar can hold, every purge would fail: nothing would ever
+    be deleted, while the setting says otherwise. 0 is the way to say forever."""
+    with pytest.raises(SettingsError, match="--retention-days must be between 0 and 36500"):
+        resolve(retention_days=days, env={})
+    with pytest.raises(SettingsError, match="WARDEN_RETENTION_DAYS"):
+        resolve(env={"WARDEN_RETENTION_DAYS": days})
+
+
+def test_longest_retention_accepted() -> None:
+    assert resolve(retention_days="36500", env={}).retention_days == 36500
