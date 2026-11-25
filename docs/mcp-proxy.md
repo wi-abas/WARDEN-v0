@@ -136,9 +136,13 @@ same call after you approve goes through (once).
 - Any MCP method other than `tools/call` (checked) and the protocol basics
   (`initialize`, `ping`, `tools/list`, `resources/list`, `resources/templates/list`,
   `prompts/list`, `logging/setLevel`, and `notifications/*`), unless listed in
-  `allow_methods`. `tools/call` itself can't be listed.
+  `allow_methods`. `tools/call` itself can't be listed, nor the same name in other case.
 - Messages that repeat a JSON key, JSON-RPC batches, `NaN`/`Infinity`, invalid JSON.
   These could make the proxy and the server read different things.
+- Requests and notifications with any top-level key other than `jsonrpc`, `id`, `method`
+  and `params` (exact spelling), and responses that aren't exactly `jsonrpc`, `id` and one
+  of `result` / `error`. A server that ignores case could read `"Method"` as `"method"`
+  and run a call Warden never checked.
 - A `tools/call` sent as a notification (no `id`): dropped.
 - A `tools/call` whose `_meta` holds anything but keys from `allow_meta_keys` (default
   only `progressToken`), each with short printable text (1-256 characters) or a whole
@@ -176,6 +180,8 @@ logged by type only.
 - Server requests you allow in `allow_server_requests` pass unchecked (Warden doesn't
   look at a sampling prompt or a roots answer).
 - The server is trusted for what it answers: a tool result can still be misleading.
+- Keys inside `arguments` are the policy's job: if your server ignores case there (reads
+  `"Path"` as `"path"`), use tool argument lists so unknown argument names are denied.
 - Tool names Warden doesn't accept (uppercase letters, spaces) are always denied.
 
 Design and threat model: [design/mcp-proxy.md](design/mcp-proxy.md),

@@ -60,6 +60,11 @@ PASS_THROUGH = frozenset(
     }
 )
 
+# The only top-level keys of a client request or notification (exact, case-sensitive).
+# Anything else is refused: a server that ignores case could read "Method" as "method"
+# and run something Warden never checked.
+REQUEST_KEYS = frozenset({"jsonrpc", "id", "method", "params"})
+
 # The fields a tools/call may carry; anything else is refused. "_meta" is protocol
 # metadata (e.g. a progress token): only keys on the config's "allow_meta_keys" list,
 # holding short text or a whole number, may be in it (see _meta_problem).
@@ -157,7 +162,8 @@ class ProxyConfig(BaseModel):
     @field_validator("allow_methods")
     @classmethod
     def tools_call_stays_checked(cls, value: tuple[str, ...]) -> tuple[str, ...]:
-        if "tools/call" in value:
+        # Nor a look-alike (other case, spaces) that a sloppy server takes for tools/call.
+        if any(method.strip().casefold() == "tools/call" for method in value):
             raise ValueError("tools/call is always checked by Warden; it can't be allowed")
         return value
 
@@ -427,6 +433,11 @@ class McpProxy:
             return
         if not isinstance(method, str):
             self._reply(rpc_error(None, INVALID_REQUEST, "method must be text"))
+            return
+        if not set(message) <= REQUEST_KEYS:
+            logger.warning("refused a message from the client (unexpected key)")
+            if has_id:
+                self._reply(rpc_error(request_id, INVALID_REQUEST, "unexpected key in message"))
             return
         if not has_id:  # a notification: no answer expected
             if method == "notifications/cancelled":
