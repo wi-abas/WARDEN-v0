@@ -31,12 +31,16 @@ is [`examples/demo-policy.json`](https://github.com/wi-abas/agent-warden/blob/ma
 
 ## Install in your own project
 
-Warden is not on PyPI yet, so install it from GitHub. It needs Python 3.12 or newer.
+Warden is **not on PyPI yet**, so install a tagged version from GitHub. You need Python
+3.12 or newer and `git` (slim containers often don't have it).
 
 ```sh
-uv add "agent-warden @ git+https://github.com/wi-abas/agent-warden"   # with uv
-pip install "git+https://github.com/wi-abas/agent-warden"              # with pip (in a virtualenv)
+uv add "agent-warden @ git+https://github.com/wi-abas/agent-warden@v0.4.1"   # with uv
+pip install "git+https://github.com/wi-abas/agent-warden@v0.4.1"              # with pip (in a virtualenv)
 ```
+
+> Don't run `pip install agent-warden` or `uv add agent-warden`: until this project has
+> published there, anyone could claim that name on PyPI and you'd get their code.
 
 Then, from your project folder:
 
@@ -46,10 +50,8 @@ uv run warden check     # validates it
 uv run warden serve     # starts Warden on http://127.0.0.1:8000
 ```
 
-(With pip, drop the `uv run`.) Once released on PyPI the package will be called
-`agent-warden`; the import name stays `warden`.
-
-To stay on one version, add the tag: `"agent-warden @ git+https://github.com/wi-abas/agent-warden@v0.4.1"`.
+(With pip, drop the `uv run`.) The package is called `agent-warden`; the import name is
+`warden`.
 
 ## Use it from your agent
 
@@ -239,7 +241,7 @@ directly. Measure on your machine: `uv run python scripts/benchmark.py`.
 - [Design notes](https://github.com/wi-abas/agent-warden/tree/main/docs/design): how each feature works and what it doesn't cover
 - [Security](https://github.com/wi-abas/agent-warden/blob/main/SECURITY.md): threat model, what Warden does and doesn't protect against
 - [Threat model](https://github.com/wi-abas/agent-warden/blob/main/docs/threat-model.md): attackers, defences with their tests, remaining risks
-- [Releasing](https://github.com/wi-abas/agent-warden/blob/main/docs/releasing.md): signed, attested releases through PyPI trusted publishing
+- [Releasing](https://github.com/wi-abas/agent-warden/blob/main/docs/releasing.md): how releases are tagged and built (publishing to PyPI isn't working yet)
 
 ## Rule for clients: fail closed
 
