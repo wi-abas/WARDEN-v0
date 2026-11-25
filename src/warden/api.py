@@ -250,6 +250,39 @@ class HostCheck:
         await self.app(scope, receive, send)
 
 
+class CrashGuard:
+    """Answers 500 deny when anything inside crashes, and logs only the error's type:
+    never its message or a stack trace, which may hold tool arguments. The exception
+    stops here, so the server can't log it either."""
+
+    def __init__(
+        self,
+        app: ASGIApp,
+        on_reject: Callable[[Scope, int, str], None] = lambda scope, status, reason: None,
+    ) -> None:
+        self.app = app
+        self.on_reject = on_reject
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        started = False
+
+        async def watched_send(message: Message) -> None:
+            nonlocal started
+            started = True
+            await send(message)
+
+        try:
+            await self.app(scope, receive, watched_send)
+        except Exception as exc:
+            logger.error("unexpected error handling request: %s", type(exc).__name__)
+            self.on_reject(scope, 500, "internal error")
+            if not started:  # else: the server closes the unfinished answer
+                await _deny_response(500, "internal error")(scope, receive, send)
+
+
 def _is_deceptive_char(ch: str) -> bool:
     """Characters that make text DISPLAY differently from what it is: invisible or
     control characters, direction overrides (U+202E reverses what follows), and
@@ -939,8 +972,12 @@ def create_app(
     # DuplicateKeyCheck (which may read the body, so it must come after the size limit).
     app.add_middleware(DuplicateKeyCheck, on_reject=w.record_rejection)
     app.add_middleware(BodySizeLimit, on_reject=w.record_rejection)
-    # Added last, so it runs first: refuse foreign Host headers before anything else.
+    # Added after those, so it runs before them: refuse foreign Host headers first.
     app.add_middleware(HostCheck, allowed=ALLOWED_HOSTS, on_reject=w.record_rejection)
+    # Around everything: a crash anywhere becomes a 500 deny. Not an exception handler
+    # for Exception: Starlette re-raises after calling it, and Uvicorn then logs the full
+    # traceback with the exception's message, which may hold tool arguments.
+    app.add_middleware(CrashGuard, on_reject=w.record_rejection)
 
     @app.exception_handler(RequestValidationError)
     async def invalid_request(request: Request, exc: RequestValidationError) -> JSONResponse:
@@ -967,12 +1004,6 @@ def create_app(
     @app.exception_handler(_AgentTokenError)
     async def bad_agent_token(request: Request, exc: _AgentTokenError) -> JSONResponse:
         return w.reject(request, exc.status, exc.reason)
-
-    @app.exception_handler(Exception)
-    async def unexpected_error(request: Request, exc: Exception) -> JSONResponse:
-        # Log only the error type; never the message or a stack trace with arguments.
-        logger.error("unexpected error handling request: %s", type(exc).__name__)
-        return w.reject(request, 500, "internal error")
 
     admin = [Depends(w.require_admin)]
     app.get("/health")(w.health)
