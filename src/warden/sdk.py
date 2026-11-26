@@ -26,7 +26,14 @@ from typing import Any, cast
 
 from pydantic import JsonValue
 
-from warden.client import DEFAULT_URL, Answer, WardenClient, capped_pause
+from warden.client import (
+    DEFAULT_URL,
+    NO_AUTH_HELP,
+    Answer,
+    WardenClient,
+    capped_pause,
+    no_auth_from_env,
+)
 from warden.models import TOOL_NAME_PATTERN, Decision
 from warden.policy import no_duplicate_keys
 
@@ -59,13 +66,20 @@ class ApprovalPending(NotAllowed):
 
 
 def default_client() -> WardenClient:
-    """A client from WARDEN_URL, WARDEN_AGENT_ID and WARDEN_AGENT_TOKEN
-    (defaults: local Warden, "agent", no token). With a token, the agent id comes from
-    the token; if WARDEN_AGENT_ID is set too, it must be the token's agent (else denied)."""
+    """A client from WARDEN_URL, WARDEN_AGENT_ID and WARDEN_AGENT_TOKEN (default: local
+    Warden). With a token, the agent id comes from the token; if WARDEN_AGENT_ID is set
+    too, it must be the token's agent (else denied).
+
+    Without WARDEN_AGENT_TOKEN it raises ValueError (before anything is sent, so the tool
+    doesn't run), unless WARDEN_NO_AUTH=1: a lost environment variable must not quietly
+    switch off the protection. A WardenClient built in code is up to you."""
+    token = os.environ.get("WARDEN_AGENT_TOKEN") or None
+    if token is None and not no_auth_from_env(os.environ):
+        raise ValueError(f"no WARDEN_AGENT_TOKEN: {NO_AUTH_HELP}")
     return WardenClient(
         os.environ.get("WARDEN_URL", DEFAULT_URL),
         os.environ.get("WARDEN_AGENT_ID"),
-        token=os.environ.get("WARDEN_AGENT_TOKEN") or None,
+        token=token,
     )
 
 

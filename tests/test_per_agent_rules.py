@@ -275,6 +275,9 @@ def test_serve_refuses_without_agents_file(
     path = write(tmp_path, "p.json", {"rules": [rule("billing-pays", "allow", ["billing"])]})
     argv = ["serve", "--policy", str(path), "--audit-db", str(tmp_path / "a.db")]
     assert cli.main(argv) == 2
+    assert "agent tokens are required" in capsys.readouterr().err
+    # Even with --no-auth chosen on purpose, a per-agent rule needs real agent ids.
+    assert cli.main([*argv, "--no-auth"]) == 2
     assert "rule 'billing-pays' is per-agent: start with --agents" in capsys.readouterr().err
 
 

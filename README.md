@@ -45,10 +45,15 @@ pip install "git+https://github.com/wi-abas/agent-warden@v0.5.0"              # 
 Then, from your project folder:
 
 ```sh
-uv run warden init      # creates policies/default.json (a starter policy)
-uv run warden check     # validates it
-uv run warden serve     # starts Warden on http://127.0.0.1:8000
+uv run warden init                  # creates policies/default.json (a starter policy)
+uv run warden check                 # validates it
+uv run warden agent add my-agent    # creates warden-agents.json, prints the agent's token
+uv run warden serve --agents warden-agents.json   # starts Warden on http://127.0.0.1:8000
 ```
+
+Give the token to your agent as `WARDEN_AGENT_TOKEN`. Agent tokens are required: to try
+Warden without them, start it with `--no-auth` (and set `WARDEN_NO_AUTH=1` for the SDK and
+the proxy). Then any local program can claim any agent id, and nothing proves who answers.
 
 (With pip, drop the `uv run`.) The package is called `agent-warden`; the import name is
 `warden`.
@@ -71,7 +76,8 @@ refused unless you allow them in the config.
       "command": "uv",
       "args": ["run", "--directory", "/path/to/agent-warden", "warden", "proxy",
                "--tool-prefix", "fs.", "--",
-               "npx", "-y", "@modelcontextprotocol/server-filesystem", "/Users/me/workspace"]
+               "npx", "-y", "@modelcontextprotocol/server-filesystem", "/Users/me/workspace"],
+      "env": {"WARDEN_AGENT_TOKEN": "wdn_... (from warden agent add)"}
     }
   }
 }
@@ -134,8 +140,8 @@ text = run_guarded("read_file", {"path": "/workspace/a.txt"}, open_and_read, cli
 ```
 
 - Without `client=`, `@guard` and `run_guarded` build one at call time from `WARDEN_URL`,
-  `WARDEN_AGENT_ID` and `WARDEN_AGENT_TOKEN` (defaults: `http://127.0.0.1:8000`, `agent`,
-  no token).
+  `WARDEN_AGENT_ID` and `WARDEN_AGENT_TOKEN` (default URL `http://127.0.0.1:8000`).
+  Without a token they refuse (the tool doesn't run) unless `WARDEN_NO_AUTH=1`.
 - `async def` functions work with `@guard` too; `run_guarded_async` is the async
   `run_guarded`.
 - Arguments must be plain JSON values (text, numbers, true/false, null, lists, objects);
@@ -289,9 +295,9 @@ Each of these is covered by tests in `tests/`.
 
 ## Known limitations
 
-- **Agent tokens are optional.** Without `--agents`, any process on this machine can call
-  `/v1/evaluate` with any `agent_id` (and dodge per-agent limits by inventing new ones), and
-  agents can't tell Warden from another program that took its port.
+- **Agent tokens can be switched off.** With `--no-auth`, any process on this machine can
+  call `/v1/evaluate` with any `agent_id` (and dodge per-agent limits by inventing new ones),
+  and agents can't tell Warden from another program that took its port.
 - **Per-agent rules need agent tokens.** A rule can list the agents it applies to
   (`"agents": ["billing-agent"]`), but only with `--agents`: without tokens `warden serve`
   refuses to start, since anyone could claim any agent id. A stolen token is that agent,

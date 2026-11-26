@@ -23,6 +23,7 @@ import socket
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlsplit
@@ -41,6 +42,23 @@ MAX_RESPONSE_BYTES = 64 * 1024
 MAX_REQUEST_BYTES = 64 * 1024
 MAX_HELLO_BYTES = 4096
 NOT_PROVEN = "Warden couldn't prove its identity"
+
+
+NO_AUTH_VAR = "WARDEN_NO_AUTH"
+NO_AUTH_HELP = (
+    "create a token with `warden agent add NAME` and set WARDEN_AGENT_TOKEN, or set "
+    "WARDEN_NO_AUTH=1 to run without agent tokens on purpose (any local program can then "
+    "claim any agent id, and nothing proves who answers)"
+)
+
+
+def no_auth_from_env(env: Mapping[str, str]) -> bool:
+    """True if WARDEN_NO_AUTH is exactly "1". Any other non-empty value is a mistake
+    ("true", "0", "yes"): refused, so a value meant as "off" never quietly means on."""
+    value = env.get(NO_AUTH_VAR, "")
+    if value not in ("", "1"):
+        raise ValueError(f"{NO_AUTH_VAR} must be 1 or unset")
+    return value == "1"
 
 
 class _NoRedirects(urllib.request.HTTPRedirectHandler):

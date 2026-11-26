@@ -321,6 +321,9 @@ def test_sdk_reads_token_from_environment(monkeypatch: pytest.MonkeyPatch) -> No
     assert default_client().agent_id == "billing"  # sent too: must match the token
     monkeypatch.delenv("WARDEN_AGENT_ID")
     monkeypatch.setenv("WARDEN_AGENT_TOKEN", "")
+    with pytest.raises(ValueError, match="no WARDEN_AGENT_TOKEN"):
+        default_client()  # an empty token is no token: refused unless chosen
+    monkeypatch.setenv("WARDEN_NO_AUTH", "1")
     assert "token=None" in repr(default_client())
 
 
@@ -354,7 +357,7 @@ def test_main_loads_agents(
     warden.api.main(dataclasses.replace(base, agents=path))
     assert "1 agents with tokens" in capsys.readouterr().err
     assert apps[0].state.warden.agents.identify(token) == "x"
-    warden.api.main(base)
+    warden.api.main(dataclasses.replace(base, no_auth=True))
     assert "no agent tokens" in capsys.readouterr().err
     path.write_text("{broken")
     with pytest.raises(StartupError, match="agents.json"):

@@ -67,9 +67,10 @@ is backed by code and tests, and what it leaves open. Short version: [SECURITY.m
    through it. An agent with direct access to a tool, or a client configured to reach an
    MCP server directly, skips it. Mitigation is deployment: give the agent *only* the
    proxied tools ([mcp-proxy.md](mcp-proxy.md)).
-2. **Open mode is the default.** Without `--agents`, any local program can claim any
-   `agent_id`, use another agent's approval if it knows the id and the exact action, and
-   get fresh rate-limit budgets with new ids.
+2. **Open mode can be chosen.** Agent tokens are required unless `--no-auth` /
+   `WARDEN_NO_AUTH=1` (server, SDK and proxy; [design/secure-by-default.md](design/secure-by-default.md)).
+   With it, any local program can claim any `agent_id`, use another agent's approval if it
+   knows the id and the exact action, and get fresh rate-limit budgets with new ids.
 3. **One shared admin key.** No record of which person approved; anyone with the key
    (or Warden's environment, i.e. the same OS user) can approve.
 4. **Same-user compromise.** A2 running as Warden's OS user can read the admin key from

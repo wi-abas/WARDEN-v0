@@ -24,6 +24,7 @@ def test_main_starts_uvicorn_with_the_settings(
         audit_db=tmp_path / "audit.db",
         retention_days=7,
         admin_key="k" * 32,
+        no_auth=True,
     )
     warden.api.main(settings)
     [call] = calls

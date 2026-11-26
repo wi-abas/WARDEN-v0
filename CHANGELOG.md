@@ -16,6 +16,10 @@
   starting with `-` or `|` (option and pipe injection in sendmail-style tools).
 
 ### Changed
+- Agent tokens are on by default. `warden serve` refuses to start without `--agents`
+  unless `--no-auth` (or `WARDEN_NO_AUTH=1`). The SDK's default client and `warden proxy`
+  refuse to run without `WARDEN_AGENT_TOKEN` unless `WARDEN_NO_AUTH=1` (or the proxy's
+  `--no-auth`). A forgotten variable no longer silently turns protection off.
 - Tool names may contain uppercase letters (MCP servers use camelCase, like `getIssue`).
   Matching is case-sensitive, so another spelling has no rule and is denied by default.
   `warden check` warns when two tool names differ only in case (W020).

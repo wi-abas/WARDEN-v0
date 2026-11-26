@@ -170,7 +170,7 @@ def test_serve_creates_the_key_and_hashes_with_it(
     apps: list[Any] = []
     monkeypatch.setattr(uvicorn, "run", lambda app, **kw: apps.append(app))
     db = tmp_path / "audit.db"
-    warden.api.main(Settings(policy=BASIC_POLICY, audit_db=db, admin_key="k" * 32))
+    warden.api.main(Settings(policy=BASIC_POLICY, audit_db=db, admin_key="k" * 32, no_auth=True))
     key = bytes.fromhex((tmp_path / "audit.db.hash-key").read_text())
     assert apps[0].state.warden.hash_key == key
     TestClient(apps[0]).post(

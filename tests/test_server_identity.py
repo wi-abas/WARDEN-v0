@@ -315,7 +315,9 @@ def test_main_turns_forwarded_addresses_off(
 ) -> None:
     calls: list[dict[str, Any]] = []
     monkeypatch.setattr(uvicorn, "run", lambda app, **kw: calls.append(kw))
-    warden.api.main(Settings(policy=BASIC_POLICY, audit_db=tmp_path / "a.db", admin_key="k" * 32))
+    warden.api.main(
+        Settings(policy=BASIC_POLICY, audit_db=tmp_path / "a.db", admin_key="k" * 32, no_auth=True)
+    )
     assert calls[0]["proxy_headers"] is False
 
 
@@ -323,7 +325,9 @@ def test_startup_warning_without_agents_names_the_port(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     monkeypatch.setattr(uvicorn, "run", lambda app, **kw: None)
-    warden.api.main(Settings(policy=BASIC_POLICY, audit_db=tmp_path / "a.db", admin_key="k" * 32))
+    warden.api.main(
+        Settings(policy=BASIC_POLICY, audit_db=tmp_path / "a.db", admin_key="k" * 32, no_auth=True)
+    )
     assert "can't tell Warden from another program on this port" in capsys.readouterr().err
 
 

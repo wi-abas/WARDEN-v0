@@ -227,7 +227,9 @@ def test_main_persists_approvals_in_the_audit_database(
 ) -> None:
     apps: list[Any] = []
     monkeypatch.setattr(uvicorn, "run", lambda app, **kw: apps.append(app))
-    settings = Settings(policy=BASIC_POLICY, audit_db=tmp_path / "a.db", admin_key="k" * 32)
+    settings = Settings(
+        policy=BASIC_POLICY, audit_db=tmp_path / "a.db", admin_key="k" * 32, no_auth=True
+    )
     warden.api.main(settings)
     client = TestClient(apps[0], raise_server_exceptions=False)
     body = {"agent_id": "a", "tool": "send_email", "arguments": {"to": "x"}}
