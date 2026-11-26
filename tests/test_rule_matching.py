@@ -249,3 +249,23 @@ def test_dot_segments_with_a_parameter_are_denied_in_paths(path: str) -> None:
 
 def test_a_semicolon_in_a_file_name_is_fine() -> None:
     assert ask(allow("startswith", "/data/"), "/data/a;b/;c") == Decision.ALLOW
+
+
+def test_ignore_case_folds_the_argument_once_per_reading(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A long argument against a long list: folding it again for every listed text made one
+    60 KB request about ten times slower (a cheap way to slow Warden down)."""
+    import warden.engine as engine
+
+    folded: list[int] = []
+
+    def counting(fold: Any) -> Any:
+        def wrapped(text: str) -> str:
+            folded.append(len(text))
+            return str(fold(text))
+
+        return wrapped
+
+    monkeypatch.setattr(engine, "_FOLDS", tuple(counting(f) for f in engine._FOLDS))
+    rules = allow("in", [f"name{i}" for i in range(100)], ignore_case=True)
+    assert ask(rules, "x" * 60_000) == Decision.DENY
+    assert sum(1 for n in folded if n == 60_000) == len(engine._FOLDS)

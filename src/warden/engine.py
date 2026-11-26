@@ -123,7 +123,10 @@ def _any_match(
     text, options = _nfc(actual), [_nfc(e) for e in expected]
     if not condition.ignore_case:
         return any(matches(text, option) for option in options)
-    answers = {any(matches(fold(text), fold(o)) for o in options) for fold in _FOLDS}
+    answers = set()
+    for fold in _FOLDS:
+        folded = fold(text)  # once per reading, not once per expected text
+        answers.add(any(matches(folded, fold(o)) for o in options))
     if len(answers) > 1:
         raise _UncheckableArgument(condition.label, _AMBIGUOUS_CASE)
     return answers.pop()
