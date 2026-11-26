@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from helpers import Clock
 
 from warden import cli
 from warden.audit import (
@@ -20,14 +21,6 @@ from warden.audit import (
 from warden.models import Decision
 
 START = datetime(2026, 6, 1, tzinfo=UTC)
-
-
-class Clock:
-    def __init__(self) -> None:
-        self.now = START
-
-    def __call__(self) -> datetime:
-        return self.now
 
 
 def entry(when: datetime = START, agent: str = "a") -> AuditEntry:
@@ -130,7 +123,7 @@ def test_cutting_the_tail_changes_the_head(tmp_path: Path) -> None:
 
 def test_chain_survives_retention_purges(tmp_path: Path) -> None:
     path = tmp_path / "a.db"
-    clock = Clock()
+    clock = Clock(START)
     log = SQLiteAuditLog(path, retention_days=None, clock=clock)
     for days_ago in (200, 150, 100, 10, 0):
         log.record(entry(START - timedelta(days=days_ago)))
@@ -150,7 +143,7 @@ def test_chain_survives_retention_purges(tmp_path: Path) -> None:
 
 def test_purging_everything_then_writing_more(tmp_path: Path) -> None:
     path = tmp_path / "a.db"
-    log = SQLiteAuditLog(path, retention_days=None, clock=Clock())
+    log = SQLiteAuditLog(path, retention_days=None, clock=Clock(START))
     log.record(entry(START - timedelta(days=100)))
     log.record(entry(START - timedelta(days=99)))
     log.purge_older_than(90)
@@ -161,7 +154,7 @@ def test_purging_everything_then_writing_more(tmp_path: Path) -> None:
 
 def test_editing_the_anchor_is_found(tmp_path: Path) -> None:
     path = tmp_path / "a.db"
-    log = SQLiteAuditLog(path, retention_days=None, clock=Clock())
+    log = SQLiteAuditLog(path, retention_days=None, clock=Clock(START))
     for days_ago in (100, 99, 0):
         log.record(entry(START - timedelta(days=days_ago)))
     log.purge_older_than(90)
@@ -182,7 +175,7 @@ def test_editing_the_anchor_is_found(tmp_path: Path) -> None:
 
 def test_out_of_order_timestamps_never_cut_the_middle(tmp_path: Path) -> None:
     path = tmp_path / "a.db"
-    log = SQLiteAuditLog(path, retention_days=None, clock=Clock())
+    log = SQLiteAuditLog(path, retention_days=None, clock=Clock(START))
     log.record(entry(START - timedelta(days=100), agent="old"))
     log.record(entry(START, agent="new"))
     log.record(entry(START - timedelta(days=100), agent="old-but-late"))  # clock moved
@@ -377,7 +370,7 @@ def test_values_warden_never_writes_are_reported_not_a_crash(
 
 def test_edited_anchor_id_after_a_real_purge(tmp_path: Path) -> None:
     path = tmp_path / "a.db"
-    clock = Clock()
+    clock = Clock(START)
     log = SQLiteAuditLog(path, retention_days=None, clock=clock)
     log.record(entry())
     clock.now += timedelta(days=10)

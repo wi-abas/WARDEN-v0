@@ -3,23 +3,16 @@
 from pathlib import Path
 
 from fastapi.testclient import TestClient
-from helpers import BASIC_POLICY
+from helpers import BASIC_POLICY, Clock
 
 from warden.api import create_app
 from warden.audit import SQLiteAuditLog
 
 
-class Clock:
-    now = 1000.0
-
-    def __call__(self) -> float:
-        return self.now
-
-
-def setup(tmp_path: Path) -> tuple[TestClient, SQLiteAuditLog, Clock]:
+def setup(tmp_path: Path) -> tuple[TestClient, SQLiteAuditLog, Clock[float]]:
     log = SQLiteAuditLog(tmp_path / "a.db")
     app = create_app(BASIC_POLICY, audit_log=log, admin_key="k" * 32)
-    clock = Clock()
+    clock = Clock(1000.0)
     app.state.warden.clock = clock
     app.state.warden.rejections_per_minute = 5
     return TestClient(app), log, clock

@@ -8,8 +8,8 @@ from typing import Any
 import pytest
 import uvicorn
 from fastapi.testclient import TestClient
-from helpers import ADMIN_KEY, BASIC_POLICY, shown
-from test_audit_chain import Clock, entry, event, filled, sql
+from helpers import ADMIN_KEY, BASIC_POLICY, Clock, shown
+from test_audit_chain import START, entry, event, filled, sql
 
 import warden.api
 from warden import audit, cli
@@ -147,7 +147,7 @@ def test_a_trigger_cannot_change_what_retention_does(
     tmp_path: Path, table: str, operation: str
 ) -> None:
     path = tmp_path / "a.db"
-    clock = Clock()
+    clock = Clock(START)
     log = SQLiteAuditLog(path, retention_days=None, clock=clock)
     log.record(entry())
     log.record_event(event())

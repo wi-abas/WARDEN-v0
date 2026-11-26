@@ -6,6 +6,7 @@ import threading
 from pathlib import Path
 
 import pytest
+from helpers import Clock
 
 from warden.approvals import (
     MAX_GROUP,
@@ -17,14 +18,6 @@ from warden.approvals import (
     Status,
 )
 from warden.models import ActionRequest
-
-
-class Clock:
-    def __init__(self) -> None:
-        self.now = 1000.0
-
-    def __call__(self) -> float:
-        return self.now
 
 
 def action(n: int, agent: str = "a", tool: str = "send_email") -> ActionRequest:
@@ -42,12 +35,12 @@ def ask(store: ApprovalStore, n: int, agent: str = "a", tool: str = "send_email"
 
 
 @pytest.fixture
-def clock() -> Clock:
-    return Clock()
+def clock() -> Clock[float]:
+    return Clock(1000.0)
 
 
 @pytest.fixture
-def store(clock: Clock) -> ApprovalStore:
+def store(clock: Clock[float]) -> ApprovalStore:
     return ApprovalStore(ttl_seconds=900, clock=clock)
 
 
@@ -55,7 +48,9 @@ def statuses(store: ApprovalStore, ids: list[str]) -> list[Status]:
     return [store._items[i].status for i in ids]
 
 
-def test_approve_a_group_each_allows_exactly_once(store: ApprovalStore, clock: Clock) -> None:
+def test_approve_a_group_each_allows_exactly_once(
+    store: ApprovalStore, clock: Clock[float]
+) -> None:
     ids = [ask(store, n) for n in range(3)]
     clock.now += 600  # approving gives a fresh window
     decided = store.decide_group(ids, approve=True)
@@ -99,7 +94,7 @@ def test_unknown_id_refuses_the_whole_group(store: ApprovalStore) -> None:
     assert refused(store, [*ids, "x" * 32]) == {"x" * 32: GroupReason.NOT_FOUND}
 
 
-def test_expired_id_refuses_the_whole_group(store: ApprovalStore, clock: Clock) -> None:
+def test_expired_id_refuses_the_whole_group(store: ApprovalStore, clock: Clock[float]) -> None:
     old = ask(store, 0)
     clock.now += 800
     new = [ask(store, n) for n in range(1, 3)]
@@ -151,7 +146,7 @@ def test_group_size_limits(store: ApprovalStore, count: int) -> None:
         store.decide_group([f"{i:032d}" for i in range(count)], approve=True)
 
 
-def test_max_group_size_works(clock: Clock) -> None:
+def test_max_group_size_works(clock: Clock[float]) -> None:
     store = ApprovalStore(ttl_seconds=900, clock=clock, max_pending=MAX_GROUP)
     ids = [ask(store, n) for n in range(MAX_GROUP)]
     assert len(store.decide_group(ids, approve=True)) == MAX_GROUP
@@ -172,7 +167,9 @@ def test_failing_audit_changes_nothing(store: ApprovalStore) -> None:
     assert statuses(store, ids) == [Status.PENDING] * 3
 
 
-def test_pending_groups_never_mix_and_are_ordered(store: ApprovalStore, clock: Clock) -> None:
+def test_pending_groups_never_mix_and_are_ordered(
+    store: ApprovalStore, clock: Clock[float]
+) -> None:
     created = {}
     for n, (agent, tool) in enumerate(
         [("b", "x"), ("a", "y"), ("a", "x"), ("b", "x"), ("a", "x"), ("a", "x")]

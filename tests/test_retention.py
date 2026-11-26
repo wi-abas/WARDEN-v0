@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from helpers import Clock
 
 from warden.audit import (
     AuditEntry,
@@ -14,14 +15,6 @@ from warden.audit import (
 from warden.models import Decision
 
 START = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
-
-
-class Clock:
-    def __init__(self) -> None:
-        self.now = START
-
-    def __call__(self) -> datetime:
-        return self.now
 
 
 def entry(when: datetime, agent: str = "a") -> AuditEntry:
@@ -51,7 +44,7 @@ def seed(path: Path) -> None:
 
 def test_startup_purges_entries_older_than_retention(tmp_path: Path) -> None:
     seed(tmp_path / "a.db")
-    log = SQLiteAuditLog(tmp_path / "a.db", retention_days=90, clock=Clock())
+    log = SQLiteAuditLog(tmp_path / "a.db", retention_days=90, clock=Clock(START))
     assert [e.agent_id for e in log.recent()] == ["today", "recent"]
     kinds = [e.kind for e in log.recent_events()]
     assert kinds == [EventKind.AUDIT_PURGED, EventKind.REQUEST_REJECTED]
@@ -59,27 +52,27 @@ def test_startup_purges_entries_older_than_retention(tmp_path: Path) -> None:
 
 def test_purge_is_recorded_with_counts(tmp_path: Path) -> None:
     seed(tmp_path / "a.db")
-    log = SQLiteAuditLog(tmp_path / "a.db", retention_days=90, clock=Clock())
+    log = SQLiteAuditLog(tmp_path / "a.db", retention_days=90, clock=Clock(START))
     purged = log.recent_events()[0]
     assert purged.reason == "deleted 2 decisions and 1 events older than 90 days"
     assert purged.timestamp == START.isoformat()
 
 
 def test_nothing_to_purge_records_nothing(tmp_path: Path) -> None:
-    log = SQLiteAuditLog(tmp_path / "a.db", retention_days=90, clock=Clock())
+    log = SQLiteAuditLog(tmp_path / "a.db", retention_days=90, clock=Clock(START))
     log.record(entry(START))
     assert log.recent_events() == []
 
 
 def test_retention_off_keeps_everything(tmp_path: Path) -> None:
     seed(tmp_path / "a.db")
-    log = SQLiteAuditLog(tmp_path / "a.db", retention_days=None, clock=Clock())
+    log = SQLiteAuditLog(tmp_path / "a.db", retention_days=None, clock=Clock(START))
     assert len(log.recent()) == 4
     assert len(log.recent_events()) == 2
 
 
 def test_purges_again_after_a_day_while_running(tmp_path: Path) -> None:
-    clock = Clock()
+    clock = Clock(START)
     log = SQLiteAuditLog(tmp_path / "a.db", retention_days=90, clock=clock)
     log.record(entry(START - timedelta(days=89), "ages-out"))
 
@@ -98,7 +91,7 @@ def test_purge_failure_never_blocks_a_write(tmp_path: Path) -> None:
         def purge_older_than(self, days: int) -> int:
             raise RuntimeError("boom")
 
-    log = PurgeFails(tmp_path / "a.db", retention_days=90, clock=Clock())
+    log = PurgeFails(tmp_path / "a.db", retention_days=90, clock=Clock(START))
     log.record(entry(START))
     assert len(log.recent()) == 1
 
@@ -123,7 +116,7 @@ def test_failed_purge_is_retried_on_the_next_write(tmp_path: Path) -> None:
                 raise RuntimeError("database busy")
             return super().purge_older_than(days)
 
-    log = FailsOnce(tmp_path / "a.db", retention_days=90, clock=Clock())  # attempt 1 fails
+    log = FailsOnce(tmp_path / "a.db", retention_days=90, clock=Clock(START))  # attempt 1 fails
     log.record(entry(START))  # attempt 2 right away, not a day later
     log.wait_for_purge()
     assert len(attempts) == 2
@@ -144,7 +137,7 @@ def test_write_does_not_wait_for_a_slow_purge(tmp_path: Path) -> None:
                 release.wait(5)  # the background purge blocks until we let it go
             return 0
 
-    clock = Clock()
+    clock = Clock(START)
     log = SlowPurge(tmp_path / "a.db", retention_days=90, clock=clock)
     clock.now = START + timedelta(days=2)
     started = time.monotonic()
@@ -170,7 +163,7 @@ def test_only_one_purge_runs_at_a_time(tmp_path: Path) -> None:
                 release.wait(5)
             return 0
 
-    clock = Clock()
+    clock = Clock(START)
     log = SlowPurge(tmp_path / "a.db", retention_days=90, clock=clock)
     clock.now = START + timedelta(days=2)
     log.record(entry(clock.now))  # starts a background purge that blocks
@@ -185,7 +178,7 @@ def test_only_one_purge_runs_at_a_time(tmp_path: Path) -> None:
 @pytest.mark.parametrize("bad", [-1, 0, 36501, 10**10, True, 1.5])
 def test_purge_refuses_a_bad_number_of_days(tmp_path: Path, bad: object) -> None:
     """A negative age would put the cutoff in the future and delete everything."""
-    log = SQLiteAuditLog(tmp_path / "a.db", retention_days=None, clock=Clock())
+    log = SQLiteAuditLog(tmp_path / "a.db", retention_days=None, clock=Clock(START))
     log.record(entry(START))
     with pytest.raises(ValueError, match="whole number"):
         log.purge_older_than(bad)  # type: ignore[arg-type]
@@ -197,7 +190,7 @@ def test_purge_refuses_a_bad_number_of_days(tmp_path: Path, bad: object) -> None
 def test_longest_retention_purges_nothing_recent(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    log = SQLiteAuditLog(tmp_path / "a.db", retention_days=36500, clock=Clock())
+    log = SQLiteAuditLog(tmp_path / "a.db", retention_days=36500, clock=Clock(START))
     log.record(entry(START - timedelta(days=3650)))
     assert log.purge_older_than(36500) == 0
     assert len(log.recent()) == 1 and "purge failed" not in caplog.text

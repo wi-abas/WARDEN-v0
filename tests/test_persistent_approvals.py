@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 import uvicorn
 from fastapi.testclient import TestClient
-from helpers import ADMIN_KEY, BASIC_POLICY, shown
+from helpers import ADMIN_KEY, BASIC_POLICY, Clock, shown
 
 import warden.api
 from warden.api import create_app
@@ -22,18 +22,10 @@ ADMIN = {"X-Warden-Admin-Key": ADMIN_KEY}
 PRIVATE_TO = "ceo-private-address@example.com"
 
 
-class Clock:
-    def __init__(self) -> None:
-        self.now = 1_800_000_000.0
-
-    def __call__(self) -> float:
-        return self.now
-
-
 class Warden:
     """One Warden 'process'. restart() builds a new one on the same database."""
 
-    def __init__(self, tmp_path: Path, clock: Clock) -> None:
+    def __init__(self, tmp_path: Path, clock: Clock[float]) -> None:
         self.path = tmp_path / "audit.db"
         self.clock = clock
         self.start()
@@ -69,7 +61,7 @@ class Warden:
 
 @pytest.fixture
 def w(tmp_path: Path) -> Warden:
-    return Warden(tmp_path, Clock())
+    return Warden(tmp_path, Clock(1_800_000_000.0))
 
 
 def test_arguments_never_reach_the_database(w: Warden) -> None:
@@ -175,7 +167,7 @@ class BrokenDB(ApprovalDB):
 
 def test_failed_writes_change_nothing(tmp_path: Path) -> None:
     db = BrokenDB(tmp_path / "a.db")
-    clock = Clock()
+    clock = Clock(1_800_000_000.0)
     store = ApprovalStore(db=db, clock=clock)
     action = ActionRequest(agent_id="a", tool="t", arguments={"x": 1})
     approval_id = store.request(action, "d" * 64)

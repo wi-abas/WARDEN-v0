@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-from helpers import BASIC_POLICY, live_server, shown
+from helpers import BASIC_POLICY, Clock, live_server, shown
 from pydantic import ValidationError
 
 from warden.api import create_app
@@ -42,19 +42,11 @@ def h(n: int = 0, agent: str = "a") -> str:
     return f"{agent}{n}".ljust(64, "0")
 
 
-class Clock:
-    def __init__(self) -> None:
-        self.now = 1000.0
-
-    def __call__(self) -> float:
-        return self.now
-
-
 # --- The store ---------------------------------------------------------------------------
 
 
-def make(window: float = 900, **kwargs: Any) -> tuple[ApprovalStore, Clock]:
-    clock = Clock()
+def make(window: float = 900, **kwargs: Any) -> tuple[ApprovalStore, Clock[float]]:
+    clock = Clock(1000.0)
     store = ApprovalStore(ttl_seconds=900, clock=clock, rejection_window=lambda a: window, **kwargs)
     return store, clock
 
@@ -110,7 +102,7 @@ def test_window_zero_keeps_the_old_behaviour() -> None:
 
 
 def test_window_is_per_agent() -> None:
-    clock = Clock()
+    clock = Clock(1000.0)
     store = ApprovalStore(clock=clock, rejection_window=lambda agent: 0 if agent == "free" else 900)
     for agent in ("free", "strict"):
         approval_id = store.request(act(0, agent), h(0, agent))
@@ -234,7 +226,7 @@ def test_lift_does_nothing_if_the_audit_fails() -> None:
 
 
 def test_rejection_survives_a_restart(tmp_path: Path) -> None:
-    clock = Clock()
+    clock = Clock(1000.0)
     db = ApprovalDB(tmp_path / "a.db")
     store = ApprovalStore(clock=clock, db=db)
     approval_id = store.request(act(), h())
@@ -254,7 +246,7 @@ def test_rejection_survives_a_restart(tmp_path: Path) -> None:
 
 
 def test_lift_does_nothing_if_the_database_fails(tmp_path: Path) -> None:
-    clock = Clock()
+    clock = Clock(1000.0)
     db = ApprovalDB(tmp_path / "a.db")
     store = ApprovalStore(clock=clock, db=db)
     approval_id = store.request(act(), h())
@@ -281,7 +273,7 @@ def test_old_database_gets_the_decided_at_column(tmp_path: Path) -> None:
         )
         conn.execute("INSERT INTO approvals VALUES ('x', 'a', 't', ?, 'denied', 2000, 1)", (h(),))
     conn.close()
-    store = ApprovalStore(clock=Clock(), db=ApprovalDB(path))
+    store = ApprovalStore(clock=Clock(1000.0), db=ApprovalDB(path))
     with pytest.raises(Rejected):  # an old denied row still refuses (safer side)
         store.request(act(), h())
     [(_, left, since)] = store.rejections()

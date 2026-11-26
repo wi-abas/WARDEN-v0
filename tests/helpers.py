@@ -44,3 +44,13 @@ def shown(client: Any, approval_id: str, headers: dict[str, str]) -> dict[str, s
     approval needs no hash, and anything else is refused before the hash matters."""
     items = client.get("/v1/approvals", headers=headers, params={"ids": approval_id}).json()
     return {"action_hash": items[0]["action_hash"]} if items else {}
+
+
+class Clock[T]:
+    """A clock tests move by hand (`clock.now += 5`), passed where code wants time.time."""
+
+    def __init__(self, start: T) -> None:
+        self.now = start
+
+    def __call__(self) -> T:
+        return self.now
