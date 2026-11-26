@@ -27,12 +27,15 @@ Run it with `uv run warden` (listens on 127.0.0.1 only: this machine, not the ne
 """
 
 import copy
+import functools
 import json
 import logging
 import logging.config
 import math
+import os
 import re
 import secrets
+import socket
 import sqlite3
 import sys
 import threading
@@ -58,6 +61,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+from starlette.datastructures import Headers
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
@@ -101,6 +105,7 @@ logger = logging.getLogger(__name__)
 HOST = "127.0.0.1"
 MAX_BODY_BYTES = 64 * 1024  # 64 KB is far more than any real tool call needs
 REJECTIONS_PER_MINUTE = 60
+EVALUATE_PATH = "/v1/evaluate"
 # Rejected requests are recorded by a background worker, never on the server's main
 # loop: if the database is locked (e.g. someone has it open), a synchronous write would
 # freeze EVERY request for up to 5 seconds. Tests switch this off to read events at once.
@@ -112,13 +117,19 @@ def _deny_response(status_code: int, reason: str) -> JSONResponse:
     return JSONResponse(status_code=status_code, content=body)
 
 
+class _BodyTooLarge(Exception):
+    """More bytes arrived than allowed, whatever the headers said."""
+
+
 class BodySizeLimit:
     """Rejects oversized requests BEFORE their body is read.
 
     Requests with a body must declare their size up front (Content-Length).
-    Bodies with no declared size (chunked uploads) are refused, because their
-    size can't be checked before reading them. The server never reads more
-    bytes than Content-Length says.
+    Transfer-Encoding (chunked uploads) is always refused, also next to a
+    Content-Length: the server then ignores the declared size (RFC 9112 6.3).
+
+    The bytes that really arrive are counted too, and reading stops at the limit, so a
+    server that frames the body in some other way can't get around the headers check.
     """
 
     def __init__(
@@ -135,12 +146,28 @@ class BodySizeLimit:
         if scope["type"] == "http":
             headers = dict(scope["headers"])
             length = headers.get(b"content-length")
-            if length is None and b"transfer-encoding" in headers:
-                await self._reject(scope, receive, send, 411, "content-length required")
+            if b"transfer-encoding" in headers:
+                reason = "transfer-encoding not allowed (send content-length)"
+                await self._reject(scope, receive, send, 411, reason)
                 return
             if length is not None and (not length.isdigit() or int(length) > self.max_bytes):
                 await self._reject(scope, receive, send, 413, "request too large")
                 return
+            received = 0
+
+            async def counted() -> Message:
+                nonlocal received
+                message = await receive()
+                received += len(message.get("body", b""))
+                if received > self.max_bytes:
+                    raise _BodyTooLarge
+                return message
+
+            try:
+                await self.app(scope, counted, send)
+            except _BodyTooLarge:
+                await self._reject(scope, receive, send, 413, "request too large")
+            return
         await self.app(scope, receive, send)
 
     async def _reject(
@@ -164,10 +191,12 @@ class DuplicateKeyCheck:
     def __init__(
         self,
         app: ASGIApp,
-        on_reject: Callable[[Scope, int, str], None] = lambda scope, status, reason: None,
+        refuse: Callable[[Scope, str], JSONResponse] = lambda scope, reason: _deny_response(
+            422, reason
+        ),
     ) -> None:
         self.app = app
-        self.on_reject = on_reject
+        self.refuse = refuse
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http" or scope.get("method") not in {"POST", "PUT", "PATCH"}:
@@ -185,14 +214,12 @@ class DuplicateKeyCheck:
         # JSON in UTF-8 never holds a raw NUL byte (it must be escaped); UTF-16/32 does.
         if body.startswith(b"\xef\xbb\xbf") or b"\x00" in body:
             reason = "request body must be UTF-8 without a byte order mark"
-            self.on_reject(scope, 422, reason)
-            await _deny_response(422, reason)(scope, receive, send)
+            await self.refuse(scope, reason)(scope, receive, send)
             return
         try:
             json.loads(body, object_pairs_hook=no_duplicate_keys)
         except DuplicateKeyError:
-            self.on_reject(scope, 422, "duplicate key in request")
-            await _deny_response(422, "duplicate key in request")(scope, receive, send)
+            await self.refuse(scope, "duplicate key in request")(scope, receive, send)
             return
         except (ValueError, RecursionError):
             # Not valid JSON, or nested too deeply for Python's parser: request
@@ -286,23 +313,31 @@ class CrashGuard:
                 await _deny_response(500, "internal error")(scope, receive, send)
 
 
+# Line and paragraph separators, spaces other than " ", private use (a font decides what
+# it draws) and unassigned: they break a line or may show as a blank.
+_BLANK_CATEGORIES = frozenset({"Zl", "Zp", "Zs", "Co", "Cn"})
+# Letters, marks and symbols that are defined to draw nothing.
+_BLANK_CHARS = frozenset("\u2800\U00013441\U00013442\U00016fe4\U0001d159")
+
+
+@functools.lru_cache(maxsize=65536)  # mutation-ok: speed only
 def _is_deceptive_char(ch: str) -> bool:
     """Characters that make text DISPLAY differently from what it is: invisible or
-    control characters, direction overrides (U+202E reverses what follows), and
-    compatibility look-alikes such as the full-width "ｅ"."""
-    return is_invisible(ch) or unicodedata.normalize("NFKC", ch) != ch
+    control characters, direction overrides (U+202E reverses what follows), blanks that
+    aren't a plain space, and compatibility look-alikes such as the full-width "ｅ"."""
+    return (
+        is_invisible(ch)
+        or (ch != " " and unicodedata.category(ch) in _BLANK_CATEGORIES)
+        or ch in _BLANK_CHARS
+        or unicodedata.normalize("NFKC", ch) != ch
+    )
 
 
 # What an escape looks like, written out as plain text: shown raw, the text "\\u200b"
 # would look exactly like an escaped zero-width space. "\\U" only counts with 8 hex
-# digits (the shape of our own escapes), so "C:\\Users" stays readable.
+# digits (the shape of our own escapes), so "C:\\Users" stays readable. Without escaping
+# these too, two different keys could display the same and one would hide the other.
 _LOOKS_ESCAPED = re.compile(r"\\(?:u|U[0-9A-Fa-f]{8})")
-
-
-def _needs_escape(text: str, index: int) -> bool:
-    """Deceptive characters, and a real backslash that would read as an escape: otherwise
-    two different keys could display the same and one would hide the other."""
-    return _is_deceptive_char(text[index]) or _LOOKS_ESCAPED.match(text, index) is not None
 
 
 def _escape(ch: str) -> str:
@@ -317,11 +352,14 @@ def _display_safe(value: JsonValue, warnings: list[str]) -> JsonValue:
     so an approver can't be shown something other than the real action. One-to-one:
     two different texts never display the same."""
     if isinstance(value, str):
-        escape = [_needs_escape(value, i) for i in range(len(value))]
-        if not any(escape):
-            return value
-        warnings.append("contains hidden or look-alike characters (shown as \\uXXXX)")
-        return "".join(_escape(ch) if hit else ch for ch, hit in zip(value, escape, strict=True))
+        # A backslash that would read as an escape first, so what is added next stays.
+        safe = _LOOKS_ESCAPED.sub(lambda match: _escape("\\") + match[0][1:], value)
+        # Each distinct character is checked once: arguments can be 64 KB, times many.
+        escapes = {ord(ch): _escape(ch) for ch in set(value) if _is_deceptive_char(ch)}
+        safe = safe.translate(escapes)
+        if safe != value:
+            warnings.append("contains hidden or look-alike characters (shown as \\uXXXX)")
+        return safe
     if isinstance(value, list):
         return [_display_safe(item, warnings) for item in value]
     if isinstance(value, dict):
@@ -514,6 +552,28 @@ class _Warden:
     def reject(self, request: Request, status: int, reason: str) -> JSONResponse:
         self.record_rejection(request.scope, status, reason)
         return _deny_response(status, reason)
+
+    def charge(self, scope: Scope) -> float:
+        """Take a request refused before `evaluate` from its agent's budget. Only when a
+        token proves who it is: a self-declared agent_id could burn another agent's
+        budget. Returns the seconds to wait if the budget is used up, else 0."""
+        if self.agents is None or self.limiter is None or scope.get("path") != EVALUATE_PATH:
+            return 0.0
+        agent_id = self.agents.identify_header(Headers(scope=scope).get("authorization"))
+        return 0.0 if agent_id is None else self.limiter.acquire(agent_id)
+
+    def refuse_invalid(self, scope: Scope, reason: str) -> JSONResponse:
+        """422 for a request that can't be evaluated; 429 over the agent's budget."""
+        if wait := self.charge(scope):
+            return self.refuse_rate_limited(scope, wait)
+        self.record_rejection(scope, 422, reason)
+        return _deny_response(422, reason)
+
+    def refuse_rate_limited(self, scope: Scope, wait: float) -> JSONResponse:
+        self.record_rejection(scope, 429, "rate limit exceeded")
+        response = _deny_response(429, "rate limit exceeded")
+        response.headers["Retry-After"] = str(max(1, math.ceil(wait)))
+        return response
 
     def _record_event_safely(self, event: AuditEvent) -> None:
         """For events that don't change the answer (it's already deny / an error)."""
@@ -973,7 +1033,7 @@ def create_app(
     app.state.warden = w  # for tests and debugging
     # Middleware runs in reverse order of adding: HostCheck, then BodySizeLimit, then
     # DuplicateKeyCheck (which may read the body, so it must come after the size limit).
-    app.add_middleware(DuplicateKeyCheck, on_reject=w.record_rejection)
+    app.add_middleware(DuplicateKeyCheck, refuse=w.refuse_invalid)
     app.add_middleware(BodySizeLimit, on_reject=w.record_rejection)
     # Added after those, so it runs before them: refuse foreign Host headers first.
     app.add_middleware(HostCheck, allowed=ALLOWED_HOSTS, on_reject=w.record_rejection)
@@ -985,12 +1045,13 @@ def create_app(
     @app.exception_handler(RequestValidationError)
     async def invalid_request(request: Request, exc: RequestValidationError) -> JSONResponse:
         # FastAPI's default 422 echoes the input back, which may contain secrets.
-        return w.reject(request, 422, "invalid request")
+        return w.refuse_invalid(request.scope, "invalid request")
 
     @app.exception_handler(StarletteHTTPException)
     async def http_error(request: Request, exc: StarletteHTTPException) -> JSONResponse:
         # e.g. 404 unknown URL, 405 wrong method: answer with a deny body like every
         # other error, and record it (repeated 404s can mean someone is probing).
+        w.charge(request.scope)  # e.g. 400: JSON that Python's parser refuses
         reasons = {404: "not found", 405: "method not allowed"}
         return w.reject(request, exc.status_code, reasons.get(exc.status_code, "refused"))
 
@@ -1000,17 +1061,16 @@ def create_app(
 
     @app.exception_handler(_RateLimited)
     async def rate_limited(request: Request, exc: _RateLimited) -> JSONResponse:
-        response = w.reject(request, 429, "rate limit exceeded")
-        response.headers["Retry-After"] = str(max(1, math.ceil(exc.retry_after)))
-        return response
+        return w.refuse_rate_limited(request.scope, exc.retry_after)
 
     @app.exception_handler(_AgentTokenError)
     async def bad_agent_token(request: Request, exc: _AgentTokenError) -> JSONResponse:
+        w.charge(request.scope)  # a valid token with the wrong agent_id (403) counts too
         return w.reject(request, exc.status, exc.reason)
 
     admin = [Depends(w.require_admin)]
     app.get("/health")(w.health)
-    app.post("/v1/evaluate", response_model=EvaluationResult)(w.evaluate)
+    app.post(EVALUATE_PATH, response_model=EvaluationResult)(w.evaluate)
     app.get("/v1/approvals", dependencies=admin, response_model=None)(w.list_approvals)
     app.post("/v1/approvals/decide", dependencies=admin)(w.decide_group)
 
@@ -1033,8 +1093,19 @@ def create_app(
     return app
 
 
+def drop_query(record: logging.LogRecord) -> bool:
+    """Log filter: "GET /v1/approvals?x=y" becomes "GET /v1/approvals". Whatever a caller
+    puts in a query string (maybe a secret) must not stay in the log."""
+    # Uvicorn's access log: (client, method, path with query, HTTP version, status).
+    if isinstance(record.args, tuple) and len(record.args) == 5:
+        client, method, path, version, status = record.args
+        record.args = (client, method, str(path).partition("?")[0], version, status)
+    return True
+
+
 def log_config() -> dict[str, Any]:
-    """Uvicorn's logging setup, plus Warden's own loggers at INFO.
+    """Uvicorn's logging setup, plus Warden's own loggers at INFO, and no query strings
+    in the access log.
 
     Without this, Warden's log lines (decisions, policy errors) are not shown.
     They go through the same handler and format as Uvicorn's own lines.
@@ -1045,12 +1116,31 @@ def log_config() -> dict[str, Any]:
         "level": "INFO",
         "propagate": False,  # mutation-ok: True would only print lines twice
     }
+    config["filters"] = {"drop_query": {"()": lambda: drop_query}}
+    config["loggers"]["uvicorn.access"]["filters"] = ["drop_query"]
     return config
+
+
+def check_port(port: int) -> None:
+    """Raise StartupError if `port` is taken, before an admin key that would never work is
+    printed. Only a clearer error: the server still binds the port itself and stops if
+    another program takes it in between."""
+    with socket.socket() as probe:
+        if os.name == "posix":  # as the server does: a quick restart isn't "in use"
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            probe.bind((HOST, port))
+        except OSError as exc:
+            raise StartupError(
+                f"can't listen on {HOST}:{port} ({exc.strerror}): is Warden already "
+                "running? (--port picks another port)"
+            ) from None
 
 
 def main(settings: Settings | None = None) -> None:
     """Start the server on this machine only."""
     settings = settings or Settings()
+    check_port(settings.port)
     config = log_config()
     # Configure logging BEFORE building the app, so policy-file errors are shown.
     logging.config.dictConfig(config)

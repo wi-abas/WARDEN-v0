@@ -59,8 +59,11 @@ A rule can add `when` conditions. It then matches only if **all** of them hold:
 { "id": "big-invoice",   "tool": "send_invoice", "effect": "require_approval",
   "when": [ { "arg": "amount", "op": "gt",  "value": 500 } ] },
 { "id": "small-invoice", "tool": "send_invoice", "effect": "allow",
-  "when": [ { "arg": "amount", "op": "lte", "value": 500 } ] }
+  "when": [ { "arg": "amount", "op": "gte", "value": 0 },
+            { "arg": "amount", "op": "lte", "value": 500 } ] }
 ```
+
+The `gte 0` matters: without it, `-500` is "at most 500" and would be allowed.
 
 | `op` | Meaning | `value` |
 |---|---|---|
@@ -76,18 +79,23 @@ A rule can add `when` conditions. It then matches only if **all** of them hold:
   `require_approval` rule a missing argument counts as matching (the rule applies); on an
   `allow` rule it doesn't. So `deny send_email when recipient startswith "evil"` can't be
   dodged by leaving `recipient` out. Use `exists` / `missing` to say exactly what you mean.
-- An argument of the **wrong type** (e.g. `"50000"` as text for `gt`), or a value containing
-  `..` for `startswith`, **denies the whole request**. This stops a `deny` rule being dodged.
+- An argument of the **wrong type** (e.g. `"50000"` as text for `gt`), or a value with
+  `..` as a path part for `startswith` (`/data/../x`, `workspace/%2e%2e/x`; not `wait...`),
+  **denies the whole request**. This stops a `deny` rule being dodged.
 - `true` is never treated as the number `1`.
 - Add `"ignore_case": true` to compare text without caring about upper/lower case
   (works with `eq`, `neq`, `in`, `startswith`, `endswith`, `contains`). Use it for email domains:
   `{ "arg": "to", "op": "endswith", "value": "@mycompany.com", "ignore_case": true }`.
+  Where software disagrees about case and it would change the answer (`ß` and `ss`, `ς`
+  and `σ`, Turkish `İ`/`ı` and `i`), **the whole request is denied**: `eve@busineß.com`
+  is not at `@business.com`, and must not dodge a rule about it either.
 - **Blocking or allowing sites:** use `host_in`, not `startswith`. It compares the URL's
   real host, so `http://`, ports, upper case and trailing dots can't dodge it:
   `{ "arg": "url", "op": "host_in", "value": ["evil.net", ".evil.net"] }`. International host
   names must be written in punycode (`xn--strae-oqa.de`, not `straße.de`), both in the
   policy and in requests; the Unicode form is refused because different software
-  converts it differently.
+  converts it differently. A host with characters that can't be in a host name
+  (`evil.net;.example.com`) denies the request, also when a text rule compares a URL.
 - **`host_in` and URL schemes.** By default `host_in` only accepts `http://` and
   `https://` URLs (any case). Any other scheme (`ftp://`, `gopher://`, `file://`,
   `ws://`, ...) can't be checked by the condition, and **the whole request is denied**,
@@ -111,6 +119,9 @@ A rule can add `when` conditions. It then matches only if **all** of them hold:
 - Text a rule compares may not contain invisible characters or look-alike Unicode
   (full-width letters, look-alike dots), and paths may not contain `%`-escapes; such
   requests are denied.
+  In a URL's path (compared as text; `host_in` only looks at the host), ordinary escapes (`%20`, `caf%C3%A9`) are fine; hidden dot segments
+  (`..;/`, `..%20/`), control characters (`%00`), overlong UTF-8 (`%c0%ae`) and malformed
+  escapes (`%u002e`, a lone `%`) are denied.
 - An email address a rule compares must be one plain address: no display name, list or
   quotes, and a normal name before the `@` (not empty, no `%`, `!`, `:` or `\`, no
   leading, trailing or double dots). Those are routing tricks some mail software still
@@ -309,7 +320,8 @@ may only read, and nobody else may do either:
   "rules": [
     { "id": "billing-pays-small", "tool": "pay", "effect": "allow",
       "agents": ["billing-agent"],
-      "when": [{ "arg": "amount", "op": "lte", "value": 500 }] },
+      "when": [{ "arg": "amount", "op": "gte", "value": 0 },
+               { "arg": "amount", "op": "lte", "value": 500 }] },
     { "id": "research-reads", "tool": "read_file", "effect": "allow",
       "agents": ["research-agent", "billing-agent"],
       "when": [{ "arg": "path", "op": "startswith", "value": "/workspace/" }] }
@@ -394,7 +406,7 @@ do what you meant:
 | W002 | No rules at all: everything is denied |
 | W003 | A rule can never apply, because a stricter unconditional rule (or a stricter rule with `otherwise`) always wins |
 | W004 | A rule duplicates another |
-| W005 | A path prefix without a trailing `/` (`"/data"` also matches `"/database"`) |
+| W005 | A path prefix without a trailing `/` (`"/data"` also matches `"/database"`), absolute or relative |
 | W006 | A tool has an argument list but no rules: it's always denied |
 | W007 | A condition checks an argument that isn't in the tool's argument list (typo?) |
 | W008 | An email address is compared case-sensitively (`x@EVIL.com` would slip past) |
@@ -407,6 +419,8 @@ do what you meant:
 | W015 | Two agent names differ only in upper/lower case (`Billing` and `billing` are different agents) |
 | W016 | A rule with `otherwise` uses `neq` or `missing`: a double negative, easy to get backwards |
 | W017 | Two `host_in` conditions on the same argument of a tool accept different `schemes` |
+| W018 | A deny rule compares a host name case-sensitively (`EVIL.COM` slips past) |
+| W019 | An `allow` rule uses `endswith` with a bare domain (`"mycompany.com"` also matches `"evilmycompany.com"`) |
 
 `--agents FILE` checks the agent names that per-agent rules and `limits.agents` use.
 Without it, a policy with per-agent rules gets a note (not a warning) that

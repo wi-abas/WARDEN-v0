@@ -1,6 +1,6 @@
 [project]
 name = "agent-warden"
-version = "0.4.1"
+version = "0.4.2"
 description = "Deterministic, local-first policy layer for AI agent tool calls"
 readme = "README.md"
 license = "MIT"

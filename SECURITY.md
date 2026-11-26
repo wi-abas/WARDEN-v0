@@ -45,8 +45,9 @@ Assuming the agent runtime calls Warden and obeys the answer:
   escaped in the approval list; two argument names never display the same.
 - **Parser tricks**: request bodies that repeat a JSON key are refused, so Warden and the
   tool can't read different values.
-- **A writable policy**: `warden serve` refuses a policy file other users could change
-  (same for the agents file).
+- **A writable policy**: `warden serve` refuses a policy or agents file that its group or
+  other users can write, that another non-root user owns, or that is reached through a
+  folder or symlink they could replace. ACLs aren't checked, and only startup is.
 - **Agent impersonation** (with `--agents`): the agent id comes from a token; only hashes
   are stored; lookups are constant-time; one agent can't use another's approval.
 - **Flooding by one agent**: per-agent rate limits and pending-approval caps.
@@ -88,6 +89,13 @@ Assuming the agent runtime calls Warden and obeys the answer:
   self-declared and anything that can reach `127.0.0.1` can ask as any agent (and dodge
   per-agent rate limits with new ids). With tokens, a program that can read an agent's
   environment or memory has its token.
+- **An impostor on Warden's port.** Clients (SDK, MCP proxy, `warden approvals`, plain
+  HTTP) don't check that it is really Warden answering. If Warden isn't running, another
+  local program can listen on its port: it then **receives the agent token and the tool
+  arguments** (or the admin key), and its `allow` makes the **tool run**, also with
+  `--agents`. Only run agents while your Warden is running; if its port was taken, replace
+  the tokens and admin key. A fix is designed but not built:
+  [docs/design/server-identity.md](docs/design/server-identity.md).
 - **One agent using another agent's permissions.** Per-agent rules (`"agents": [...]`)
   give agents different permissions, and require agent tokens: `warden serve` refuses to
   start with a per-agent rule and no `--agents`, or with an agent name that isn't in the
@@ -102,7 +110,16 @@ Assuming the agent runtime calls Warden and obeys the answer:
 - **Whoever can edit the audit database.** The hash chain shows edits, but someone who
   rewrites every later hash too (or cuts off the newest rows) is only caught by comparing
   with checkpoints kept elsewhere (`warden audit head`, `warden audit verify --expect`). They can also change approval state
-  stored in the same file.
+  stored in the same file. A trigger can't make Warden allow without a record, but one
+  added and removed again leaves no trace.
+- **Text read differently by the tool.** Email rules don't decode MIME encoded-words
+  (`=?utf-8?q?...?=@x.com`) or refuse local parts starting with `-` or `|`. URL rules refuse
+  known disguised dot segments but don't decode URLs. `..` is refused for `startswith` and
+  for rule values containing `/`; other text comparisons don't interpret paths, so denying
+  exactly `.env` doesn't stop `./.env`.
+- **Floods without a valid token.** Invalid requests count toward a budget only with a valid
+  agent token; others, and 411/413 refusals, are not rate limited.
+- **URL paths in logs.** They are kept in the audit and access logs (query strings are not).
 - **Re-asking with a slightly different action.** A sticky rejection covers the exact
   action only: one changed character in the arguments (or, without agent tokens, a new
   `agent_id`) is a new approval. Rate limits and pending quotas bound how often.

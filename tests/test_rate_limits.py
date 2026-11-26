@@ -249,3 +249,64 @@ def test_pending_quota_through_the_api(tmp_path: Path) -> None:
     assert second["reason"] == "too many pending approvals for this agent"
     assert send("b", "y")["decision"] == "require_approval"
     assert send("never", "x")["reason"] == "too many pending approvals for this agent"
+
+
+# --- Invalid requests use the budget of the agent whose TOKEN they carry ----------------
+
+INVALID = [
+    pytest.param(b'{"tool": "read_file", "extra": 1}', 422, id="unknown field"),
+    pytest.param(b'{"n": ' + b"9" * 5000 + b"}", 400, id="huge integer"),
+    pytest.param(b"not json", 422, id="not json"),
+    pytest.param(b'{"tool": "a", "tool": "b"}', 422, id="duplicate key"),
+    pytest.param(b"\xef\xbb\xbf{}", 422, id="byte order mark"),
+    pytest.param(b'{"agent_id": "other", "tool": "read_file", "arguments": {}}', 403, id="403"),
+]
+
+
+@pytest.mark.parametrize(("content", "status"), INVALID)
+def test_invalid_requests_use_the_token_agents_budget(
+    tmp_path: Path, content: bytes, status: int
+) -> None:
+    noisy = add_agent(tmp_path / "agents.json", "noisy")
+    other = add_agent(tmp_path / "agents.json", "other")
+    client = make_client(
+        tmp_path,
+        {"default": {"requests_per_minute": 3}},
+        agents=load_agents(tmp_path / "agents.json"),
+    )
+    good = {"tool": "read_file", "arguments": {"path": "/a"}}
+
+    def send(token: str | None) -> int:
+        headers = {"content-type": "application/json"}
+        if token is not None:
+            headers["Authorization"] = f"Bearer {token}"
+        response = client.post("/v1/evaluate", content=content, headers=headers)
+        assert response.json()["decision"] == "deny"
+        return response.status_code
+
+    # No token, or a wrong one: refused, and nobody's budget is used.
+    for token in (None, "wrong"):
+        assert {send(token) for _ in range(10)} <= {400, 401, 422}
+    # Invalid requests elsewhere aren't /v1/evaluate requests.
+    elsewhere = client.post(
+        "/v1/approvals/decide", content=content, headers={"Authorization": f"Bearer {noisy}"}
+    )
+    assert elsewhere.status_code in {400, 401, 422}
+
+    assert [send(noisy) for _ in range(3)] == [status] * 3
+    after = client.post("/v1/evaluate", json=good, headers={"Authorization": f"Bearer {noisy}"})
+    assert after.status_code == 429
+    assert 1 <= int(after.headers["Retry-After"]) <= 20
+    # Over the budget an invalid request is a 429 too (400 and 403 stay: still a deny).
+    assert send(noisy) == (429 if status == 422 else status)
+    # The other agent's budget is untouched.
+    ok = client.post("/v1/evaluate", json=good, headers={"Authorization": f"Bearer {other}"})
+    assert ok.status_code == 200
+
+
+def test_without_tokens_invalid_requests_cant_burn_anyones_budget(tmp_path: Path) -> None:
+    client = make_client(tmp_path, {"default": {"requests_per_minute": 2}})
+    for _ in range(10):
+        bad = client.post("/v1/evaluate", json={**read("victim"), "extra": 1})
+        assert bad.status_code == 422
+    assert client.post("/v1/evaluate", json=read("victim")).status_code == 200

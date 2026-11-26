@@ -21,8 +21,10 @@ stdout is the MCP channel, so everything human-readable goes to stderr.
 """
 
 import asyncio
+import hashlib
 import json
 import logging
+import math
 import os
 import re
 import sys
@@ -35,7 +37,7 @@ from typing import Annotated, Any, BinaryIO, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError, field_validator
 
-from warden.client import DEFAULT_URL, Answer, WardenClient, check_url
+from warden.client import DEFAULT_URL, Answer, WardenClient, capped_pause, check_url
 from warden.models import AGENT_ID_PATTERN, Decision
 from warden.policy import DuplicateKeyError, describe_errors, no_duplicate_keys
 
@@ -44,6 +46,7 @@ logger = logging.getLogger(__name__)
 MAX_LINE_BYTES = 16 * 1024 * 1024  # one JSON-RPC message
 MAX_IN_FLIGHT = 64  # tool calls being checked (or waiting for approval) at once
 MAX_UNANSWERED = 10_000  # client requests without an answer whose ids are remembered
+RETIRED_BITS = 2**23  # memory for the ids of cancelled requests that made room (1 MiB)
 MAX_ID_TEXT = 256
 MAX_WAITING_LINES = 10_000  # client lines read but not handled yet ...
 MAX_WAITING_BYTES = 2 * MAX_LINE_BYTES  # ... and their size
@@ -95,6 +98,7 @@ PARSE_ERROR = -32700
 INVALID_REQUEST = -32600
 METHOD_NOT_FOUND = -32601
 INVALID_PARAMS = -32602
+INTERNAL_ERROR = -32603
 
 
 # Warden's own secrets. The proxy's environment holds them (the agent token for asking
@@ -196,11 +200,23 @@ class Checker(Protocol):
 class _Refused(Exception):
     """A client message that must not be forwarded."""
 
-    def __init__(self, code: int, message: str, *, duplicate_key: bool = False) -> None:
+    def __init__(self, code: int, message: str, *, recover_id: bool = False) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
-        self.duplicate_key = duplicate_key
+        self.recover_id = recover_id  # readable JSON: its id may still be found
+
+
+class _NumberTooLargeError(ValueError):
+    pass
+
+
+def _finite(text: str) -> float:
+    """1e999 is valid JSON, but Python reads it as infinity, which isn't."""
+    number = float(text)
+    if not math.isfinite(number):
+        raise _NumberTooLargeError
+    return number
 
 
 def _no_constants(name: str) -> Any:
@@ -214,11 +230,18 @@ def parse_message(line: bytes) -> Any:
     UTF-16/32, so the bytes are decoded first (a BOM is then refused as invalid JSON)."""
     try:
         message = json.loads(
-            line.decode("utf-8"), object_pairs_hook=no_duplicate_keys, parse_constant=_no_constants
+            line.decode("utf-8"),
+            object_pairs_hook=no_duplicate_keys,
+            parse_constant=_no_constants,
+            parse_float=_finite,
         )
     except DuplicateKeyError:
         raise _Refused(
-            INVALID_REQUEST, "repeated key in message (refused by Warden)", duplicate_key=True
+            INVALID_REQUEST, "repeated key in message (refused by Warden)", recover_id=True
+        ) from None
+    except _NumberTooLargeError:
+        raise _Refused(
+            INVALID_REQUEST, "number too large in message (refused by Warden)", recover_id=True
         ) from None
     except ValueError:
         raise _Refused(PARSE_ERROR, "invalid JSON") from None
@@ -233,10 +256,12 @@ def parse_message(line: bytes) -> Any:
     return message
 
 
-def recover_id(line: bytes) -> JsonValue:
-    """The id of a message refused for a repeated key, so the client's request gets its
-    error answer instead of hanging. Only when it is unambiguous: the top level has
-    exactly one "id", and it is a valid id. Otherwise None (an answer with id null)."""
+def recover_id(line: bytes, *, answers_only: bool = False) -> JsonValue:
+    """The id of a message refused for a repeated key or a too large number, so the
+    client's request gets its error answer instead of hanging. Only when it is
+    unambiguous: the top level has exactly one "id", and it is a valid id. Otherwise None
+    (an answer with id null).
+    `answers_only`: also None unless the message is shaped like an answer."""
     try:
         top = json.loads(
             line.decode("utf-8"),
@@ -248,6 +273,12 @@ def recover_id(line: bytes) -> JsonValue:
     # A top-level object comes back as a list of (key, value) TUPLES. JSON arrays are
     # lists, never tuples, so a batch or any other shape finds no "id" here.
     if not isinstance(top, list):
+        return None
+    keys = [pair[0] for pair in top if isinstance(pair, tuple)]
+    if answers_only and sorted(keys) not in (
+        ["id", "jsonrpc", "result"],
+        ["error", "id", "jsonrpc"],
+    ):
         return None
     ids = [pair[1] for pair in top if isinstance(pair, tuple) and pair[0] == "id"]
     if len(ids) != 1:
@@ -292,6 +323,28 @@ def rpc_error(request_id: JsonValue, code: int, message: str) -> dict[str, JsonV
     return {"jsonrpc": "2.0", "id": request_id, "error": {"code": code, "message": message}}
 
 
+class _RetiredIds:
+    """Ids that may never be used again, in a fixed amount of memory (a Bloom filter).
+
+    It never forgets an id. It may say "seen" for a new one (1% after about 870,000 ids,
+    more and more after that): such a request is refused, so it fails closed."""
+
+    def __init__(self) -> None:
+        self._bits = bytearray(RETIRED_BITS // 8)
+
+    @staticmethod
+    def _places(key: str) -> list[int]:
+        digest = hashlib.sha256(key.encode()).digest()
+        return [int.from_bytes(digest[i : i + 4]) % RETIRED_BITS for i in range(0, 28, 4)]
+
+    def add(self, key: str) -> None:
+        for place in self._places(key):
+            self._bits[place // 8] |= 1 << place % 8
+
+    def __contains__(self, key: str) -> bool:
+        return all(self._bits[place // 8] & 1 << place % 8 for place in self._places(key))
+
+
 class McpProxy:
     """Relays one client <-> server session. All I/O is injected, so tests can drive it."""
 
@@ -318,6 +371,10 @@ class McpProxy:
         # Requests the client has no answer to yet: _id_key -> the exact id. An id in here
         # can't be used again: two answers under one id could be mixed up.
         self._unanswered: dict[str, str] = {}
+        # Those of them the client cancelled (oldest first). The server may never answer
+        # these, so when space runs out the oldest is dropped and its id retired for good.
+        self._cancelled: dict[str, None] = {}
+        self._retired = _RetiredIds()
         self._backlog_warned = False
         self._client_gone = asyncio.Event()  # the client closed its input (or crashed)
         self._needed_approval: set[str] = set()  # ids of calls that needed a human
@@ -397,6 +454,7 @@ class McpProxy:
             message = parse_message(line)
         except _Refused as refused:
             logger.warning("dropped a message from the MCP server (%s)", refused.message)
+            self._answer_for_server(line, refused)
             return
         kind = _server_message_kind(message)
         if kind is None:
@@ -410,6 +468,7 @@ class McpProxy:
                 key = _id_key(message["id"])
                 if self._unanswered.get(key) == json.dumps(message["id"]):
                     del self._unanswered[key]
+                    self._cancelled.pop(key, None)
             self._reply(message)
         elif message["method"] == "ping":
             self._answer_server({"jsonrpc": "2.0", "id": message["id"], "result": {}})
@@ -421,6 +480,17 @@ class McpProxy:
             self._answer_server(
                 rpc_error(message["id"], METHOD_NOT_FOUND, "request refused by Warden proxy")
             )
+
+    def _answer_for_server(self, line: bytes, refused: _Refused) -> None:
+        """A dropped answer that clearly belongs to one of the client's requests gets an
+        error in its place, so the client doesn't wait for ever."""
+        request_id = recover_id(line, answers_only=True) if refused.recover_id else None
+        key = _id_key(request_id)
+        exact = self._unanswered.get(key) == json.dumps(request_id)
+        if request_id is not None and exact and key not in self._held:
+            del self._unanswered[key]
+            self._cancelled.pop(key, None)
+            self._reply(rpc_error(request_id, INTERNAL_ERROR, "server answer refused by Warden"))
 
     async def _relay_client(self) -> None:
         """Handle client lines in order. Reading them is a task of its own: handling may
@@ -474,8 +544,8 @@ class McpProxy:
             if not isinstance(message, dict):
                 raise _Refused(INVALID_REQUEST, "batches and non-object messages not supported")
         except _Refused as refused:
-            request_id = recover_id(line) if refused.duplicate_key else None
-            if _id_key(request_id) in self._unanswered:  # not an answer to that request
+            request_id = recover_id(line) if refused.recover_id else None
+            if self._id_in_use(request_id):  # not an answer to that request
                 request_id = None
             self._reply(rpc_error(request_id, refused.code, refused.message))
             return
@@ -506,7 +576,7 @@ class McpProxy:
             if not _usable_id(request_id):
                 self._reply(rpc_error(None, INVALID_REQUEST, "request id is too long or too large"))
                 return
-            if _id_key(request_id) in self._unanswered or _id_key(request_id) in self._calls:
+            if self._id_in_use(request_id):
                 self._reply(rpc_error(None, INVALID_REQUEST, "request id already in use"))
                 return
         if not set(message) <= REQUEST_KEYS:
@@ -523,7 +593,7 @@ class McpProxy:
                 # e.g. "tools/call" without an id: a server might still run it.
                 logger.warning("dropped notification %s (not allowed)", _safe_name(method))
             return
-        if len(self._unanswered) >= MAX_UNANSWERED:
+        if not self._make_room():
             self._reply(rpc_error(request_id, INVALID_REQUEST, "too many unanswered requests"))
         elif method == "tools/call":
             self._start_call(request_id, message)
@@ -560,14 +630,36 @@ class McpProxy:
 
         task.add_done_callback(done)
 
+    def _id_in_use(self, request_id: JsonValue) -> bool:
+        key = _id_key(request_id)
+        return key in self._unanswered or key in self._calls or key in self._retired
+
+    def _make_room(self) -> bool:
+        """Whether one more request may go unanswered. If it's full, the oldest cancelled
+        request makes room. Its id stays refused, so a late answer (which still passes:
+        the client ignores it) can't be taken for another request's."""
+        if len(self._unanswered) < MAX_UNANSWERED:
+            return True
+        if not self._cancelled:
+            return False
+        oldest = next(iter(self._cancelled))
+        del self._cancelled[oldest]
+        del self._unanswered[oldest]
+        self._retired.add(oldest)
+        return True
+
     def _cancel(self, params: object) -> None:
         """The client gave up on a request: stop waiting for its approval. Once the call
         is being written, it's too late (and _forward must stay to watch over it)."""
         if isinstance(params, dict) and _valid_id(params.get("requestId")):
-            key = _id_key(params.get("requestId"))
+            request_id = params.get("requestId")
+            key = _id_key(request_id)
             task = self._calls.get(key)
-            if task is not None and key in self._held:
-                task.cancel()
+            if key in self._held:
+                if task is not None:
+                    task.cancel()
+            elif self._unanswered.get(key) == json.dumps(request_id):
+                self._cancelled[key] = None
 
     async def _tool_call(self, request_id: JsonValue, message: dict[str, Any]) -> None:
         params = message.get("params")
@@ -654,6 +746,7 @@ class McpProxy:
                 "Retry the same call after approval.",
             )
         deadline = time.monotonic() + settings.timeout_seconds
+        timed_out = Answer(Decision.DENY, "timed out waiting for a human to approve")
         # Rate limited (429) while polling: back off and keep waiting, never allow.
         # Unreachable: Warden may be restarting. Keep asking until the deadline (never run).
         while (
@@ -661,17 +754,23 @@ class McpProxy:
             or answer.retry_after is not None
             or answer.unreachable
         ):
-            if time.monotonic() >= deadline:  # mutation-ok: equal floats never happen
-                return Answer(Decision.DENY, "timed out waiting for a human to approve")
+            left = deadline - time.monotonic()
+            if left <= 0:  # mutation-ok: equal floats never happen
+                return timed_out
             try:  # a sleep that ends early if the client leaves
                 pause = max(settings.poll_seconds, answer.retry_after or 0.0)
+                pause = capped_pause(pause, left, settings.timeout_seconds)
                 await asyncio.wait_for(self._client_gone.wait(), pause)
                 return gone
             except TimeoutError:
                 pass
+            if time.monotonic() >= deadline:  # asking now could only waste the approval
+                return timed_out
             answer = await self._ask(tool, arguments, approval_id)
             if self._client_gone.is_set():
                 return gone
+            if answer.allowed and time.monotonic() >= deadline:  # too late to run it
+                return timed_out
         return answer
 
     # --- Output -----------------------------------------------------------------------

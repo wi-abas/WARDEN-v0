@@ -40,7 +40,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from warden.audit import GENESIS_HASH, read_snapshot, verify_snapshot
+from warden.audit import GENESIS_HASH, read_error, read_snapshot, verify_snapshot
 from warden.policy import DuplicateKeyError, no_duplicate_keys
 
 CHECKPOINT_VERSION: Literal["warden-audit-checkpoint-v1"] = "warden-audit-checkpoint-v1"
@@ -202,7 +202,7 @@ def run_head(path: Path) -> int:
             return 2
         checkpoint = make_checkpoint(path)
     except (sqlite3.Error, OSError) as exc:
-        print(f"warden: can't read {path}: {type(exc).__name__}", file=sys.stderr)
+        print(f"warden: {read_error(path, exc)}", file=sys.stderr)
         return 2
     except CheckpointError as exc:
         print(f"warden: {exc}", file=sys.stderr)
@@ -220,7 +220,7 @@ def run_expect(path: Path, expect: Path) -> int:
         print(f"warden: {exc}", file=sys.stderr)
         return 2
     except sqlite3.Error as exc:
-        print(f"warden: can't read {path}: {type(exc).__name__}", file=sys.stderr)
+        print(f"warden: {read_error(path, exc)}", file=sys.stderr)
         return 2
     if result.problems:
         for problem in result.problems:

@@ -4,6 +4,7 @@ so the CLI's second, independent layer is tested on its own."""
 
 import argparse
 import io
+import socket
 import threading
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -187,3 +188,27 @@ def test_a_key_that_cant_be_sent_is_a_clear_error_without_the_key(bad: str) -> N
     code, err = run_real("http://127.0.0.1:9", bad)
     assert code == 2 and "WARDEN_ADMIN_KEY contains characters" in err
     assert bad not in err and "Evil" not in err
+
+
+@pytest.mark.parametrize("started", [False, True])
+def test_a_slow_answer_says_so_and_not_unreachable(
+    monkeypatch: pytest.MonkeyPatch, started: bool
+) -> None:
+    """No answer in time, before or after the first bytes of it."""
+    monkeypatch.setattr(approvals_cli, "TIMEOUT_SECONDS", 0.2)
+    with socket.create_server(("127.0.0.1", 0)) as server:
+        accepted: list[socket.socket] = []
+
+        def accept() -> None:
+            connection, _ = server.accept()
+            accepted.append(connection)
+            if started:
+                connection.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\n[")
+
+        thread = threading.Thread(target=accept)
+        thread.start()
+        code, err = run_real(f"http://127.0.0.1:{server.getsockname()[1]}")
+        thread.join()
+        accepted[0].close()
+    assert code == 2 and "can't reach" not in err
+    assert "didn't answer within 0.2 seconds" in err and "--agent" in err

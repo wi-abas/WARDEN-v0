@@ -142,6 +142,10 @@ If the client disconnects (closes the proxy's input) while a call waits for appr
 call is refused and never runs, even if you approve it later. The approval itself stays
 in Warden until it expires (or is used up, if it was just being used): the same agent asking for the same action again could use it.
 
+The wait never runs past `timeout_seconds`: a long `Retry-After` is cut short, the last
+question is asked just before the end, and an approval that only arrives after it doesn't
+run the call (if it was on its way to the proxy, it is used up).
+
 If Warden restarts during a wait, the proxy keeps asking until the approval timeout.
 
 ## What the proxy refuses
@@ -150,7 +154,8 @@ If Warden restarts during a wait, the proxy keeps asking until the approval time
   (`initialize`, `ping`, `tools/list`, `resources/list`, `resources/templates/list`,
   `prompts/list`, `logging/setLevel`, and `notifications/*`), unless listed in
   `allow_methods`. `tools/call` itself can't be listed, nor the same name in other case.
-- Messages that repeat a JSON key, JSON-RPC batches, `NaN`/`Infinity`, invalid JSON.
+- Messages that repeat a JSON key, JSON-RPC batches, `NaN`/`Infinity`, numbers too large
+  for a 64-bit float (`1e999`), invalid JSON.
   These could make the proxy and the server read different things.
 - Requests and notifications with any top-level key other than `jsonrpc`, `id`, `method`
   and `params` (exact spelling), and responses that aren't exactly `jsonrpc`, `id` and one
@@ -160,7 +165,10 @@ If Warden restarts during a wait, the proxy keeps asking until the approval time
   hasn't answered it yet (also after a cancel, since the server may still answer). `1` and
   `"1"` count as the same id. The error has id `null`, so it can't be taken for the first
   request's answer. Ids over 256 characters or beyond ±(2^53 − 1), and requests past
-  10,000 unanswered ones, are refused too.
+  10,000 unanswered ones, are refused too. When those 10,000 are reached, the oldest
+  *cancelled* request makes room (servers usually don't answer one). Its id can't be used
+  again in that session. These ids are remembered in a fixed 1 MiB: after very many
+  (1% after about 870,000) a new id can be refused as "already in use" by mistake.
 - A `tools/call` sent as a notification (no `id`): dropped.
 - A `tools/call` whose `_meta` holds anything but keys from `allow_meta_keys` (default
   only `progressToken`), each with short printable text (1-256 characters) or a whole
@@ -186,9 +194,10 @@ The proxy also removes the `sampling`, `elicitation` and `roots` capabilities fr
 client's `initialize` unless the matching request is allowed, so servers know not to ask.
 
 Responses and `notifications/*` from the server pass. Anything else from the server
-(invalid JSON, repeated keys, batches, a message that is both a request and a response,
+(invalid JSON, repeated keys, too large numbers, batches, a message that is both a request and a response,
 a "request" without an id, a response to a call Warden is still holding) is dropped and
-logged by type only.
+logged by type only. If a dropped answer with a repeated key or a too large number
+clearly belongs to one request, the client gets an error for that request instead.
 
 ## Limits
 

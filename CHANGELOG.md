@@ -1,5 +1,39 @@
 # Changelog
 
+## v0.4.2 (2026-11-26, alpha)
+
+### Security
+- Requests with `Transfer-Encoding` are refused (411), also with `Content-Length`, and body
+  bytes are counted as they arrive. Together the two headers bypassed the 64 KB limit.
+- With `ignore_case`, text whose upper/lower case is ambiguous (ß/ss, ς/σ, İ/ı/i) denies:
+  `eve@busineß.com` no longer matches `@business.com`.
+- `startswith` denies `..` segments for prefixes without a slash too.
+- URLs whose host has illegal characters (`evil.net;.good.com`) deny. URL text rules deny
+  disguised dot segments (`..;`, `%c0%ae`, `%u002e`) and malformed escapes.
+- `warden serve` refuses a policy or agents file if it, or any folder or symlink on its
+  path, is owned by anyone but root or Warden's user, or if a folder on the path is
+  group-writable without the sticky bit. A 0775 home folder needs `chmod go-w ~`.
+- An audit row SQLite silently dropped or changed (trigger, view, ON CONFLICT IGNORE) counts
+  as a failed write: 503 deny. Triggers, views and virtual tables in the audit database are
+  refused at startup and on every write, and reported by `audit verify`.
+- Approval waits never outlast their timeout; a late allow doesn't run the tool.
+- Invalid `/v1/evaluate` requests with a valid agent token use that agent's request budget.
+- The approval list escapes line separators, blank-looking, private-use and unassigned
+  characters, with a warning. The access log omits query strings.
+
+### Changed
+- `warden proxy`: cancelled, unanswered requests no longer block it (their ids stay refused);
+  numbers too large for a float (`1e999`) are refused instead of becoming `Infinity`.
+- SDK: dicts with non-text keys are refused; refusals name the argument and explain methods.
+- `warden check`: new W018 and W019; W005 covers relative paths.
+- `warden approvals list` is much faster with many large approvals, and a timeout is no
+  longer reported as "can't reach Warden".
+- `warden serve` on a busy port stops before printing an admin key; `warden init` next steps
+  work without uv; `audit verify` and `head` explain a leftover SQLite journal.
+- Docs: not on PyPI yet, tagged installs; amount examples have a lower bound.
+- `warden init` makes its folders 755 whatever the umask, so `serve` accepts them.
+- `ignore_case` checks of a long argument against a long list are about ten times faster.
+
 ## v0.4.1 (2026-11-25, alpha)
 
 ### Security

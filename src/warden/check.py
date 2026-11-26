@@ -9,7 +9,8 @@ Warnings: the policy loads, but probably doesn't do what you meant:
 - W003  dead rule: an unconditional, stricter rule for the same tool always wins (a
         rule with "otherwise" also always applies, giving at least its "effect").
 - W004  duplicate rule: same tool, effect and conditions as another rule.
-- W005  path prefix without a trailing "/": "/data" also matches "/database".
+- W005  path prefix without a trailing "/": "/data" also matches "/database"
+        (and "workspace" for an argument called "path" matches "workspace-old").
 - W006  tool has an argument list but no rules: it's always denied.
 - W007  a condition checks an argument that isn't in the tool's argument list
         (probably a typo): it can never be present.
@@ -36,6 +37,10 @@ Warnings: the policy loads, but probably doesn't do what you meant:
         the whole request, even if the other rule would allow it.
 - W008  an email-domain check ("...@example.com") is case-sensitive, so
         "x@EXAMPLE.com" slips past it. Add "ignore_case": true.
+- W018  a deny / require_approval rule compares a host name case-sensitively, so
+        "EVIL.COM" slips past it. Add "ignore_case": true.
+- W019  an "allow" rule uses endswith with a bare domain: "mycompany.com" also
+        matches "evilmycompany.com". Start it with "@" or ".".
 
 W003 and W004 take a rule's "agents" into account: a rule for every agent can make a
 per-agent rule dead, but a per-agent deny never kills a rule for every agent.
@@ -44,6 +49,7 @@ Only reads the file. Never starts the server or changes anything.
 """
 
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -81,6 +87,35 @@ def _covers(other: Rule, rule: Rule) -> bool:
     if other.agents is None:
         return True
     return rule.agents is not None and set(rule.agents) <= set(other.agents)
+
+
+_PATH_ARGUMENT = re.compile(r"(^|_)(path|dir|directory|folder)$", re.IGNORECASE)
+
+
+def _is_path_prefix(arg: str, value: str) -> bool:
+    """A path by its "/" or by the argument's name; not a URL, email or command."""
+    if value.startswith("/"):
+        return True
+    if "://" in value or "@" in value or " " in value:
+        return False
+    return "/" in value or bool(_PATH_ARGUMENT.search(arg))
+
+
+_FILE_ARGUMENT = re.compile(r"(^|_)(file|files|filename|name)$", re.IGNORECASE)
+# A name with a dot that ends like a top-level domain, and not like a common file.
+_HOST_NAME = re.compile(r"\.?([a-z0-9-]+\.)+(?P<end>[a-z]{2,})", re.IGNORECASE)
+_FILE_ENDINGS = frozenset(
+    "bak cfg conf css csv db doc docx env exe gif gz htm html ini jpeg jpg js json key lock "
+    "log md pdf pem php png ppt pptx py rs sh sql svg toml ts txt xls xlsx xml yaml yml zip".split()
+)
+
+
+def _is_host_name(arg: str, value: object) -> bool:
+    """Looks like "evil.com" or ".evil.com", and isn't a file."""
+    if not isinstance(value, str) or _PATH_ARGUMENT.search(arg) or _FILE_ARGUMENT.search(arg):
+        return False
+    match = _HOST_NAME.fullmatch(value)
+    return match is not None and match["end"].lower() not in _FILE_ENDINGS
 
 
 def _agents_key(rule: Rule) -> frozenset[str] | None:
@@ -160,7 +195,7 @@ def _warnings(policy: Policy) -> list[str]:
             if (
                 c.op is Op.STARTSWITH
                 and isinstance(c.value, str)
-                and c.value.startswith("/")
+                and _is_path_prefix(c.path[-1], c.value)
                 and not c.value.endswith("/")
             ):
                 out.append(
@@ -204,6 +239,29 @@ def _warnings(policy: Policy) -> list[str]:
                     f'"/ETC/..." is the same file as "/etc/..." on macOS and Windows, and '
                     f'"HTTPS://EVIL.NET/" the same site as "https://evil.net/". '
                     f'Add "ignore_case": true.'
+                )
+            if (
+                looser_exists
+                and c.op in {Op.EQ, Op.IN, Op.ENDSWITH, Op.CONTAINS}
+                and not c.ignore_case
+                and any(_is_host_name(c.path[-1], t) for t in texts)
+            ):
+                out.append(
+                    f'W018: rule "{rule.id}" compares a host name case-sensitively; '
+                    f'"EVIL.COM" is the same host as "evil.com". Add "ignore_case": true '
+                    f"(or use host_in if the argument is a URL)."
+                )
+            if (
+                rule.effect is Decision.ALLOW
+                and c.op is Op.ENDSWITH
+                and isinstance(c.value, str)
+                and not c.value.startswith(".")
+                and _is_host_name(c.path[-1], c.value)
+            ):
+                out.append(
+                    f'W019: rule "{rule.id}" allows endswith "{c.value}" without a boundary, '
+                    f'so it also matches "evil{c.value}". Use "@{c.value}" (email) or '
+                    f'".{c.value}" (subdomains).'
                 )
             if (
                 rule.effect is not Decision.ALLOW

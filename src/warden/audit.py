@@ -18,6 +18,9 @@ the anchors table AND in the chained audit_purged event. A plain hash chain can'
 stop someone who rewrites every later hash too: compare the head hash that
 `verify` prints with a copy kept elsewhere. See docs/design/audit-chain.md.
 
+A write counts only if it landed: each new row is read back before the transaction
+commits, and triggers, views and virtual tables (Warden creates none) are refused.
+
 Storage is kept behind the small `AuditLog` interface, so the SQLite file used
 here can later be swapped (e.g. for Postgres or a hosted service) without
 touching the engine or the API.
@@ -226,6 +229,40 @@ def row_hash(table: str, row_id: int, prev_hash: str, values: tuple[object, ...]
     return hashlib.sha256(f"{_CHAIN_VERSION}\n{payload}".encode()).hexdigest()
 
 
+class AuditTamperError(sqlite3.DatabaseError):
+    """The database did not do what Warden asked, or holds objects that could make it so.
+    A failed write like any other: the answer becomes a deny."""
+
+
+_MAX_SCHEMA_PROBLEMS = 10  # enough to see what is wrong; the rest would only flood the output
+
+
+def _schema_problems(conn: sqlite3.Connection) -> list[str]:
+    """Triggers, views and virtual tables in the database. Warden creates none, and one
+    can drop or change rows as they are written (BEFORE INSERT ... RAISE(IGNORE)).
+
+    Anything but a plain table or index counts, whatever it claims to be: SQLite itself
+    writes these first words of `sql` (NULL for its own automatic indexes)."""
+    rows = conn.execute(
+        "SELECT type, name FROM sqlite_master WHERE type NOT IN ('table', 'index') "
+        "OR NOT (sql IS NULL OR sql LIKE 'CREATE TABLE %' OR sql LIKE 'CREATE INDEX %' "
+        "OR sql LIKE 'CREATE UNIQUE INDEX %') LIMIT ?",
+        (_MAX_SCHEMA_PROBLEMS,),
+    ).fetchall()
+    # ascii(): whoever edited the database chose these texts (no terminal escapes).
+    return [
+        f"unexpected {ascii(kind).strip(chr(39))[:20]} {ascii(name)[:80]} in the database "
+        "(it can drop or change records; Warden never creates one)"
+        for kind, name in rows
+    ]
+
+
+def _refuse_unexpected_schema(conn: sqlite3.Connection) -> None:
+    problems = _schema_problems(conn)
+    if problems:
+        raise AuditTamperError(problems[0])
+
+
 def _chain_head(conn: sqlite3.Connection, table: str) -> str:
     """The hash the next row must point back to."""
     row = conn.execute(
@@ -245,16 +282,24 @@ def _append(conn: sqlite3.Connection, table: str, values: tuple[object, ...]) ->
     columns = _TABLE_COLUMNS[table]
     prev = _chain_head(conn, table)
     placeholders = ", ".join("?" * (len(values) + 1))
-    cursor = conn.execute(
+    changes_before = conn.total_changes  # also counts rows changed by triggers
+    row_id = conn.execute(
         f"INSERT INTO {table} ({columns}, prev_hash) VALUES ({placeholders})",  # noqa: S608
         (*values, prev),
-    )
-    row_id = cursor.lastrowid
-    assert row_id is not None  # noqa: S101 (sqlite always sets it after an INSERT)
+    ).lastrowid
+    new_hash = row_hash(table, row_id or 0, prev, values)
     conn.execute(
         f"UPDATE {table} SET row_hash = ? WHERE id = ?",  # noqa: S608 (constant table)
-        (row_hash(table, row_id, prev, values), row_id),
+        (new_hash, row_id),
     )
+    # SQLite can report success without storing the row (a trigger, ON CONFLICT IGNORE).
+    # Raising here rolls everything back.
+    newest = conn.execute(
+        f"SELECT id, {columns}, prev_hash, row_hash FROM {table} "  # noqa: S608
+        "ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    if conn.total_changes - changes_before != 2 or newest != (row_id, *values, prev, new_hash):
+        raise AuditTamperError(f"a new row in {table} did not land as written")
 
 
 def _make_private(path: Path) -> None:
@@ -309,6 +354,7 @@ class SQLiteAuditLog:
         _make_private(path)
         unchained: dict[str, int] = {}  # tables that get the hash columns now: last old id
         with closing(self._connect()) as conn, conn:
+            _refuse_unexpected_schema(conn)
             conn.executescript(_SCHEMA)
             for table, added in _ADDED_COLUMNS.items():
                 existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
@@ -343,9 +389,17 @@ class SQLiteAuditLog:
         return sqlite3.connect(self.path, timeout=5)  # mutation-ok: timeout
 
     def _write(self) -> sqlite3.Connection:
-        """A connection holding the write lock (released by commit / rollback)."""
+        """A connection holding the write lock (released by commit / rollback).
+
+        The schema is checked under that lock on every write (and purge), so a trigger
+        added while the server runs never gets to see one."""
         conn = self._connect()
-        conn.execute("BEGIN IMMEDIATE")
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            _refuse_unexpected_schema(conn)
+        except BaseException:
+            conn.close()
+            raise
         return conn
 
     def _maybe_purge(self, background: bool = True) -> None:
@@ -576,10 +630,35 @@ def read_snapshot(path: Path) -> Iterator[sqlite3.Connection]:
         yield conn
 
 
+def read_error(path: Path, exc: Exception) -> str:
+    """Why the log can't be read, for people. Never the exception's own text."""
+    message = f"can't read {path}: {type(exc).__name__}"
+    if getattr(exc, "sqlite_errorcode", None) != sqlite3.SQLITE_READONLY_ROLLBACK:
+        return message
+    # A writer died in the middle of a write. Undoing it changes the file, so a read-only
+    # tool must not: these files may be evidence.
+    real = path.resolve()  # SQLite keeps the journal next to the real file
+    return (
+        f"{message}\nA write was interrupted (crash, kill or power loss) and left {real}-journal."
+        "\nNothing was verified and nothing was changed. SQLite must first undo that write:"
+        "\n- To keep these files as evidence: copy both files into a new folder, run"
+        "\n  sqlite3 COPY .schema"
+        "\n  (which undoes the write in the copy), then"
+        "\n  warden audit verify --audit-db COPY"
+        "\n- Otherwise: starting Warden on this database undoes it. Never delete the journal: "
+        "that corrupts the log."
+    )
+
+
 def verify_chain(path: Path) -> ChainReport:
     """Recompute every hash. Reports the FIRST broken row of each table. Read-only."""
     with read_snapshot(path) as conn:
         return verify_snapshot(conn)
+
+
+_OWN_TABLE_TYPES = (
+    "SELECT type FROM sqlite_master WHERE lower(name) IN ('decisions', 'events', 'audit_anchors')"
+)
 
 
 def verify_snapshot(conn: sqlite3.Connection) -> ChainReport:
@@ -587,7 +666,10 @@ def verify_snapshot(conn: sqlite3.Connection) -> ChainReport:
     checked: dict[str, int] = {}
     unchained: dict[str, int] = {}
     heads: dict[str, str] = {}
-    problems: list[str] = []
+    problems = _schema_problems(conn)
+    if problems and any(kind != "table" for (kind,) in conn.execute(_OWN_TABLE_TYPES)):
+        # Reading a view runs whatever query it holds (even an endless one): stop here.
+        return ChainReport(checked={}, unchained={}, heads={}, problems=problems)
     anchors, anchors_ok = _read_anchors(conn)
     if not anchors_ok:
         problems.append("audit_anchors: contains values Warden never writes (edited?)")

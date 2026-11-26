@@ -31,7 +31,9 @@ send_invoice(to="acme", amount=200)  # runs only if Warden says allow
 - **Approvals**: on `require_approval` the SDK immediately re-asks with the `approval_id`
   (a human may already have approved this exact action). Then it either raises
   `ApprovalPending` (default) or polls until allow / deny / timeout
-  (`wait_for_approval=seconds`). While polling, "Warden unreachable" (a restart) means
+  (`wait_for_approval=seconds`). Pauses (also a long `Retry-After`) are cut short so that
+  one last question is asked just before the timeout. After the timeout nothing is asked,
+  and an allow that arrives late doesn't run the tool (its approval is used up). While polling, "Warden unreachable" (a restart) means
   ask again until that timeout, never run. Any answer that did arrive but isn't
   understood still ends the wait with a deny.
 - `async def` tools are supported; each HTTP call runs in a thread. The wait between
@@ -51,7 +53,10 @@ threads), Warden outages, approval mix-ups (the approval is bound to the frozen 
 - What the tool does with its arguments (e.g. a path that is a symlink).
 - Positional-only and `*args` parameters: refused at decoration time (they can't be
   named for the policy).
-- Tools receive JSON-shaped copies: tuples arrive as lists, dict keys as strings.
+- Tools receive JSON-shaped copies: tuples arrive as lists. Dicts with keys that aren't
+  text are refused (JSON would turn 1 into "1", and could drop one of the two).
+- A method's `self`: `@guard` inside a class refuses it (it isn't JSON). Guarding a bound
+  method works, but then Warden doesn't see the object's state.
 - Cancelling an async call exactly while a question is on its way to Warden: the answer
   may use up the approval although the tool doesn't run. Giving it back isn't safe (the
   client can't know what happened), so a human must approve again. It never runs twice.

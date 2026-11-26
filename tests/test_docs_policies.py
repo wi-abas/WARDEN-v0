@@ -5,6 +5,7 @@ import re
 from pathlib import Path
 
 import pytest
+from pydantic import JsonValue
 
 from warden.cli import main
 from warden.engine import evaluate
@@ -12,6 +13,7 @@ from warden.models import ActionRequest, Decision
 from warden.policy import parse_policy
 
 DOC = Path(__file__).parent.parent / "docs" / "policies.md"
+DEMO = Path(__file__).parent.parent / "examples" / "demo-policy.json"
 
 
 def sample(tmp_path: Path) -> tuple[Path, Path]:
@@ -33,6 +35,22 @@ def test_sample_policy_passes_the_strict_check(tmp_path: Path) -> None:
 def test_sample_tests_pass(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _, tests = sample(tmp_path)
     assert main(["test", str(tests)]) == 0, capsys.readouterr().out
+
+
+@pytest.mark.parametrize("file", [DOC, *sorted(DOC.parent.glob("design/*.md")), DEMO])
+def test_no_example_allows_negative_amounts(file: Path) -> None:
+    """Every example allow rule with an upper limit on a number also has a lower one."""
+    for rule in file.read_text(encoding="utf-8").split('"id":')[1:]:
+        if re.search(r'"effect": "allow"', rule) and re.search(r'"op": "lte?"', rule):
+            assert re.search(r'"op": "gte?"', rule), rule
+
+
+@pytest.mark.parametrize("amount", [-1, -100000, -0.01])
+def test_the_demo_policy_denies_negative_invoices(amount: float) -> None:
+    policy = parse_policy(DEMO.read_text(encoding="utf-8"))
+    arguments: dict[str, JsonValue] = {"to": "acme", "amount": amount}
+    request = ActionRequest(agent_id="a", tool="send_invoice", arguments=arguments)
+    assert evaluate(request, policy.rules, policy.tools).decision is Decision.DENY
 
 
 @pytest.mark.parametrize(

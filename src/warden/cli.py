@@ -44,7 +44,7 @@ from warden.agents import (
     read_agents_file,
     remove_agent,
 )
-from warden.audit import DEFAULT_AUDIT_PATH, verify_chain
+from warden.audit import DEFAULT_AUDIT_PATH, read_error, verify_chain
 from warden.check import check_policy, format_report
 from warden.policy import DEFAULT_POLICY_PATH, Policy, describe_errors
 from warden.settings import SettingsError, resolve
@@ -227,7 +227,7 @@ def verify_audit(path: Path, expect: Path | None = None) -> int:
             return 2
         report = verify_chain(path)
     except (sqlite3.Error, OSError) as exc:
-        print(f"warden: can't read {path}: {type(exc).__name__}", file=sys.stderr)
+        print(f"warden: {read_error(path, exc)}", file=sys.stderr)
         return 2
     for table in report.checked:
         line = f"{table}: {report.checked[table]} rows verified"
@@ -330,13 +330,19 @@ def init_policy(path: Path) -> int:
     if path.exists():
         print(f"warden: {path} already exists, not overwriting it", file=sys.stderr)
         return 1
+    # Folders made here are 755 whatever the umask: with umask 002 they'd be group-writable,
+    # and serve refuses a policy reached through such a folder.
+    missing = [p for p in (path.parent, *path.parent.parents) if not p.exists()]
     path.parent.mkdir(parents=True, exist_ok=True)
+    for folder in missing:
+        folder.chmod(0o755)
     path.write_text(starter_policy(), encoding="utf-8")
     path.chmod(0o644)  # others may read, only you may change it (serve refuses otherwise)
     print(f"Created {path}. Next:")
     print("  1. Edit it to describe your agent's tools and rules")
-    print(f"  2. uv run warden check {path}")
-    print("  3. uv run warden")
+    print(f"  2. warden check {path}")
+    print("  3. warden serve" + ("" if path == DEFAULT_POLICY_PATH else f" --policy {path}"))
+    print("(in a uv project, put `uv run` in front)")
     return 0
 
 

@@ -21,7 +21,7 @@ curl -s -X POST http://127.0.0.1:8000/v1/evaluate \
 | Endpoint | Purpose |
 |---|---|
 | `GET /health` | `{"status": "ok", "rules_loaded": 4}`, or HTTP 503 `"degraded"` when no rules loaded (broken or empty policy file: everything is denied). |
-| `POST /v1/evaluate` | Send an action, get a decision. With agent tokens, needs `Authorization: Bearer <token>` (401/403 otherwise). Over the agent's rate limit: 429 with `Retry-After`. |
+| `POST /v1/evaluate` | Send an action, get a decision. With agent tokens, needs `Authorization: Bearer <token>` (401/403 otherwise). Over the agent's rate limit: 429 with `Retry-After`; with a valid token, invalid requests (422) count too. |
 | `GET /v1/approvals` | Admin: pending, unexpired approvals, with their arguments and age, as a JSON list. |
 | `POST /v1/approvals/{id}/approve` | Admin: approve one (once). Body `{"action_hash": ...}` required. |
 | `POST /v1/approvals/{id}/deny` | Admin: deny one (once). Body `{"action_hash": ...}` required for a pending approval; revoking an approved one needs no body. |
@@ -31,6 +31,10 @@ curl -s -X POST http://127.0.0.1:8000/v1/evaluate \
 | `POST /v1/approvals/decide` | Admin: approve or reject several by id, all or nothing. |
 | `GET /v1/approvals?status=rejected` | Admin: rejections that still stand (no arguments). Takes the same `ids`/`agent_id`/`tool` filters; not `group`. |
 | `POST /v1/approvals/{id}/lift` | Admin: lift a rejection, so the agent may ask for that action again. |
+
+A request body may be at most 64 KB and must declare its size with `Content-Length`
+(413 if it is larger). `Transfer-Encoding` (chunked bodies) is refused with 411, also when
+`Content-Length` is sent as well, and the bytes that arrive are counted too.
 
 ## Approvals
 
@@ -78,7 +82,8 @@ stricter, so it stays quick; a sent `action_hash` is still checked. After a rest
 hash is still known (it is stored), so a restarted approval can still be rejected.
 
 In `GET /v1/approvals`, hidden or look-alike characters in arguments (zero-width spaces,
-right-to-left overrides, full-width letters, and everything else Unicode may draw as
+right-to-left overrides, full-width letters, line separators, blanks other than a
+plain space, private-use and unassigned characters, and everything else Unicode may draw as
 nothing, such as variation selectors like the one in some emoji) are shown as visible
 `\uXXXX` escapes (`\UXXXXXXXX` above U+FFFF) and
 the item gets a `warnings` entry, so an agent can't make you approve something that
@@ -243,11 +248,15 @@ Every decision is saved to `warden-audit.db` (SQLite, in the folder you start Wa
 time, agent, tool, decision, reason, matched rule and `action_hash`.
 **Tool arguments are never stored.** If the log can't be written, Warden answers
 `deny` (HTTP 503), so nothing is allowed without a record.
+A row that SQLite says it stored but didn't (e.g. because of a trigger) counts as not
+written. Warden refuses a database with triggers, views or virtual tables: don't add any
+(extra indexes and ordinary tables are fine).
 
 A second table, `events`, records everything else: a human approving or denying (if that
 record can't be written, the approval doesn't happen), failed approve/deny attempts, and
 rejected requests (wrong admin key, bad input, oversized body, errors), with method and URL
-path but never the body or query string. Failed approval retries keep the `approval_id`
+path but never the body or query string (the server's access log leaves query strings out
+too). Failed approval retries keep the `approval_id`
 that was tried, so misuse is visible.
 
 **Retention:** entries older than 90 days are deleted at startup and then once a day.
@@ -291,6 +300,7 @@ Warden** if they shouldn't be able to approve their own actions.
 
 An invalid setting, or a policy file that is invalid or has no rules, stops Warden with a
 clear message instead of starting a server that would deny everything. The host is always `127.0.0.1`.
+A port that is already in use also stops it (exit code 2), before an admin key is printed.
 
 ### How clients find Warden
 

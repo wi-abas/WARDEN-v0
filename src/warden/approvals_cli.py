@@ -87,6 +87,12 @@ def _call(url: str, key: str, method: str, path: str, body: Any = None) -> tuple
     except ValueError:  # http.client refuses the header; its message would show the key
         raise _Unreachable("WARDEN_ADMIN_KEY contains characters that can't be sent") from None
     except (OSError, http.client.HTTPException) as exc:  # OSError includes URLError
+        if isinstance(exc, TimeoutError) or isinstance(getattr(exc, "reason", None), TimeoutError):
+            raise _Unreachable(
+                f"Warden at {url} didn't answer within {TIMEOUT_SECONDS} seconds. It may be "
+                "busy: list less at once with --agent, --tool or --max-age. A decision just "
+                "sent may still take effect: list again to see"
+            ) from None
         raise _Unreachable(f"can't reach Warden at {url} ({type(exc).__name__})") from None
     if len(raw) > MAX_RESPONSE_BYTES:
         raise _Unreachable(

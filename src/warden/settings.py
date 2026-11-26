@@ -20,6 +20,7 @@ exposure until real authentication exists).
 """
 
 import os
+import shlex
 import stat
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -31,6 +32,7 @@ from warden.policy import DEFAULT_POLICY_PATH, replaceable_by_others
 
 DEFAULT_PORT = 8000
 MIN_ADMIN_KEY_LENGTH = 32
+_POSIX = os.name == "posix"  # Windows has no such permission bits
 
 
 class SettingsError(ValueError):
@@ -58,19 +60,17 @@ def unsafe_permissions(path: Path) -> str | None:
     """Why other users could change `path`, or None if they can't (POSIX only).
 
     The policy decides every answer, so whoever can rewrite it controls Warden: like SSH
-    with key files, refuse a policy that other users can write, or that sits in a folder
-    where they could replace it (world-writable without the sticky bit, e.g. not /tmp),
-    or is reached through such a folder or a symlink in one.
+    with key files, refuse a policy (or agents file) that other users can write, or that
+    is reached through a folder or symlink they could replace.
     """
-    if os.name != "posix":
+    if not _POSIX:
         return None
     mode = stat.S_IMODE(path.stat().st_mode)
     if mode & 0o022:
-        return f"{path} can be changed by other users (mode {mode:o}); fix: chmod go-w {path}"
-    folder = path.resolve().parent
-    folder_mode = folder.stat().st_mode
-    if folder_mode & 0o002 and not folder_mode & stat.S_ISVTX:
-        return f"{path} is in {folder}, where any user can replace files; move it"
+        return (
+            f"{path} can be changed by other users (mode {mode:o}); fix: chmod go-w "
+            f"{shlex.quote(str(path))}"
+        )
     return replaceable_by_others(path)  # symlinks, and every folder on the way
 
 

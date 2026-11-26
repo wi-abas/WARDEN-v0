@@ -30,7 +30,7 @@ Security properties (each one is tested in tests/test_engine.py):
 import logging
 import re
 import unicodedata
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from urllib.parse import urlsplit
 
 from pydantic import JsonValue
@@ -81,6 +81,7 @@ _UNCLEAN_PATH = "not a clean path: '..', '.', '//', '%', backslash or edge space
 _UNCLEAN_URL = "not a clean URL"
 _UNCLEAN_EMAIL = "not one plain email address"
 _UNCLEAN_HOST = "not a clean host name"
+_AMBIGUOUS_CASE = "upper/lower case is ambiguous"
 _SCHEME_NOT_ALLOWED = "URL scheme not accepted by the rule"
 
 
@@ -89,11 +90,46 @@ def _comparable(a: JsonValue, b: JsonValue) -> bool:
     return (is_number(a) and is_number(b)) or type(a) is type(b)
 
 
-def _fold(text: str, condition: Condition) -> str:
-    """Same Unicode form on both sides (NFC: a macOS "é" made of two characters equals
-    the usual one), then lower-case (casefold handles e.g. German ß) if ignore_case."""
-    text = unicodedata.normalize("NFC", text)
-    return text.casefold() if condition.ignore_case else text
+def _nfc(text: str) -> str:
+    """One Unicode form: a macOS "é" made of two characters equals the usual one."""
+    return unicodedata.normalize("NFC", text)
+
+
+# Three readings of "the same text in another case", from strict to loose. They differ for
+# few letters, but there it matters: full case folding makes "ß" equal "ss" (two different
+# domains), and software that upper-cases makes "ı" equal "i".
+def _fold_letters(text: str) -> str:
+    # "İ" is the one letter that lower() splits in two ("i" and a dot): keep it whole.
+    return _nfc("".join(ch if len(ch.lower()) > 1 else ch.lower() for ch in text))
+
+
+def _fold_loosely(text: str) -> str:
+    return text.upper().casefold().replace("i\u0307", "i")
+
+
+_FOLDS: tuple[Callable[[str], str], ...] = (_fold_letters, str.casefold, _fold_loosely)
+
+
+def _any_match(
+    actual: str,
+    expected: Iterable[str],
+    condition: Condition,
+    matches: Callable[[str, str], bool],
+) -> bool:
+    """True if `matches(actual, e)` for any expected text, after normalizing both.
+
+    With ignore_case, every reading must give the same answer. If they disagree, both a
+    match and a miss would be a guess: the text can't be checked."""
+    text, options = _nfc(actual), [_nfc(e) for e in expected]
+    if not condition.ignore_case:
+        return any(matches(text, option) for option in options)
+    answers = set()
+    for fold in _FOLDS:
+        folded = fold(text)  # once per reading, not once per expected text
+        answers.add(any(matches(folded, fold(o)) for o in options))
+    if len(answers) > 1:
+        raise _UncheckableArgument(condition.label, _AMBIGUOUS_CASE)
+    return answers.pop()
 
 
 # Dots that URL and mail software treat as "." (IDNA): "evil。net" is "evil.net".
@@ -108,10 +144,14 @@ def _check_unicode(actual: str, condition: Condition) -> None:
       drops the soft hyphen.
     - Compatibility look-alikes that software folds into plain letters: the
       full-width "ｅ" in "ｅvil.net" becomes "e" (NFKC).
+    - Non-ASCII characters that normalizing turns into ASCII (the Kelvin sign becomes
+      "K"): the rule would compare a text the tool never received.
     """
     if any(is_invisible(ch) for ch in actual):
         raise _UncheckableArgument(condition.label, _HIDDEN_CHARS)
-    if unicodedata.normalize("NFKC", actual) != unicodedata.normalize("NFC", actual):
+    if unicodedata.normalize("NFKC", actual) != _nfc(actual):
+        raise _UncheckableArgument(condition.label, _HIDDEN_CHARS)
+    if any(not ch.isascii() and _nfc(ch).isascii() for ch in actual):
         raise _UncheckableArgument(condition.label, _HIDDEN_CHARS)
 
 
@@ -140,6 +180,18 @@ _ENCODED_SEPARATORS = re.compile(r"%(2e|2f|5c|25)", re.IGNORECASE)
 _ANY_PERCENT_ESCAPE = re.compile(r"%[0-9a-f]{2}", re.IGNORECASE)
 
 
+# The same characters however often they were encoded: "%2e", "%252e", ...
+_ENCODED_DOT = re.compile(r"%(?:25)*2e", re.IGNORECASE)
+_ENCODED_SLASH = re.compile(r"%(?:25)*(?:2f|5c)", re.IGNORECASE)
+
+
+def _climbs_out(text: str) -> bool:
+    """True if one part between slashes is "..", also as "...", ".. ", "..;" or %-encoded."""
+    text = _ENCODED_SLASH.sub("/", _ENCODED_DOT.sub(".", text)).replace("\\", "/")
+    parts = (part.split(";", 1)[0] for part in text.split("/"))
+    return any(".." in part and not part.strip(". ") for part in parts)
+
+
 def _is_clean_path(text: str) -> bool:
     """No tricks that make one path look like another: //, /./, /../, backslashes, and
     no %-escapes at all (a decoding tool would read "/%65tc" as "/etc")."""
@@ -151,15 +203,48 @@ def _is_clean_path(text: str) -> bool:
     inner = segments[1:-1] if text.startswith("/") else segments[:-1]
     if any(segment == "" for segment in inner):  # "//"
         return False
-    # ".", "..", and any other segment made only of dots and spaces ("...", ".. ", " "):
-    # Windows and tools that strip trailing dots/spaces read ".. " as ".." (a way out).
-    return not any(segment and not segment.strip(". ") for segment in segments)
+    return not _has_dot_segment(text)
+
+
+def _has_dot_segment(text: str) -> bool:
+    """ ".", "..", and any other segment made only of dots and spaces ("...", ".. ", " "):
+    Windows and tools that strip trailing dots/spaces read ".. " as ".." (a way out).
+    Java servers drop everything after ";" first, so "..;x" counts too."""
+    parts = (segment.split(";", 1)[0] for segment in text.split("/"))
+    return any(part and not part.strip(". ") for part in parts)
 
 
 def _valid_port(port: str) -> bool:
     """1 to 65535 in plain ASCII digits, no leading zero. Libraries disagree about what
     ":0", ":99999" or ":0443" reach (an error, a truncated number, the default port)."""
     return port.isascii() and port.isdigit() and not port.startswith("0") and int(port) <= 65535
+
+
+# In a URL path: escapes no ordinary URL has, and which some servers decode into a way out.
+# Control characters (".%00."), overlong UTF-8 ("%c0%ae" is "."), and "%" without two hex
+# digits ("%u002e", "%%32%65").
+_BAD_URL_ESCAPE = re.compile(
+    r"%([01][0-9a-f]|7f|c[01]%[89ab][0-9a-f]|e0%[89][0-9a-f]|f0%8[0-9a-f]|(?![0-9a-f]{2}))",
+    re.IGNORECASE,
+)
+
+
+def _has_disguised_escape(url: str) -> bool:
+    """For rules that compare a URL's path (host_in doesn't): escapes in the path that
+    some servers read as "..", "/" or the end of the text."""
+    path = re.split("[?#]", url.split("://", 1)[1], maxsplit=1)[0]
+    if _BAD_URL_ESCAPE.search(path):
+        return True
+    # %20 and %3b are normal, unless they hide a dot segment ("..%20", "..%3b").
+    readable = re.sub("%3b", ";", path.replace("%20", " "), flags=re.IGNORECASE)
+    return _has_dot_segment(readable)
+
+
+# Letters (also non-ASCII ones: host_in refuses those itself), digits, "-", "_" and ".".
+# Anything else is not a host name, and loose parsers stop at it: "evil.net;.good.com"
+# reaches evil.net.
+_HOST_NAME = re.compile(r"[a-z0-9._\-\u0080-\U0010ffff]+", re.IGNORECASE)
+_IPV6 = re.compile(r"[0-9a-f:.]+", re.IGNORECASE)
 
 
 def _is_clean_url(text: str) -> bool:
@@ -180,7 +265,11 @@ def _is_clean_url(text: str) -> bool:
     # but don't match it as text. Allowed: name, name:port, [ipv6], [ipv6]:port.
     if host.startswith("["):
         name, bracket, after = host[1:].partition("]")
-        if not bracket or not name or (after and not (after[0] == ":" and _valid_port(after[1:]))):
+        if (
+            not bracket
+            or not _IPV6.fullmatch(name)
+            or (after and not (after[0] == ":" and _valid_port(after[1:])))
+        ):
             return False
     else:
         name, colon, port = host.partition(":")
@@ -190,6 +279,8 @@ def _is_clean_url(text: str) -> bool:
             return False
         # The host ends at "?" or "#" when there is no path ("https://evil.net.?x").
         labels = re.split("[?#]", name, maxsplit=1)[0]
+        if not _HOST_NAME.fullmatch(labels):
+            return False
         # An empty label (".evil.net", "a..evil.net") is not a host name, and libraries
         # disagree about it.
         if labels.endswith(".") or labels.startswith(".") or ".." in labels:
@@ -265,7 +356,7 @@ def _check_text_shape(actual: str, expected: list[str], condition: Condition) ->
         if any(dot in actual for dot in _LOOKALIKE_DOTS):
             raise _UncheckableArgument(condition.label, _HIDDEN_CHARS)
     if any(_looks_like_url(e) for e in expected):
-        if not _is_clean_url(actual):
+        if not _is_clean_url(actual) or _has_disguised_escape(actual):
             raise _UncheckableArgument(condition.label, _UNCLEAN_URL)
         return  # a URL may legitimately contain "@" in its path: skip the email check
     if any(_looks_like_domain(e) for e in expected) and not _is_clean_domain_text(actual):
@@ -274,12 +365,6 @@ def _check_text_shape(actual: str, expected: list[str], condition: Condition) ->
         raise _UncheckableArgument(condition.label, _UNCLEAN_PATH)
     if any(_looks_like_email(e) for e in expected) and not _is_plain_email(actual):
         raise _UncheckableArgument(condition.label, _UNCLEAN_EMAIL)
-
-
-def _same(actual: JsonValue, expected: JsonValue, condition: Condition) -> bool:
-    if isinstance(actual, str) and isinstance(expected, str):
-        return _fold(actual, condition) == _fold(expected, condition)
-    return _comparable(actual, expected) and actual == expected
 
 
 def _lookup(condition: Condition, arguments: dict[str, JsonValue]) -> JsonValue:
@@ -351,8 +436,12 @@ def _holds(condition: Condition, arguments: dict[str, JsonValue]) -> bool:
             raise ValueError("policy value is not text")
         _check_unicode(actual, condition)
         _check_text_shape(actual, [expected], condition)
-        text, affix = _fold(actual, condition), _fold(expected, condition)
-        return text.startswith(affix) if op is Op.STARTSWITH else text.endswith(affix)
+        # The promise for startswith holds for a prefix without "/" too: "workspace" must
+        # not allow "workspace/../x". (URLs were checked above, in their own way.)
+        if op is Op.STARTSWITH and not _looks_like_url(expected) and _climbs_out(actual):
+            raise _UncheckableArgument(condition.label, _UNCLEAN_PATH)
+        affix_test = str.startswith if op is Op.STARTSWITH else str.endswith
+        return _any_match(actual, [expected], condition, affix_test)
 
     if op is Op.CONTAINS:
         if not isinstance(actual, str):
@@ -366,17 +455,19 @@ def _holds(condition: Condition, arguments: dict[str, JsonValue]) -> bool:
         # argument is free text that merely contains something.)
         if any("." in str(n) for n in needles) and any(d in actual for d in _LOOKALIKE_DOTS):
             raise _UncheckableArgument(condition.label, _HIDDEN_CHARS)
-        text = _fold(actual, condition)
-        return any(_fold(str(n), condition) in text for n in needles)
+        return _any_match(actual, map(str, needles), condition, str.__contains__)
 
     # eq / neq / in: the argument must have the same type as the policy value(s).
     choices = expected if isinstance(expected, list) else [expected]
     if not any(_comparable(actual, choice) for choice in choices):
         raise _UncheckableArgument(condition.label)
     if isinstance(actual, str):
+        texts = [c for c in choices if isinstance(c, str)]
         _check_unicode(actual, condition)
-        _check_text_shape(actual, [c for c in choices if isinstance(c, str)], condition)
-    found = any(_same(actual, choice, condition) for choice in choices)
+        _check_text_shape(actual, texts, condition)
+        found = _any_match(actual, texts, condition, str.__eq__)
+    else:
+        found = any(_comparable(actual, choice) and actual == choice for choice in choices)
     if op is Op.NEQ:
         return not found
     return found  # Op.EQ, Op.IN
