@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.4.2 (2026-11-26, alpha)
 
 ### Security
 - Requests with `Transfer-Encoding` are refused (411), also with `Content-Length`, and body
@@ -31,6 +31,8 @@
 - `warden serve` on a busy port stops before printing an admin key; `warden init` next steps
   work without uv; `audit verify` and `head` explain a leftover SQLite journal.
 - Docs: not on PyPI yet, tagged installs; amount examples have a lower bound.
+- `warden init` makes its folders 755 whatever the umask, so `serve` accepts them.
+- `ignore_case` checks of a long argument against a long list are about ten times faster.
 
 ## v0.4.1 (2026-11-25, alpha)
 

@@ -35,8 +35,8 @@ Warden is **not on PyPI yet**, so install a tagged version from GitHub. You need
 3.12 or newer and `git` (slim containers often don't have it).
 
 ```sh
-uv add "agent-warden @ git+https://github.com/wi-abas/agent-warden@v0.4.1"   # with uv
-pip install "git+https://github.com/wi-abas/agent-warden@v0.4.1"              # with pip (in a virtualenv)
+uv add "agent-warden @ git+https://github.com/wi-abas/agent-warden@v0.4.2"   # with uv
+pip install "git+https://github.com/wi-abas/agent-warden@v0.4.2"              # with pip (in a virtualenv)
 ```
 
 > Don't run `pip install agent-warden` or `uv add agent-warden`: until this project has
@@ -356,7 +356,7 @@ Done in v0.3.0 (alpha): MCP proxy, Python SDK, agent tokens, rate limits, persis
 approvals, group approvals (`warden approvals`), tamper-evident audit log with
 checkpoints, policy tests (`warden test`), nested argument conditions.
 
-Done in v0.4.1 (alpha): security and bug fixes, see the changelog.
+Done in v0.4.2 (alpha): security and bug fixes, see the changelog.
 
 Done in v0.4.0 (alpha): per-agent rules, sticky rejections, `otherwise` and `contains`
 in rules, `host_in` limited to http/https with port checks, approvals need the
