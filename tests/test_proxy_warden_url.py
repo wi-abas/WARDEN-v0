@@ -11,7 +11,7 @@ from warden.mcp_proxy import ProxyConfig
 
 
 def recorder(seen: list[ProxyConfig]) -> object:
-    def fake_serve(config: ProxyConfig) -> int:
+    def fake_serve(config: ProxyConfig, **_: object) -> int:
         seen.append(config)
         return 0
 
@@ -28,7 +28,7 @@ def run(
 ) -> ProxyConfig:
     seen: list[ProxyConfig] = []
 
-    def fake_serve(config: ProxyConfig) -> int:
+    def fake_serve(config: ProxyConfig, **_: object) -> int:
         seen.append(config)
         return 0
 

@@ -587,6 +587,7 @@ def test_real_proxy_process_refuses_a_sampling_request(tmp_path: Path) -> None:
             )
         )
         env = {k: v for k, v in os.environ.items() if k != "WARDEN_AGENT_TOKEN"}
+        env["WARDEN_NO_AUTH"] = "1"  # no agent token on purpose
         env["PYTHONPATH"] = str(Path(__file__).parent.parent / "src")
         command = "import sys; from warden.cli import main; sys.exit(main(sys.argv[1:]))"
         process = subprocess.Popen(  # noqa: S603 (our own command line)

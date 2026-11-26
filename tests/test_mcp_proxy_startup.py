@@ -23,6 +23,7 @@ def run_proxy(tmp_path: Path, server: dict[str, Any]) -> tuple[int, bytes, str]:
             "-c",
             "import sys; from warden.cli import main; sys.exit(main(sys.argv[1:]))",
             "proxy",
+            "--no-auth",
             "--config",
             str(config),
         ],
@@ -75,7 +76,7 @@ def test_serve_stdio_reports_a_server_that_cant_start(
     config = ProxyConfig.model_validate(
         {"server": {"command": str(tmp_path / "missing"), "env": {"K": "s3cret"}}}
     )
-    assert serve_stdio(config) == 2
+    assert serve_stdio(config, no_auth=True) == 2
     err = capsys.readouterr().err
     assert "can't start the MCP server" in err and "FileNotFoundError" in err
     assert "s3cret" not in err

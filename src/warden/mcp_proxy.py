@@ -37,7 +37,15 @@ from typing import Annotated, Any, BinaryIO, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError, field_validator
 
-from warden.client import DEFAULT_URL, Answer, WardenClient, capped_pause, check_url
+from warden.client import (
+    DEFAULT_URL,
+    NO_AUTH_HELP,
+    Answer,
+    WardenClient,
+    capped_pause,
+    check_url,
+    no_auth_from_env,
+)
 from warden.models import AGENT_ID_PATTERN, Decision
 from warden.policy import DuplicateKeyError, describe_errors, no_duplicate_keys
 
@@ -969,11 +977,22 @@ def own_stdin() -> BinaryIO:
         return sys.stdin.buffer
 
 
-def serve_stdio(config: ProxyConfig) -> int:
-    """Run the proxy on this process's stdin/stdout. Returns the server's exit code."""
+def serve_stdio(config: ProxyConfig, no_auth: bool = False) -> int:
+    """Run the proxy on this process's stdin/stdout. Returns the server's exit code.
+
+    Without WARDEN_AGENT_TOKEN it refuses to start (exit 2) unless `no_auth` or
+    WARDEN_NO_AUTH=1 says to run without a token on purpose."""
     # The agent token comes from the environment (e.g. the MCP client config's "env"),
     # never from the config file, so it isn't stored next to the server settings.
     token = os.environ.get("WARDEN_AGENT_TOKEN") or None
+    try:
+        allowed_without_token = no_auth or no_auth_from_env(os.environ)
+    except ValueError as exc:
+        print(f"warden proxy: {exc}", file=sys.stderr)
+        return 2
+    if token is None and not allowed_without_token:
+        print(f"warden proxy: no WARDEN_AGENT_TOKEN: {NO_AUTH_HELP}", file=sys.stderr)
+        return 2
     checker = WardenClient(
         config.warden_url,
         # With a token, only an agent_id someone chose is sent (it must match the token).

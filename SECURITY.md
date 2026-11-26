@@ -90,7 +90,8 @@ Assuming the agent runtime calls Warden and obeys the answer:
   The MCP proxy and the SDK only cover calls routed through them; a client configured
   to talk to the MCP server directly, or code calling the undecorated function, bypasses
   them.
-- **Other programs on the same machine.** Without `--agents`, `agent_id` is
+- **Other programs on the same machine.** With `--no-auth` (tokens are required otherwise),
+  `agent_id` is
   self-declared and anything that can reach `127.0.0.1` can ask as any agent (and dodge
   per-agent rate limits with new ids). With tokens, a program that can read an agent's
   environment or memory has its token.

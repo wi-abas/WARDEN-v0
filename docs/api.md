@@ -216,8 +216,11 @@ the arguments back (its `action_hash` must match). Denying always works.
 
 ## Agent tokens
 
-Without tokens, `agent_id` is whatever the caller says. With tokens, it comes from a
-secret only that agent has:
+With tokens, `agent_id` comes from a secret only that agent has. They are required:
+`warden serve` refuses to start without `--agents` unless you pass `--no-auth` (or set
+`WARDEN_NO_AUTH=1`), and the SDK (without `client=`) and the MCP proxy refuse to run
+without `WARDEN_AGENT_TOKEN` unless `WARDEN_NO_AUTH=1`. With `--no-auth`, `agent_id` is
+whatever the caller says.
 
 ```sh
 uv run warden agent add billing-agent      # prints the token ONCE (never stored)
@@ -260,8 +263,8 @@ Protocol: [design/server-identity.md](design/server-identity.md).
 [Per-agent rules](policies.md#per-agent-rules)). Such rules need `--agents`: without it,
 `warden serve` refuses to start.
 
-**Migrating:** nothing changes until you pass `--agents`. Add every agent, hand out the
-tokens, then restart with `--agents`.
+**Migrating:** add every agent, hand out the tokens, then start with `--agents`. Until
+then, `--no-auth` keeps the old behaviour.
 
 ## Audit log
 
@@ -311,7 +314,8 @@ WARDEN_ADMIN_KEY="$(openssl rand -base64 32)" \
 | Audit database | `--audit-db` | `WARDEN_AUDIT_DB` | `warden-audit.db` |
 | Audit retention | `--retention-days` (1 to 36500, `0` = forever) | `WARDEN_RETENTION_DAYS` | `90` |
 | Admin key | *(no flag)* | `WARDEN_ADMIN_KEY` (32+ characters) | random, printed at startup |
-| Agent tokens | `--agents` | `WARDEN_AGENTS` | none (agent_id self-declared) |
+| Agent tokens | `--agents` | `WARDEN_AGENTS` | required (unless no tokens) |
+| No tokens | `--no-auth` | `WARDEN_NO_AUTH=1` | off |
 
 Flags beat environment variables. The admin key has no flag on purpose: command lines are
 visible to every user on the machine (`ps`). Environment variables are hidden from other

@@ -8,7 +8,7 @@ must also prove that it is Warden before the token or any argument is sent.
 
 Run it (two terminals):
     1)  WARDEN_ADMIN_KEY=$(openssl rand -hex 32) \\
-          uv run warden serve --policy examples/demo-policy.json
+          uv run warden serve --policy examples/demo-policy.json --no-auth
     2)  uv run python examples/agent.py
 When the agent waits for approval, review and approve it from a third terminal (with
 the same WARDEN_ADMIN_KEY set) with the command it prints.

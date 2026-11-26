@@ -243,6 +243,7 @@ def test_agent_token_comes_from_the_environment(
         return 0
 
     monkeypatch.setenv("WARDEN_AGENT_TOKEN", env)
+    monkeypatch.setenv("WARDEN_NO_AUTH", "1")  # "" token: run without one on purpose
     monkeypatch.setattr(proxy_module, "WardenClient", Client)
     monkeypatch.setattr("warden.mcp_proxy.asyncio.run", fake_run)
     assert proxy_module.serve_stdio(load_config(config_file(tmp_path))) == 0

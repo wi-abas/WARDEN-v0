@@ -118,7 +118,7 @@ def test_with_a_token_only_a_chosen_agent_id_is_sent(
     monkeypatch.setenv("WARDEN_AGENT_TOKEN", "wdn_x")
     serve_stdio(make_config(tmp_path, **extra))
     monkeypatch.delenv("WARDEN_AGENT_TOKEN")
-    serve_stdio(make_config(tmp_path, **extra))
+    serve_stdio(make_config(tmp_path, **extra), no_auth=True)
     assert [c.agent_id for c in made] == [sent, sent or "mcp-proxy"]
 
 
@@ -131,7 +131,7 @@ def test_cli_keeps_default_and_chosen_agent_ids_apart(
     path.write_text(json.dumps(data))
     seen: list[ProxyConfig] = []
 
-    def serve(config: ProxyConfig) -> int:
+    def serve(config: ProxyConfig, **_: object) -> int:
         seen.append(config)
         return 0
 

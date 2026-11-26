@@ -7,7 +7,8 @@
 | Audit database | --audit-db         | WARDEN_AUDIT_DB         | warden-audit.db       |
 | Retention days | --retention-days   | WARDEN_RETENTION_DAYS   | 90 (0 = keep forever) |
 | Admin key      | (none, on purpose) | WARDEN_ADMIN_KEY        | random, printed       |
-| Agent tokens   | --agents           | WARDEN_AGENTS           | none (self-declared)  |
+| Agent tokens   | --agents           | WARDEN_AGENTS           | required              |
+| No tokens      | --no-auth          | WARDEN_NO_AUTH=1        | off                   |
 
 The admin key has no flag: command lines are visible to every user on the
 machine (`ps`). Environment variables are hidden from OTHER users, but programs
@@ -28,6 +29,7 @@ from pathlib import Path
 from typing import Any
 
 from warden.audit import DEFAULT_AUDIT_PATH, DEFAULT_RETENTION_DAYS, MAX_RETENTION_DAYS
+from warden.client import no_auth_from_env
 from warden.policy import DEFAULT_POLICY_PATH, replaceable_by_others
 
 DEFAULT_PORT = 8000
@@ -47,12 +49,14 @@ class Settings:
     retention_days: int | None = DEFAULT_RETENTION_DAYS  # None = keep forever
     admin_key: str | None = None  # None = generate a random one and print it
     agents: Path | None = None  # None = no agent tokens (agent_id is self-declared)
+    no_auth: bool = False  # True = run without agents on purpose (--no-auth)
 
     def __repr__(self) -> str:  # never show the admin key, e.g. in a traceback
         key = "<set>" if self.admin_key else None
         return (
             f"Settings(policy={self.policy}, port={self.port}, audit_db={self.audit_db}, "
-            f"retention_days={self.retention_days}, admin_key={key}, agents={self.agents})"
+            f"retention_days={self.retention_days}, admin_key={key}, agents={self.agents}, "
+            f"no_auth={self.no_auth})"
         )
 
 
@@ -112,6 +116,7 @@ def resolve(
     audit_db: str | None = None,
     retention_days: str | None = None,
     agents: str | None = None,
+    no_auth: bool = False,
     env: Mapping[str, str],
 ) -> Settings:
     """Combine flags (the keyword arguments) with environment variables."""
@@ -176,6 +181,11 @@ def resolve(
         if problem := readable_by_others(path) or unsafe_permissions(path):
             raise SettingsError(f"refusing to use the agents file: {problem}")
         values["agents"] = path
+
+    try:
+        values["no_auth"] = no_auth or no_auth_from_env(env)
+    except ValueError as exc:
+        raise SettingsError(str(exc)) from None
 
     key = env.get("WARDEN_ADMIN_KEY")
     if key is not None:

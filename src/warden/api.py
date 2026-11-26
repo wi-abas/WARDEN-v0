@@ -1369,6 +1369,13 @@ def main(settings: Settings | None = None) -> None:
         hash_key = load_or_create(key_path_for(settings.audit_db))
     except HashKeyError as exc:
         raise StartupError(str(exc)) from exc
+    if settings.agents is None and not settings.no_auth:
+        raise StartupError(
+            "no agents file: agent tokens are required (--agents FILE or WARDEN_AGENTS). "
+            "Create one with `warden agent add NAME`, or pass --no-auth (WARDEN_NO_AUTH=1) "
+            "to run without tokens on purpose: any local program can then claim any agent "
+            "id, and agents can't tell Warden from another program on this port"
+        )
     agents = None
     if settings.agents is not None:
         try:
@@ -1378,8 +1385,8 @@ def main(settings: Settings | None = None) -> None:
         print(f"\nWarden: {len(agents.agent_ids)} agents with tokens\n", file=sys.stderr)
     else:
         print(
-            "\nWarden: no agent tokens (--agents): any local program can claim any agent_id, and "
-            "agents can't tell Warden from another program on this port\n",
+            "\nWarden: --no-auth: no agent tokens. Any local program can claim any agent_id, "
+            "and agents can't tell Warden from another program on this port\n",
             file=sys.stderr,
         )
     if settings.admin_key is not None:

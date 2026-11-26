@@ -697,7 +697,7 @@ def test_cli_builds_config_from_file_and_flags(
     )
     seen: list[ProxyConfig] = []
 
-    def fake_serve(config: ProxyConfig) -> int:
+    def fake_serve(config: ProxyConfig, **_: object) -> int:
         seen.append(config)
         return 0
 
@@ -816,6 +816,7 @@ def test_serve_stdio_on_real_streams(tmp_path: Path, monkeypatch: pytest.MonkeyP
     stdout = io.TextIOWrapper(out)
     monkeypatch.setattr(sys, "stdin", stdin)
     monkeypatch.setattr(sys, "stdout", stdout)
+    monkeypatch.setenv("WARDEN_NO_AUTH", "1")  # no agent token on purpose
     # Warden isn't running: the tool call must be denied, tools/list still answered.
     config = make_config(tmp_path, warden_url="http://127.0.0.1:9", warden_timeout_seconds=0.5)
     assert serve_stdio(config) == 0

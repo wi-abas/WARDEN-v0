@@ -195,7 +195,9 @@ def test_startup_says_where_the_admin_key_came_from(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     monkeypatch.setattr(uvicorn, "run", lambda app, **kw: None)
-    settings = Settings(policy=BASIC_POLICY, audit_db=tmp_path / "a.db", admin_key=None)
+    settings = Settings(
+        policy=BASIC_POLICY, audit_db=tmp_path / "a.db", admin_key=None, no_auth=True
+    )
     warden.api.main(settings)
     err = capsys.readouterr().err
     assert "using WARDEN_ADMIN_KEY" not in err and "needed to approve actions" in err

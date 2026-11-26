@@ -15,8 +15,12 @@ proxy launches the real server and checks every `tools/call` with Warden first.
 
 ```sh
 export WARDEN_ADMIN_KEY="$(openssl rand -hex 32)"
-uv run warden serve --policy my-policy.json
+uv run warden agent add claude-desktop     # prints the proxy's token (WARDEN_AGENT_TOKEN)
+uv run warden serve --policy my-policy.json --agents warden-agents.json
 ```
+
+The proxy refuses to start without `WARDEN_AGENT_TOKEN` (see step 3) unless you pass
+`--no-auth` or set `WARDEN_NO_AUTH=1` (then Warden must run with `--no-auth` too).
 
 Rules see the tool names as `<tool_prefix><MCP tool name>`, e.g. `fs.read_file`, and the
 call's `arguments` object as the arguments:
@@ -102,8 +106,7 @@ claude mcp add filesystem -- uv run --directory /Users/me/agent-warden \
 
 Remove the server's direct entry: the proxy only protects calls that go through it.
 
-If Warden uses agent tokens (`--agents`), give the proxy its token through the
-environment, never the config file: in Claude Desktop / Cursor add
+Give the proxy its token through the environment, never the config file: in Claude Desktop / Cursor add
 `"env": {"WARDEN_AGENT_TOKEN": "wdn_..."}` next to `"args"`. The agent id then comes from
 the token. Leave `agent_id` out of the config, or set it to the token's agent: if they
 don't match, every call is denied. With a token, Warden must also prove that it is Warden

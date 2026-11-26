@@ -63,6 +63,11 @@ def main(argv: list[str] | None = None) -> int:
         help="days to keep audit entries, 0 = forever (env WARDEN_RETENTION_DAYS)",
     )
     serve_parser.add_argument("--agents", help="agent tokens file (env WARDEN_AGENTS)")
+    serve_parser.add_argument(
+        "--no-auth",
+        action="store_true",
+        help="run without agent tokens on purpose (env WARDEN_NO_AUTH=1)",
+    )
     agent = commands.add_parser("agent", help="manage agent tokens")
     agent.add_argument("action", choices=["add", "list", "remove"])
     agent.add_argument("agent_id", nargs="?")
@@ -140,6 +145,11 @@ def main(argv: list[str] | None = None) -> int:
     proxy.add_argument("--agent-id", help="agent id sent to Warden (default mcp-proxy)")
     proxy.add_argument("--tool-prefix", help='put in front of tool names, e.g. "github."')
     proxy.add_argument("--approval", choices=["wait", "error"], help="default wait")
+    proxy.add_argument(
+        "--no-auth",
+        action="store_true",
+        help="run without WARDEN_AGENT_TOKEN on purpose (env WARDEN_NO_AUTH=1)",
+    )
     proxy.add_argument("server", nargs=argparse.REMAINDER, help="-- COMMAND [ARGS...]")
     args = parser.parse_args(argv)
 
@@ -191,6 +201,7 @@ def main(argv: list[str] | None = None) -> int:
             audit_db=getattr(args, "audit_db", None),
             retention_days=getattr(args, "retention_days", None),
             agents=getattr(args, "agents", None),
+            no_auth=getattr(args, "no_auth", False),
             env=os.environ,
         )
     except SettingsError as exc:
@@ -322,7 +333,7 @@ def run_proxy(args: argparse.Namespace) -> int:
             f"warden proxy: invalid settings ({'; '.join(describe_errors(exc))})", file=sys.stderr
         )
         return 2
-    return serve_stdio(config)
+    return serve_stdio(config, no_auth=args.no_auth)
 
 
 def init_policy(path: Path) -> int:

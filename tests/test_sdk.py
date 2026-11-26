@@ -354,6 +354,7 @@ def test_run_guarded_without_decorator() -> None:
 def test_default_client_from_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("WARDEN_URL", "http://localhost:9999")
     monkeypatch.setenv("WARDEN_AGENT_ID", "env-agent")
+    monkeypatch.setenv("WARDEN_NO_AUTH", "1")  # no token on purpose
     client = default_client()
     assert client.url == "http://localhost:9999" and client.agent_id == "env-agent"
     monkeypatch.setenv("WARDEN_URL", "http://evil.com:80")
@@ -363,6 +364,7 @@ def test_default_client_from_environment(monkeypatch: pytest.MonkeyPatch) -> Non
 
 def test_default_client_used_when_none_given(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("WARDEN_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("WARDEN_NO_AUTH", "1")  # no token on purpose
 
     @guard()
     def read_file(path: str) -> None:
