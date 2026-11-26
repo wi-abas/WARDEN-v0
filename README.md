@@ -235,7 +235,9 @@ config file sets `warden_url`) and the SDK's default client, `WardenClient(url=.
 About **1.1 ms per tool call** over HTTP on an Apple M1, including the hash-chained
 audit-log write (p99 under 2 ms). The decision itself takes about 10 microseconds.
 Through the MCP proxy, a `tools/call` takes about **1.3 ms more** than calling the server
-directly. Measure on your machine: `uv run python scripts/benchmark.py`.
+directly. With an agent token, Warden first proves itself on the same connection: about
+0.3 ms more per call (1.6 ms instead of 1.2 ms on one test Mac). Measure on your machine:
+`uv run python scripts/benchmark.py`.
 
 ## Documentation
 
@@ -363,11 +365,18 @@ Done in v0.3.0 (alpha): MCP proxy, Python SDK, agent tokens, rate limits, persis
 approvals, group approvals (`warden approvals`), tamper-evident audit log with
 checkpoints, policy tests (`warden test`), nested argument conditions.
 
-Done in v0.5.0 (alpha): security and bug fixes, see the changelog.
-
 Done in v0.4.0 (alpha): per-agent rules, sticky rejections, `otherwise` and `contains`
 in rules, `host_in` limited to http/https with port checks, approvals need the
 `action_hash` you were shown and warn about separate runs.
+
+Done in v0.4.1 and v0.4.2 (alpha): security and bug fixes, many found by an outside field
+test (rule tricks, body size limit, audit write checks, policy file permissions). See the
+changelog.
+
+Done in v0.5.0 (alpha): Warden proves its identity. With an agent token or the admin key,
+nothing secret is sent until Warden has proven itself, and only signed answers count, so a
+program that takes Warden's port gets nothing and can't make a tool run. Re-create agents
+with `warden agent add` when upgrading.
 
 Next, shaped by feedback from early users:
 
