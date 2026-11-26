@@ -83,6 +83,7 @@ from warden.approvals import (
 )
 from warden.audit import AuditEntry, AuditEvent, AuditLog, EventKind, SQLiteAuditLog
 from warden.engine import evaluate
+from warden.hash_key import KEY_BYTES, HashKeyError, key_path_for, load_or_create
 from warden.limits import Limits, LimitSpec, RateLimiter
 from warden.models import (
     AGENT_ID_PATTERN,
@@ -609,6 +610,8 @@ class _Warden:
     # None = no agent tokens: agent_id is self-declared (the old behaviour).
     agents: AgentRegistry | None = None
     limiter: RateLimiter | None = None  # None = built from the policy's limits
+    # Keys the action_hash (hash_key.py); random per process unless the server loads one.
+    hash_key: bytes = field(default_factory=lambda: secrets.token_bytes(KEY_BYTES), repr=False)
     # Rejected requests are recorded at most this many per minute, so a flood of bad
     # requests can't fill the disk. The rest are counted and summarised in one event.
     rejections_per_minute: int = REJECTIONS_PER_MINUTE
@@ -810,7 +813,7 @@ class _Warden:
         action = self.identify(body, authorization)
         if self.limiter is not None and (wait := self.limiter.acquire(action.agent_id)):
             raise _RateLimited(wait)
-        decision = evaluate(action, self.policy.rules, self.policy.tools)
+        decision = evaluate(action, self.policy.rules, self.policy.tools, self.hash_key)
         quota = self.policy.limits.max_pending_approvals(action.agent_id)
         result = apply_approval(action, decision, self.approvals, agent_limit=quota)
         try:
@@ -1184,12 +1187,24 @@ def _decision_event(approval: Approval, new_status: Status) -> AuditEvent:
     )
 
 
+def _default_hash_key(approvals: ApprovalStore | None) -> bytes:
+    """The key file next to a persistent approvals database (as `serve` does, so stored
+    approvals still match after a restart), else a random key for this process."""
+    if approvals is not None and approvals.db_path is not None:
+        try:
+            return load_or_create(key_path_for(approvals.db_path))
+        except HashKeyError as exc:
+            raise StartupError(str(exc)) from exc
+    return secrets.token_bytes(KEY_BYTES)
+
+
 def create_app(
     policy_path: Path = DEFAULT_POLICY_PATH,
     audit_log: AuditLog | None = None,
     approvals: ApprovalStore | None = None,
     admin_key: str | None = None,
     agents: AgentRegistry | None = None,
+    hash_key: bytes | None = None,
 ) -> FastAPI:
     """Build the app. Rules, audit log, approvals and admin key are set up once, here.
 
@@ -1205,6 +1220,8 @@ def create_app(
         # never written to the log file and never sent to agents.
         admin_key = secrets.token_urlsafe(32)
         print(f"\nWarden admin key (needed to approve actions): {admin_key}\n", file=sys.stderr)
+    if hash_key is None:
+        hash_key = _default_hash_key(approvals)
     w = _Warden(
         policy=policy,
         audit_log=audit_log or SQLiteAuditLog(audit.DEFAULT_AUDIT_PATH),
@@ -1212,6 +1229,7 @@ def create_app(
         admin_key=admin_key,
         agents=agents,
         record_in_background=RECORD_REJECTIONS_IN_BACKGROUND,
+        hash_key=hash_key,
     )
 
     # No redirects: "/v1/evaluate/" is a plain 404 deny, not an empty 307.
@@ -1347,6 +1365,10 @@ def main(settings: Settings | None = None) -> None:
         # e.g. a corrupted file, or a folder Warden can't write to. Without an audit
         # log nothing could ever be allowed, so stop with a clear message.
         raise StartupError(f"can't open the audit database {settings.audit_db}: {exc}") from exc
+    try:
+        hash_key = load_or_create(key_path_for(settings.audit_db))
+    except HashKeyError as exc:
+        raise StartupError(str(exc)) from exc
     agents = None
     if settings.agents is not None:
         try:
@@ -1368,6 +1390,7 @@ def main(settings: Settings | None = None) -> None:
         approvals=approvals,
         admin_key=settings.admin_key,
         agents=agents,
+        hash_key=hash_key,
     )
     # proxy_headers: there is no proxy in front, so nobody may change the client address.
     uvicorn.run(app, host=HOST, port=settings.port, log_config=config, proxy_headers=False)

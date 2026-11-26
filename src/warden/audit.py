@@ -7,7 +7,8 @@ Two tables:
   rejected requests (bad input, wrong admin key, oversized body, errors).
 
 What is NEVER stored: tool arguments (they may contain secrets). The action_hash
-still identifies the exact action without revealing it.
+still identifies the exact action: it is keyed with a secret kept in its own file
+(hash_key.py), so the database alone can't be used to guess arguments.
 
 Tamper evidence: every row carries `prev_hash` (the previous row's hash in the
 same table) and `row_hash` = SHA-256 over the table name, row id, prev_hash and
