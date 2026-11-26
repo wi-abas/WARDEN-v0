@@ -111,7 +111,7 @@ def test_filters_work_on_the_grouped_list(client: TestClient) -> None:
         "?ids=" + "a" * 32 + "%20",
         "?agent_id=bad%20agent",
         "?agent_id=",
-        "?tool=Send_Email",
+        "?tool=Send Email",
         "?tool=" + "t" * 65,
     ],
 )

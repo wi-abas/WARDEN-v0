@@ -211,7 +211,8 @@ clearly belongs to one request, the client gets an error for that request instea
 - The server is trusted for what it answers: a tool result can still be misleading.
 - Keys inside `arguments` are the policy's job: if your server ignores case there (reads
   `"Path"` as `"path"`), use tool argument lists so unknown argument names are denied.
-- Tool names Warden doesn't accept (uppercase letters, spaces) are always denied.
+- Tool names Warden doesn't accept (spaces, slashes, other characters than letters,
+  digits, `_`, `.`, `-`) are always denied. camelCase names work and are case-sensitive.
 
 Design and threat model: [design/mcp-proxy.md](design/mcp-proxy.md),
 [design/proxy-hardening.md](design/proxy-hardening.md).

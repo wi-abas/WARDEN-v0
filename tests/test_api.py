@@ -63,7 +63,7 @@ def test_unknown_tool_is_denied(client: TestClient) -> None:
 
 INVALID_BODIES = {
     "extra field": body(approved=True),
-    "bad tool name": body("Delete_File"),
+    "bad tool name": body("Delete File"),
     "tool is a number": body(123),
     "missing tool": {"agent_id": "agent-1"},
     "arguments not an object": body(arguments=["x"]),

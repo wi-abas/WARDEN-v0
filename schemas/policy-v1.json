@@ -168,7 +168,7 @@
           "type": "string"
         },
         "tool": {
-          "pattern": "^[a-z0-9_.\\-]{1,64}$",
+          "pattern": "^[A-Za-z0-9_.\\-]{1,64}$",
           "title": "Tool",
           "type": "string"
         },
@@ -275,7 +275,7 @@
     "tools": {
       "maxProperties": 1000,
       "patternProperties": {
-        "^[a-z0-9_.\\-]{1,64}$": {
+        "^[A-Za-z0-9_.\\-]{1,64}$": {
           "$ref": "#/$defs/ToolSpec"
         }
       },

@@ -54,7 +54,6 @@ def test_missing_required_field_is_rejected(field: str) -> None:
     "tool",
     [
         "",  # empty
-        "Delete_File",  # uppercase
         "delete_file ",  # trailing space
         " delete_file",  # leading space
         "delete file",  # space inside
@@ -67,6 +66,12 @@ def test_missing_required_field_is_rejected(field: str) -> None:
 def test_bad_tool_names_are_rejected(tool: str) -> None:
     with pytest.raises(ValidationError):
         ActionRequest.model_validate(valid_request(tool=tool))
+
+
+@pytest.mark.parametrize("tool", ["getIssue", "Delete_File", "GITHUB.createPR"])
+def test_mixed_case_tool_names_are_accepted_as_written(tool: str) -> None:
+    # MCP servers name tools in camelCase; kept exactly, never lower-cased.
+    assert ActionRequest.model_validate(valid_request(tool=tool)).tool == tool
 
 
 @pytest.mark.parametrize("agent_id", ["", "agent 1", "a" * 129])
@@ -132,7 +137,7 @@ def test_valid_rule_from_json() -> None:
     "raw",
     [
         '{"id": "r1", "tool": "read_file", "effect": "maybe"}',  # unknown effect
-        '{"id": "r1", "tool": "Read_File", "effect": "allow"}',  # bad tool name
+        '{"id": "r1", "tool": "Read File", "effect": "allow"}',  # bad tool name (space)
         '{"id": "Bad Id", "tool": "read_file", "effect": "allow"}',  # bad id
         '{"id": "r1", "tool": "read_file"}',  # missing effect
         '{"id": "r1", "tool": "read_file", "effect": "allow", "priority": 1}',  # extra field

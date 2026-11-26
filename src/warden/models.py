@@ -27,7 +27,7 @@ from warden.unicode_safety import is_invisible
 # Lowercase letters, digits, "_", "." and "-", 1 to 64 characters.
 # Strict on purpose: "Delete_File", "delete_file " or lookalike Unicode letters
 # must never sneak past a rule written for "delete_file".
-TOOL_NAME_PATTERN = r"^[a-z0-9_.\-]{1,64}$"
+TOOL_NAME_PATTERN = r"^[A-Za-z0-9_.\-]{1,64}$"  # case-sensitive: getIssue != getissue
 AGENT_ID_PATTERN = r"^[A-Za-z0-9_.\-]{1,128}$"
 RULE_ID_PATTERN = r"^[a-z0-9_.\-]{1,64}$"
 ARG_NAME_PATTERN = r"^[A-Za-z0-9_.\-]{1,64}$"

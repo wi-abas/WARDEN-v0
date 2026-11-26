@@ -60,7 +60,7 @@ BROKEN_POLICIES = {
     "missing rules key": "{}",
     "rules not a list": '{"rules": "allow everything"}',
     "unknown effect": json.dumps({"rules": [rule_json(effect="maybe")]}),
-    "bad tool name": json.dumps({"rules": [rule_json(tool="Read_File")]}),
+    "bad tool name": json.dumps({"rules": [rule_json(tool="Read File")]}),
     "bad rule id": json.dumps({"rules": [rule_json(rule_id="Bad Id")]}),
     "extra field in rule": json.dumps({"rules": [{**rule_json(), "priority": 1}]}),
     "extra top-level field": json.dumps({"rules": [], "default": "allow"}),

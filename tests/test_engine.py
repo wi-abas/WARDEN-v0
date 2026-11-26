@@ -138,3 +138,23 @@ def test_error_log_does_not_leak_secrets(caplog: pytest.LogCaptureFixture) -> No
         evaluate(request("read_file", api_key=canary), ExplodingRules(message=canary))
     assert "policy evaluation failed" in caplog.text
     assert canary not in caplog.text
+
+
+@pytest.mark.parametrize("asked", ["getissue", "GetIssue", "GETISSUE", "getIssue "])
+def test_tool_names_match_case_sensitively(asked: str) -> None:
+    """MCP tools are camelCase. Another spelling is another tool: no rule allows it, so the
+    default deny applies (and a trailing space is refused as bad input)."""
+    rules = [rule("allow-get", "getIssue", ALLOW)]
+    assert evaluate(request("getIssue"), rules).decision is ALLOW
+    if asked.strip() != asked:
+        with pytest.raises(ValueError):
+            request(asked)
+        return
+    result = evaluate(request(asked), rules)
+    assert (result.decision, result.matched_rule) == (DENY, None)
+
+
+def test_a_deny_rule_in_one_case_still_blocks_that_spelling() -> None:
+    rules = [rule("allow-all-del", "deleteRepo", ALLOW), rule("no-del", "DeleteRepo", DENY)]
+    assert evaluate(request("DeleteRepo"), rules).decision is DENY
+    assert evaluate(request("deleteRepo"), rules).decision is ALLOW
