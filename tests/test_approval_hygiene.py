@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-from helpers import BASIC_POLICY, live_server
+from helpers import BASIC_POLICY, Clock, live_server
 
 from warden.api import create_app
 from warden.approvals import ApprovalStore, Status
@@ -21,21 +21,13 @@ KEY = "hygiene-admin-key-0123456789abcdef"
 ADMIN = {"X-Warden-Admin-Key": KEY}
 
 
-class Clock:
-    def __init__(self) -> None:
-        self.now = 1000.0
-
-    def __call__(self) -> float:
-        return self.now
+@pytest.fixture
+def clock() -> Clock[float]:
+    return Clock(1000.0)
 
 
 @pytest.fixture
-def clock() -> Clock:
-    return Clock()
-
-
-@pytest.fixture
-def store(clock: Clock) -> ApprovalStore:
+def store(clock: Clock[float]) -> ApprovalStore:
     return ApprovalStore(ttl_seconds=900, clock=clock)
 
 
@@ -77,7 +69,7 @@ def hash_of(store: ApprovalStore, approval_id: str) -> str:
 
 
 def test_default_list_shows_only_pending_unexpired(
-    client: TestClient, store: ApprovalStore, clock: Clock
+    client: TestClient, store: ApprovalStore, clock: Clock[float]
 ) -> None:
     old = ask(client, 0)
     clock.now += 600
@@ -97,7 +89,7 @@ def test_default_list_shows_only_pending_unexpired(
 
 
 def test_expired_pending_approvals_disappear_from_every_view(
-    client: TestClient, clock: Clock
+    client: TestClient, clock: Clock[float]
 ) -> None:
     approval_id = ask(client, 0)
     clock.now += 899
@@ -109,7 +101,7 @@ def test_expired_pending_approvals_disappear_from_every_view(
 # --- age_seconds and max_age_seconds -------------------------------------------------------
 
 
-def test_each_item_shows_its_age(client: TestClient, clock: Clock) -> None:
+def test_each_item_shows_its_age(client: TestClient, clock: Clock[float]) -> None:
     first = ask(client, 0)
     clock.now += 130.7
     second = ask(client, 1)
@@ -121,7 +113,7 @@ def test_each_item_shows_its_age(client: TestClient, clock: Clock) -> None:
     assert [a["age_seconds"] for a in groups[0]["approvals"]] == [130, 0]
 
 
-def test_max_age_narrows_the_view(client: TestClient, clock: Clock) -> None:
+def test_max_age_narrows_the_view(client: TestClient, clock: Clock[float]) -> None:
     old = ask(client, 0)
     clock.now += 300
     new = ask(client, 1)
@@ -183,7 +175,7 @@ def cli(
 
 
 def test_cli_list_shows_age(
-    server: str, client: TestClient, clock: Clock, capsys: Any, monkeypatch: Any
+    server: str, client: TestClient, clock: Clock[float], capsys: Any, monkeypatch: Any
 ) -> None:
     ask(client, 0)
     clock.now += 480
@@ -196,7 +188,7 @@ def test_cli_list_shows_age(
 
 
 def test_cli_list_max_age(
-    server: str, client: TestClient, clock: Clock, capsys: Any, monkeypatch: Any
+    server: str, client: TestClient, clock: Clock[float], capsys: Any, monkeypatch: Any
 ) -> None:
     old = ask(client, 0)
     clock.now += 600
@@ -225,7 +217,7 @@ def test_cli_usage_errors(
     assert code == 2 and message in err
 
 
-def two_runs(client: TestClient, clock: Clock) -> list[str]:
+def two_runs(client: TestClient, clock: Clock[float]) -> list[str]:
     """Two actions, then a gap of just over RUN_GAP_SECONDS, then two more."""
     ids = [ask(client, 0), ask(client, 1)]
     clock.now += RUN_GAP_SECONDS + 1
@@ -239,7 +231,7 @@ def test_yes_refuses_to_approve_across_runs(
     server: str,
     client: TestClient,
     store: ApprovalStore,
-    clock: Clock,
+    clock: Clock[float],
     capsys: Any,
     monkeypatch: Any,
 ) -> None:
@@ -257,7 +249,7 @@ def test_across_runs_lets_yes_approve(
     server: str,
     client: TestClient,
     store: ApprovalStore,
-    clock: Clock,
+    clock: Clock[float],
     capsys: Any,
     monkeypatch: Any,
 ) -> None:
@@ -272,7 +264,7 @@ def test_interactive_approve_across_runs_asks_about_all_runs(
     server: str,
     client: TestClient,
     store: ApprovalStore,
-    clock: Clock,
+    clock: Clock[float],
     capsys: Any,
     monkeypatch: Any,
 ) -> None:
@@ -289,7 +281,7 @@ def test_one_run_is_not_warned_about(
     server: str,
     client: TestClient,
     store: ApprovalStore,
-    clock: Clock,
+    clock: Clock[float],
     capsys: Any,
     monkeypatch: Any,
 ) -> None:
@@ -304,7 +296,7 @@ def test_rejecting_across_runs_is_never_blocked(
     server: str,
     client: TestClient,
     store: ApprovalStore,
-    clock: Clock,
+    clock: Clock[float],
     capsys: Any,
     monkeypatch: Any,
 ) -> None:

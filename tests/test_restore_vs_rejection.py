@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-from helpers import ADMIN_KEY, BASIC_POLICY
+from helpers import ADMIN_KEY, BASIC_POLICY, Clock
 
 from warden.api import create_app
 from warden.approvals import (
@@ -24,22 +24,14 @@ H = "d" * 64
 ACTION = ActionRequest(agent_id="a", tool="t", arguments={"n": 1})
 
 
-class Clock:
-    def __init__(self) -> None:
-        self.now = 1_800_000_000.0
-
-    def __call__(self) -> float:
-        return self.now
-
-
 @pytest.fixture
-def clock() -> Clock:
-    return Clock()
+def clock() -> Clock[float]:
+    return Clock(1_800_000_000.0)
 
 
 @pytest.fixture(params=["memory", "one server", "two servers"])
 def stores(
-    request: pytest.FixtureRequest, tmp_path: Path, clock: Clock
+    request: pytest.FixtureRequest, tmp_path: Path, clock: Clock[float]
 ) -> tuple[ApprovalStore, ApprovalStore]:
     """(the server the agent uses, the server the human decides on)."""
     if request.param == "memory":
@@ -103,7 +95,7 @@ def test_approving_again_during_the_use_does_not_block_restore(stores: Stores) -
 
 
 def test_rejecting_the_same_action_under_a_new_id_beats_restore(
-    stores: Stores, clock: Clock
+    stores: Stores, clock: Clock[float]
 ) -> None:
     agent, human = stores
     first = used(agent)
@@ -115,7 +107,9 @@ def test_rejecting_the_same_action_under_a_new_id_beats_restore(
     assert agent.use(first, H) is Status.USED
 
 
-def test_rejecting_the_same_action_after_the_restore_wins_too(stores: Stores, clock: Clock) -> None:
+def test_rejecting_the_same_action_after_the_restore_wins_too(
+    stores: Stores, clock: Clock[float]
+) -> None:
     agent, human = stores
     first = used(agent)
     second = ask(agent)
@@ -132,7 +126,7 @@ def test_rejecting_the_same_action_after_the_restore_wins_too(stores: Stores, cl
     assert len(agent.pending()) == 1
 
 
-def test_an_older_rejection_does_not_block_a_newer_approval(clock: Clock) -> None:
+def test_an_older_rejection_does_not_block_a_newer_approval(clock: Clock[float]) -> None:
     store = ApprovalStore(clock=clock, rejection_window=lambda agent: 0)  # not sticky
     store.decide(ask(store), approve=False)
     clock.now += 1

@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from helpers import Clock
 
 from warden.approvals import (
     Approval,
@@ -25,14 +26,6 @@ from warden.models import ActionRequest
 H = "d" * 64
 
 
-class Clock:
-    def __init__(self) -> None:
-        self.now = 1_800_000_000.0
-
-    def __call__(self) -> float:
-        return self.now
-
-
 def act(n: int = 0) -> ActionRequest:
     return ActionRequest(agent_id="a", tool="t", arguments={"n": n})
 
@@ -44,12 +37,12 @@ def ask(store: ApprovalStore, n: int = 0, action_hash: str = H) -> str:
 
 
 @pytest.fixture
-def clock() -> Clock:
-    return Clock()
+def clock() -> Clock[float]:
+    return Clock(1_800_000_000.0)
 
 
 @pytest.fixture
-def two(tmp_path: Path, clock: Clock) -> tuple[ApprovalStore, ApprovalStore]:
+def two(tmp_path: Path, clock: Clock[float]) -> tuple[ApprovalStore, ApprovalStore]:
     path = tmp_path / "a.db"
     return (
         ApprovalStore(db=ApprovalDB(path), clock=clock),
@@ -211,7 +204,7 @@ def test_same_action_on_both_servers_at_once_is_one_approval(two: Two) -> None:
     assert len(a.pending()) == 1
 
 
-def test_a_server_never_deletes_what_another_renewed(two: Two, clock: Clock) -> None:
+def test_a_server_never_deletes_what_another_renewed(two: Two, clock: Clock[float]) -> None:
     a, b = two
     approval_id = ask(a)
     b.pending()  # b knows it, with the old expiry
@@ -223,7 +216,7 @@ def test_a_server_never_deletes_what_another_renewed(two: Two, clock: Clock) -> 
 
 
 def test_expired_rows_that_cant_be_deleted_stay_unusable(
-    two: Two, clock: Clock, monkeypatch: pytest.MonkeyPatch
+    two: Two, clock: Clock[float], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     a, _ = two
     approval_id = ask(a)

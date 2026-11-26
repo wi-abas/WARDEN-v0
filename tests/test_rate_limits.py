@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-from helpers import ADMIN_KEY
+from helpers import ADMIN_KEY, Clock
 from pydantic import ValidationError
 
 from warden.agents import add_agent, load_agents
@@ -22,14 +22,6 @@ from warden.limits import (
 )
 from warden.models import ActionRequest
 from warden.policy import Policy
-
-
-class Clock:
-    def __init__(self) -> None:
-        self.now = 100.0
-
-    def __call__(self) -> float:
-        return self.now
 
 
 def limits(**data: Any) -> Limits:
@@ -72,7 +64,7 @@ def test_invalid_limits_fail_to_load(bad: dict[str, Any]) -> None:
 
 
 def test_bucket_allows_a_burst_then_refills() -> None:
-    clock = Clock()
+    clock = Clock(100.0)
     limiter = RateLimiter(limits(default={"requests_per_minute": 3}), clock=clock)
     assert [limiter.acquire("a") for _ in range(3)] == [0, 0, 0]
     assert limiter.acquire("a") == pytest.approx(20.0)  # one token every 20 s
@@ -84,7 +76,7 @@ def test_bucket_allows_a_burst_then_refills() -> None:
 
 
 def test_bucket_never_exceeds_capacity_and_ignores_clock_going_back() -> None:
-    clock = Clock()
+    clock = Clock(100.0)
     limiter = RateLimiter(limits(default={"requests_per_minute": 2}), clock=clock)
     clock.now += 10_000  # a long idle time doesn't bank more than the capacity
     assert [limiter.acquire("a") for _ in range(3)][2] > 0
@@ -93,7 +85,7 @@ def test_bucket_never_exceeds_capacity_and_ignores_clock_going_back() -> None:
 
 
 def test_too_many_agents_drops_idle_ones_then_fails_closed() -> None:
-    clock = Clock()
+    clock = Clock(100.0)
     limiter = RateLimiter(limits(default={"requests_per_minute": 1}), clock=clock, max_agents=2)
     assert limiter.acquire("a") == 0 and limiter.acquire("b") == 0
     assert limiter.acquire("c") == 60.0  # both still active: refuse a third
