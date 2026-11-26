@@ -52,6 +52,10 @@ Assuming the agent runtime calls Warden and obeys the answer:
   hashes are stored (plus a secret key per agent with which Warden proves itself, so keep
   the agents file private); lookups are constant-time; one agent can't use another's approval.
 - **Flooding by one agent**: per-agent rate limits and pending-approval caps.
+- **Arguments read back from a database copy**: stored `action_hash` values are keyed
+  (HMAC-SHA256) with a secret in its own file (`<audit-db>.hash-key`, mode 600), so a
+  backup of the database alone can't be checked against guessed amounts or recipients.
+  Back up the database without that file, or keep both equally private.
 - **Silent history edits**: the audit log is a hash chain; `warden audit verify` reports
   the first edited, deleted or inserted row.
 - **Checked ≠ executed**: the SDK and the MCP proxy run a tool with exactly the object
@@ -174,5 +178,6 @@ Assuming the agent runtime calls Warden and obeys the answer:
 | Admin key holder (approver) | Yes |
 | Local machine and its users | Yes |
 | Audit database file | Yes (tamper-evident, not tamper-proof; also holds approval state) |
+| Hash key file (`<audit-db>.hash-key`) | Yes (with the database, it lets someone guess arguments from stored hashes) |
 
 Latest audit: [docs/security-audit-2026-11-22-build-session.md](docs/security-audit-2026-11-22-build-session.md).

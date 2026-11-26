@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Security
+- The `action_hash` is keyed (HMAC-SHA256) with a per-install secret in
+  `<audit-db>.hash-key` (mode 600, created on first start). Before, a copy of the
+  database was enough to recover guessable arguments (amounts, recipients) by hashing
+  candidates. Approvals pending from before this change no longer match (ask again).
+
 ## v0.5.0 (2026-11-26, alpha)
 
 ### Security

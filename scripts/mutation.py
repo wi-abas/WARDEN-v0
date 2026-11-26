@@ -97,7 +97,8 @@ TARGETS: dict[str, list[str]] = {
         "test_sdk_refusals.py",
         "test_approval_wait_deadline.py",
     ],
-    "fingerprint": ["test_fingerprint.py"],
+    "fingerprint": ["test_fingerprint.py", "test_hash_key.py"],
+    "hash_key": ["test_hash_key.py"],
     "identity": ["test_identity.py"],
     "api": [
         "test_api.py",
@@ -128,6 +129,7 @@ TARGETS: dict[str, list[str]] = {
         "test_crash_logging.py",
         "test_default_ignorable.py",
         "test_server_identity.py",
+        "test_hash_key.py",
     ],
     "audit": [
         "test_audit.py",

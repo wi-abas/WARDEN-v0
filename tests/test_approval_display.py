@@ -19,9 +19,17 @@ KEY = "k" * 32
 ADMIN = {"X-Warden-Admin-Key": KEY}
 
 
+HASH_KEY = b"k" * 32
+
+
 def pending(tmp_path: Path, arguments: dict[str, object]) -> dict[str, object]:
     client = TestClient(
-        create_app(BASIC_POLICY, audit_log=SQLiteAuditLog(tmp_path / "a.db"), admin_key=KEY)
+        create_app(
+            BASIC_POLICY,
+            audit_log=SQLiteAuditLog(tmp_path / "a.db"),
+            admin_key=KEY,
+            hash_key=HASH_KEY,
+        )
     )
     client.post(
         "/v1/evaluate", json={"agent_id": "a", "tool": "send_email", "arguments": arguments}
@@ -161,7 +169,7 @@ def test_blank_characters_are_escaped_with_a_warning(tmp_path: Path, ch: str) ->
     real = ActionRequest.model_validate(
         {"agent_id": "a", "tool": "send_email", "arguments": arguments}
     )
-    assert item["action_hash"] == fingerprint(real)
+    assert item["action_hash"] == fingerprint(real, HASH_KEY)
 
 
 def test_ordinary_spaces_and_braille_are_untouched(tmp_path: Path) -> None:

@@ -288,6 +288,7 @@ class ApprovalStore:
         # because the monotonic clock starts over with every process.
         self._clock = clock or (time.time if db is not None else time.monotonic)
         self._db = db
+        self.db_path = db.path if db is not None else None
         self._lock = threading.Lock()
         self._items: dict[str, Approval] = {}
         if db is not None:

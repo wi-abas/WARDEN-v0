@@ -275,8 +275,9 @@ Each of these is covered by tests in `tests/`.
 - Per-agent rules: a rule can apply to some agents only (needs agent tokens).
 - URL rules (`host_in`) accept only `http`/`https` by default and refuse bad ports, so
   `ftp://` or `file://` to an allowed host is denied.
-- Every result carries an `action_hash`: a SHA-256 fingerprint of the exact action
-  (agent, tool, arguments). Approvals are bound to it.
+- Every result carries an `action_hash`: a fingerprint of the exact action (agent, tool,
+  arguments), keyed with a secret (HMAC-SHA256) kept in `<audit-db>.hash-key`, so a copy
+  of the database can't be used to guess the arguments. Approvals are bound to it.
 - Optional agent tokens: the agent id comes from a secret, not from the request.
 - Group approvals (`warden approvals approve ID ...`) take exact ids only, one agent and
   tool at a time, all or nothing, and show every action in full before asking.

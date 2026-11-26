@@ -81,10 +81,10 @@ def test_no_match_deny_still_carries_the_fingerprint() -> None:
 
 
 def test_api_response_includes_the_fingerprint() -> None:
-    client = TestClient(create_app(BASIC_POLICY))
+    client = TestClient(create_app(BASIC_POLICY, hash_key=b"k" * 32))
     request = action(tool="send_email", to="a@b.c")
     response = client.post("/v1/evaluate", json=request.model_dump())
-    assert response.json()["action_hash"] == fingerprint(request)
+    assert response.json()["action_hash"] == fingerprint(request, b"k" * 32)
 
 
 def test_non_ascii_fingerprint_never_changes_by_accident() -> None:

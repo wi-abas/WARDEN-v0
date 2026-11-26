@@ -51,6 +51,7 @@ is backed by code and tests, and what it leaves open. Short version: [SECURITY.m
 | Freeze the server via a locked DB (A2) | Rejection records written in the background | `tests/test_locked_database.py` |
 | DNS rebinding from a browser (A6) | `Host` header must be loopback | `tests/test_host_check.py` |
 | Rewrite the policy (A2) | `serve` refuses policy and agents files that are group/world-writable, or where the file or any folder/symlink on the path is owned by neither root nor Warden's user, or any folder is group/world-writable without the sticky bit. Not covered: ACLs, changes after startup, Windows | `tests/test_policy_permissions.py` |
+| Guess arguments from a copy of the database (A3) | `action_hash` is an HMAC with a per-install key in its own 600 file; `serve` refuses a damaged, shared or symlinked key file | `tests/test_hash_key.py` |
 | Edit audit history (A3) | Hash chain; every write read back; triggers and views refused; `audit verify`; checkpoints kept elsewhere catch full rewrites and a cut end | `tests/test_audit_chain.py`, `tests/test_audit_checkpoint.py` |
 | Policy typos that silently disable rules (A4) | Invisible/edge-space rule values fail to load; `warden check` warnings W001–W019; `warden test` | `tests/test_policy_typos.py`, `tests/test_check.py`, `tests/test_policy_tests.py` |
 | Leak secrets through Warden (A1) | Arguments never logged or stored (crashes log only the error type); errors never echo input | `tests/test_hardening.py`, `tests/test_http_errors.py`, `tests/test_crash_logging.py` |

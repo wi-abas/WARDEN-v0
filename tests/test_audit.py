@@ -22,9 +22,12 @@ def body(tool: str = "send_email", **arguments: object) -> dict[str, Any]:
     return {"agent_id": "agent-1", "tool": tool, "arguments": arguments or {"to": "a@b.c"}}
 
 
+HASH_KEY = b"k" * 32
+
+
 def make(tmp_path: Path) -> tuple[TestClient, SQLiteAuditLog]:
     log = SQLiteAuditLog(tmp_path / "audit.db")
-    return TestClient(create_app(BASIC_POLICY, audit_log=log)), log
+    return TestClient(create_app(BASIC_POLICY, audit_log=log, hash_key=HASH_KEY)), log
 
 
 # --- Recording -----------------------------------------------------------------------
@@ -59,7 +62,10 @@ def test_action_hash_identifies_the_action_without_storing_it(tmp_path: Path) ->
     client, log = make(tmp_path)
     request = body(to="boss@example.com")
     client.post("/v1/evaluate", json=request)
-    assert log.recent()[0].action_hash == fingerprint(ActionRequest.model_validate(request))
+    action = ActionRequest.model_validate(request)
+    assert log.recent()[0].action_hash == fingerprint(action, HASH_KEY)
+    # Keyed: a copy of the database alone can't be checked against guessed arguments.
+    assert log.recent()[0].action_hash != fingerprint(action)
 
 
 def test_recent_is_newest_first_and_limited(tmp_path: Path) -> None:

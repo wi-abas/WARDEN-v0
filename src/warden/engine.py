@@ -510,10 +510,13 @@ def evaluate(
     request: ActionRequest,
     rules: Iterable[Rule],
     tools: Mapping[str, ToolSpec] | None = None,
+    hash_key: bytes | None = None,
 ) -> EvaluationResult:
-    """Return Warden's decision for `request` under `rules` and tool specs. Never raises."""
+    """Return Warden's decision for `request` under `rules` and tool specs. Never raises.
+
+    `hash_key` keys the action_hash (fingerprint.py); the server always passes one."""
     try:
-        return _evaluate(request, rules, tools or {})
+        return _evaluate(request, rules, tools or {}, hash_key)
     except Exception as exc:
         # Log only the error type: the message could contain tool arguments (secrets).
         logger.error("policy evaluation failed: %s", type(exc).__name__)
@@ -531,9 +534,12 @@ def _spec_problem(request: ActionRequest, spec: ToolSpec) -> str | None:
 
 
 def _evaluate(
-    request: ActionRequest, rules: Iterable[Rule], tools: Mapping[str, ToolSpec]
+    request: ActionRequest,
+    rules: Iterable[Rule],
+    tools: Mapping[str, ToolSpec],
+    hash_key: bytes | None,
 ) -> EvaluationResult:
-    action_hash = fingerprint(request)
+    action_hash = fingerprint(request, hash_key)
 
     spec = tools.get(request.tool)
     if spec is not None:
