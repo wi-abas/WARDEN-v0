@@ -25,7 +25,9 @@ The simplest rules just name a tool:
 - A rule matches when its `tool` **exactly** equals the requested tool.
 - **No matching rule → deny.**
 - **Several matching rules → the most restrictive wins**: deny > require_approval > allow.
-- Tool names and rule ids: lowercase letters, digits, `_`, `.`, `-`, up to 64 characters.
+- Tool names: letters, digits, `_`, `.`, `-`, up to 64 characters. Case-sensitive:
+  `getIssue` and `getissue` are different tools (`warden check` warns, W020).
+- Rule ids: lowercase letters, digits, `_`, `.`, `-`, up to 64 characters.
 - If the file is missing or **any** rule is invalid, Warden loads no rules and denies everything.
   The log says where the problem is.
 - Rules are loaded at startup. Restart the server after editing.
@@ -421,6 +423,7 @@ do what you meant:
 | W017 | Two `host_in` conditions on the same argument of a tool accept different `schemes` |
 | W018 | A deny rule compares a host name case-sensitively (`EVIL.COM` slips past) |
 | W019 | An `allow` rule uses `endswith` with a bare domain (`"mycompany.com"` also matches `"evilmycompany.com"`) |
+| W020 | Two tool names differ only in upper/lower case (`getIssue` and `getissue` are different tools) |
 
 `--agents FILE` checks the agent names that per-agent rules and `limits.agents` use.
 Without it, a policy with per-agent rules gets a note (not a warning) that

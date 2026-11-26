@@ -8,6 +8,11 @@
   database was enough to recover guessable arguments (amounts, recipients) by hashing
   candidates. Approvals pending from before this change no longer match (ask again).
 
+### Changed
+- Tool names may contain uppercase letters (MCP servers use camelCase, like `getIssue`).
+  Matching is case-sensitive, so another spelling has no rule and is denied by default.
+  `warden check` warns when two tool names differ only in case (W020).
+
 ## v0.5.0 (2026-11-26, alpha)
 
 ### Security

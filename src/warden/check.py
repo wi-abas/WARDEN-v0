@@ -41,6 +41,8 @@ Warnings: the policy loads, but probably doesn't do what you meant:
         "EVIL.COM" slips past it. Add "ignore_case": true.
 - W019  an "allow" rule uses endswith with a bare domain: "mycompany.com" also
         matches "evilmycompany.com". Start it with "@" or ".".
+- W020  two tool names differ only in upper/lower case ("getIssue" and "getissue"):
+        tool names are case-sensitive, so a rule for one never applies to the other.
 
 W003 and W004 take a rule's "agents" into account: a rule for every agent can make a
 per-agent rule dead, but a per-agent deny never kills a rule for every agent.
@@ -154,6 +156,16 @@ def _warnings(policy: Policy) -> list[str]:
     by_tool: dict[str, list[Rule]] = {}
     for rule in rules:
         by_tool.setdefault(rule.tool, []).append(rule)
+
+    by_folded: dict[str, set[str]] = {}
+    for tool in set(by_tool) | set(policy.tools):
+        by_folded.setdefault(tool.casefold(), set()).add(tool)
+    for spellings in sorted(sorted(v) for v in by_folded.values() if len(v) > 1):
+        listed = '", "'.join(spellings)
+        out.append(
+            f'W020: tool names "{listed}" differ only in upper/lower case; tool names are '
+            f"case-sensitive, so a rule for one never applies to the other (typo?)."
+        )
 
     for tool, tool_rules in sorted(by_tool.items()):
         allowed = any(r.effect is Decision.ALLOW for r in tool_rules)

@@ -297,3 +297,19 @@ def test_w019_allowed_domain_without_a_boundary(
     cond = {"arg": arg, "op": "endswith", "value": value}
     policy = {"tools": {"t": {"arguments": [arg]}}, "rules": [r("a", "t", effect, cond)]}
     assert codes(tmp_path, policy) == expected
+
+
+def test_w020_tool_names_differing_only_in_case(tmp_path: Path) -> None:
+    policy = {
+        "rules": [r("a", "getIssue", "allow"), r("b", "getissue", "deny")],
+        "tools": {"GetIssue": {"arguments": []}},
+    }
+    assert codes(tmp_path, policy).count("W020") == 1
+    report = check_policy(write(tmp_path, policy))
+    [warning] = [w for w in report.warnings if w.startswith("W020")]
+    assert '"GetIssue", "getIssue", "getissue"' in warning
+
+
+def test_w020_not_raised_for_one_spelling(tmp_path: Path) -> None:
+    policy = {"rules": [r("a", "getIssue", "allow"), r("b", "getIssue", "deny")]}
+    assert "W020" not in codes(tmp_path, policy)
