@@ -63,6 +63,9 @@ is backed by code and tests, and what it leaves open. Short version: [SECURITY.m
 
 ## What stays open (residual risk)
 
+The biggest residual risks, with reasoning. The complete list of what Warden doesn't
+protect against is kept in one place: [SECURITY.md](../SECURITY.md#what-warden-does-not-protect-against).
+
 1. **Bypass by not asking (critical, by design).** Warden only decides calls routed
    through it. An agent with direct access to a tool, or a client configured to reach an
    MCP server directly, skips it. Mitigation is deployment: give the agent *only* the

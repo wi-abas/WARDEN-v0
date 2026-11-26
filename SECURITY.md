@@ -100,8 +100,8 @@ Assuming the agent runtime calls Warden and obeys the answer:
 - **An impostor on Warden's port, without agent tokens.** If Warden isn't running, another
   local program can listen on its port. **With an agent token** (SDK, MCP proxy) or the
   admin key (`warden approvals`), the client demands proof first: the impostor gets no
-  secret and no argument, and the answer is deny. Not covered: everything **without
-  `--agents`** (no shared secret: the impostor receives the arguments, and its `allow` makes
+  secret and no argument, and the answer is deny. Not covered: everything **with
+  `--no-auth`** (no shared secret: the impostor receives the arguments, and its `allow` makes
   the **tool run**); clients that don't check (curl, plain HTTP, the `/docs` page); whoever
   can read the agents file (its `server_key`s imitate Warden to the agents; keep it mode
   600), the token, the admin key or a process's memory, often any program of the same OS
@@ -148,6 +148,16 @@ Assuming the agent runtime calls Warden and obeys the answer:
   and action.
 - **Argument names that differ only in case**, if the tool ignores case: use tool
   argument lists.
+- **Arguments no rule mentions**, for a tool without an argument list (`tools` entry):
+  they aren't checked. Argument lists check names, not types; a type is only checked when
+  a condition compares the argument.
+- **Approvals pending across a restart** can't be approved until the agent asks again
+  (arguments are never written to disk, so the human couldn't see them).
+- **More than 64 tool calls at once through one proxy**: the rest are refused ("too many
+  calls in progress"), not queued.
+- **The import name `warden`** is also used by an unrelated PyPI package. Don't install
+  both in one environment, and install `agent-warden` from this repository until it is
+  published on PyPI.
 - **A reviewer who doesn't read.** Group approvals make a careful review possible, not
   certain: similar-looking actions in one group must still be compared, and a script
   with the admin key (or `--yes`) can decide ids nobody looked at. A required
@@ -184,4 +194,4 @@ Assuming the agent runtime calls Warden and obeys the answer:
 | Audit database file | Yes (tamper-evident, not tamper-proof; also holds approval state) |
 | Hash key file (`<audit-db>.hash-key`) | Yes (with the database, it lets someone guess arguments from stored hashes) |
 
-Latest audit: [docs/security-audit-2026-11-22-build-session.md](docs/security-audit-2026-11-22-build-session.md).
+Latest audit: [docs/security-audit-2026-11-27.md](docs/security-audit-2026-11-27.md).
