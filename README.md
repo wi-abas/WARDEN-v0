@@ -154,6 +154,13 @@ text = run_guarded("read_file", {"path": "/workspace/a.txt"}, open_and_read, cli
 
 ### 3. Anything else: plain HTTP
 
+For TypeScript / Node there is a ready client that does the identity proof:
+[examples/typescript/warden-client.ts](examples/typescript/warden-client.ts) (about 170
+lines, no dependencies; checked against
+[docs/identity-test-vectors.json](docs/identity-test-vectors.json), which any other
+language can use too).
+
+
 Ask Warden before every tool call, and run the tool **only** on `allow`. Standard library
 only:
 

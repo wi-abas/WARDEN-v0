@@ -20,6 +20,11 @@
   others share the budget for unknown callers. Before, a program that had seen a key id
   could use up an agent's or the admin's hellos, so nobody could approve while it flooded.
 
+### Added
+- `docs/identity-test-vectors.json`: fixed values for the identity proof, for clients in
+  other languages, and `examples/typescript/warden-client.ts`, a dependency-free Node
+  client that does the proof (tested in CI against a real Warden and an impostor).
+
 ### Changed
 - Agent tokens are on by default. `warden serve` refuses to start without `--agents`
   unless `--no-auth` (or `WARDEN_NO_AUTH=1`). The SDK's default client and `warden proxy`

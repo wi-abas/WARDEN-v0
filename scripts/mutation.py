@@ -102,7 +102,7 @@ TARGETS: dict[str, list[str]] = {
     ],
     "fingerprint": ["test_fingerprint.py", "test_hash_key.py"],
     "hash_key": ["test_hash_key.py"],
-    "identity": ["test_identity.py"],
+    "identity": ["test_identity.py", "test_identity_vectors.py"],
     "api": [
         "test_api.py",
         "test_hardening.py",
@@ -185,6 +185,7 @@ EXEMPT: dict[str, str] = {
     "test_adversarial_build_session.py": "cross-module fuzzing and races: too slow per mutant",
     "test_agent_example.py": "tests examples/agent.py",
     "test_benchmark_script.py": "tests scripts/benchmark.py",
+    "test_typescript_client.py": "tests examples/typescript/warden-client.ts",
     "test_check.py": "check isn't a target",
     "test_deep_nesting.py": "one parser limit across many modules, not their logic",
     "test_default_policy.py": "tests the shipped policy file",

@@ -1,0 +1,20 @@
+{
+  "description": "Fixed values for Warden's identity proof (docs/design/server-identity.md). Any client in any language must reproduce every output exactly. Kept in sync with src/warden/identity.py by tests/test_identity_vectors.py.",
+  "token": "wdn_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  "nonce": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "server": "127.0.0.1:8000",
+  "client": "127.0.0.1:54321",
+  "proof_key_hex": "4d0306e0db89012f03fd119092430ef4afc2e99812ccb9b35ada12e17982d08c",
+  "key_id": "d2da178a17bf89b30d2fe1bc5a60cdc0",
+  "hello_mac": "e74c5129313ddb55a7d909aa76c2e190779699c10cf52e50ab4bf732bd2ba18d",
+  "client_hello_mac": "aca286eb25cdd10901557b2be1e3788346b63ca6e59b98bdeb828de1c0ab8000",
+  "answer": {
+    "method": "POST",
+    "target": "/v1/evaluate",
+    "request_body": "{\"tool\": \"t\", \"arguments\": {}}",
+    "status": 429,
+    "retry_after": "7",
+    "body": "{\"decision\": \"deny\"}",
+    "mac": "7b015374a6d3a1f280a6432bb0743b0663d756ae3c13cc5cb9bbd00b6fa0e001"
+  }
+}
