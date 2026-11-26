@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 from helpers import BASIC_POLICY, live_server, shown
+from proof import make_proving
 
 from warden import approvals_cli
 from warden.api import create_app
@@ -364,7 +365,7 @@ def test_non_json_answer_from_a_real_server(capsys: Any, monkeypatch: Any) -> No
 
     app = FastAPI()
     app.get("/v1/approvals")(lambda: PlainTextResponse("<html>"))
-    with live_server(app) as url:
+    with live_server(make_proving(app, KEY)) as url:
         code, _, err = cli(capsys, monkeypatch, "list", "--warden-url", url)
     assert code == 2 and "isn't JSON" in err
 
@@ -393,6 +394,6 @@ def test_deeply_nested_answer_is_refused_cleanly(capsys: Any, monkeypatch: Any) 
 
     app = FastAPI()
     app.get("/v1/approvals")(lambda: PlainTextResponse("[" * 100_000 + "]" * 100_000))
-    with live_server(app) as url:
+    with live_server(make_proving(app, KEY)) as url:
         code, _, err = cli(capsys, monkeypatch, "list", "--warden-url", url)
     assert code == 2 and "isn't JSON" in err

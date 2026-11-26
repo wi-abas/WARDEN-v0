@@ -1,5 +1,8 @@
 # Design: per-agent tokens
 
+(The file also holds `server_key`, with which Warden proves itself to the agent. It can
+imitate Warden, not an agent: [server-identity.md](server-identity.md).)
+
 ## Problem
 
 `agent_id` is self-declared: any local process can claim to be any agent, so per-agent
@@ -11,7 +14,7 @@ agent's approval if it knows the id and the exact action.
 - An **agents file** (JSON, `--agents FILE` / `WARDEN_AGENTS`) lists each agent's id and
   the **SHA-256 hash** of its token. Warden never stores tokens.
   ```json
-  {"agents": [{"id": "billing-agent", "token_sha256": "9f86d0…"}]}
+  {"agents": [{"id": "billing-agent", "token_sha256": "9f86d0…", "server_key": "4d0306…"}]}
   ```
 - `warden agent add <id>` creates a random token (`wdn_` + 256 random bits), stores
   only its hash (file mode 600, written atomically) and prints the token **once**.

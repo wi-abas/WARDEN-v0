@@ -89,12 +89,16 @@ Assuming the agent runtime calls Warden and obeys the answer:
   self-declared and anything that can reach `127.0.0.1` can ask as any agent (and dodge
   per-agent rate limits with new ids). With tokens, a program that can read an agent's
   environment or memory has its token.
-- **An impostor on Warden's port.** Clients (SDK, MCP proxy, `warden approvals`, plain
-  HTTP) don't check that it is really Warden answering. If Warden isn't running, another
-  local program can listen on its port: it then **receives the agent token and the tool
-  arguments** (or the admin key), and its `allow` makes the **tool run**, also with
-  `--agents`. Only run agents while your Warden is running; if its port was taken, replace
-  the tokens and admin key. A fix is designed but not built:
+- **An impostor on Warden's port, without agent tokens.** If Warden isn't running, another
+  local program can listen on its port. **With an agent token** (SDK, MCP proxy) or the
+  admin key (`warden approvals`), the client demands proof first: the impostor gets no
+  secret and no argument, and the answer is deny. Not covered: everything **without
+  `--agents`** (no shared secret: the impostor receives the arguments, and its `allow` makes
+  the **tool run**); clients that don't check (curl, plain HTTP, the `/docs` page); whoever
+  can read the agents file (its `server_key`s imitate Warden to the agents; keep it mode
+  600), the token, the admin key or a process's memory, often any program of the same OS
+  user; and whoever can sniff or change loopback traffic (nothing is encrypted). An impostor
+  can still make everything be denied.
   [docs/design/server-identity.md](docs/design/server-identity.md).
 - **One agent using another agent's permissions.** Per-agent rules (`"agents": [...]`)
   give agents different permissions, and require agent tokens: `warden serve` refuses to
@@ -105,8 +109,10 @@ Assuming the agent runtime calls Warden and obeys the answer:
   decision.
 - **Whoever has the admin key** (or can read the terminal it's printed in, or the
   environment of the Warden process: any program running as the same OS user usually can). It's one shared
-  secret, so there's no record of *which* person approved. `warden approvals` sends the
-  key to whatever listens on the Warden URL, so only use it while Warden is running.
+  secret, so there's no record of *which* person approved. `warden approvals` only sends it
+  to a server that has proven to be Warden; curl sends it to whatever listens. An impostor
+  does see a hash derived from the key, so a guessable key you chose yourself (32+
+  characters, but words or a pattern) could be guessed offline: use a random one.
 - **Whoever can edit the audit database.** The hash chain shows edits, but someone who
   rewrites every later hash too (or cuts off the newest rows) is only caught by comparing
   with checkpoints kept elsewhere (`warden audit head`, `warden audit verify --expect`). They can also change approval state
@@ -161,7 +167,7 @@ Assuming the agent runtime calls Warden and obeys the answer:
 |---|---|
 | Agent and its requests | **No**: all input is validated and treated as hostile |
 | MCP client and MCP server behind the proxy | Yes (the proxy checks what the model asks for) |
-| Agents file (token hashes) | Yes |
+| Agents file (token hashes, secret server keys) | Yes |
 | Agent runtime (calls Warden, obeys answer) | Yes, must be |
 | Policy file | Yes |
 | Admin key holder (approver) | Yes |

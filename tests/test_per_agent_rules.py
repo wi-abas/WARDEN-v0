@@ -26,6 +26,7 @@ from warden.approvals import ApprovalStore
 from warden.audit import SQLiteAuditLog
 from warden.check import check_policy
 from warden.engine import evaluate
+from warden.identity import proof_key
 from warden.models import ActionRequest, Decision, Rule
 from warden.policy import Policy, load_policy, parse_policy
 from warden.policy_tests import run as run_policy_tests
@@ -173,7 +174,10 @@ def test_rule_order_does_not_matter() -> None:
 
 def registry(*ids: str) -> tuple[AgentRegistry, dict[str, str]]:
     tokens = {agent: new_token() for agent in ids}
-    entries = tuple(AgentEntry(id=a, token_sha256=hash_token(t)) for a, t in tokens.items())
+    entries = tuple(
+        AgentEntry(id=a, token_sha256=hash_token(t), server_key=proof_key(t).hex())
+        for a, t in tokens.items()
+    )
     return AgentRegistry(entries), tokens
 
 

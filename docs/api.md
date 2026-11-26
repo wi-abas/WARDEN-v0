@@ -22,6 +22,7 @@ curl -s -X POST http://127.0.0.1:8000/v1/evaluate \
 |---|---|
 | `GET /health` | `{"status": "ok", "rules_loaded": 4}`, or HTTP 503 `"degraded"` when no rules loaded (broken or empty policy file: everything is denied). |
 | `POST /v1/evaluate` | Send an action, get a decision. With agent tokens, needs `Authorization: Bearer <token>` (401/403 otherwise). Over the agent's rate limit: 429 with `Retry-After`; with a valid token, invalid requests (422) count too. |
+| `POST /v1/hello` | Warden proves that it is Warden ([below](#is-it-really-warden)). Body `{"key_id": ..., "nonce": ...}`; 401 for an unknown key. |
 | `GET /v1/approvals` | Admin: pending, unexpired approvals, with their arguments and age, as a JSON list. |
 | `POST /v1/approvals/{id}/approve` | Admin: approve one (once). Body `{"action_hash": ...}` required. |
 | `POST /v1/approvals/{id}/deny` | Admin: deny one (once). Body `{"action_hash": ...}` required for a pending approval; revoking an approved one needs no body. |
@@ -219,7 +220,7 @@ Without tokens, `agent_id` is whatever the caller says. With tokens, it comes fr
 secret only that agent has:
 
 ```sh
-uv run warden agent add billing-agent      # prints the token ONCE (only its hash is stored)
+uv run warden agent add billing-agent      # prints the token ONCE (never stored)
 uv run warden serve --agents warden-agents.json
 ```
 
@@ -233,6 +234,26 @@ agent is refused. Without one, the token alone decides. Approvals can only be us
 `warden agent list` and `warden agent remove <id>` manage the file (`--agents FILE`,
 then `WARDEN_AGENTS`, then `warden-agents.json`; mode 600). To rotate a token: remove, add, restart Warden.
 Changes take effect on restart. Design: [design/agent-tokens.md](design/agent-tokens.md).
+
+The file holds secret keys (below): `warden serve` refuses it if other users can read it.
+
+### Is it really Warden?
+
+Another program could listen on Warden's port. So with a token, the SDK and the MCP proxy
+first ask Warden to prove itself, and send the token and the arguments only after that, on
+the same connection; the answer must be signed. `warden approvals` does the same with the
+admin key. If the proof fails, the answer is deny ("Warden couldn't prove its identity"),
+the tool doesn't run, and a wait for approval ends. There is no way to turn it off, and
+nothing to set up: `warden agent add` stores the key (`server_key`) that Warden proves
+itself with. The client's timeout covers both steps together.
+
+**Without a token nothing is proven**: there is no shared secret, so the client trusts the
+port. The same goes for curl, your own HTTP code and the `/docs` page. A client **with** a
+token is denied by a Warden without `--agents`. An agents file without `server_key` refuses
+to start: delete those entries, add the agents again and hand out the new tokens. Anything
+that changes addresses in between (`ssh -L`, container port mapping) makes the proof fail.
+
+Protocol: [design/server-identity.md](design/server-identity.md).
 
 **Tokens are identity; per-agent rules are permissions.** A rule with
 `"agents": ["billing-agent"]` applies only to that agent (see

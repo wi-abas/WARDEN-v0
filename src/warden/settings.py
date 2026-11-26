@@ -74,6 +74,21 @@ def unsafe_permissions(path: Path) -> str | None:
     return replaceable_by_others(path)  # symlinks, and every folder on the way
 
 
+def readable_by_others(path: Path) -> str | None:
+    """Why other users could read `path`, or None if they can't (POSIX only). For the
+    agents file: its keys let whoever reads them imitate Warden to the agents."""
+    if not _POSIX:
+        return None
+    mode = stat.S_IMODE(path.stat().st_mode)
+    if mode & 0o044:
+        return (
+            f"{path} holds secret keys, and other users can read it (mode {mode:o}); fix: "
+            f"chmod 600 {shlex.quote(str(path))}. If they may have read it, also replace the "
+            "tokens (warden agent remove, then add)"
+        )
+    return None
+
+
 def _is_file(path: Path) -> bool:
     try:
         return path.is_file()
@@ -158,7 +173,7 @@ def resolve(
             raise SettingsError(
                 f"{name}: agents file not found: {raw} (create it with `warden agent add`)"
             )
-        if problem := unsafe_permissions(path):
+        if problem := readable_by_others(path) or unsafe_permissions(path):
             raise SettingsError(f"refusing to use the agents file: {problem}")
         values["agents"] = path
 

@@ -156,7 +156,7 @@ def test_limit_bounds(limits: dict[str, Any], ok: bool) -> None:
 
 
 def test_limits_and_agents_models_are_strict_and_frozen() -> None:
-    entry = AgentEntry(id="a", token_sha256="0" * 64)
+    entry = AgentEntry(id="a", token_sha256="0" * 64, server_key="1" * 64)
     for model, field in (
         (LimitSpec(), "requests_per_minute"),
         (Limits(), "default"),
@@ -170,7 +170,7 @@ def test_limits_and_agents_models_are_strict_and_frozen() -> None:
     with pytest.raises(ValidationError):
         Limits.model_validate({"default": {}, "agents": [("a", {})]})
     with pytest.raises(ValidationError):
-        AgentEntry.model_validate({"id": b"a", "token_sha256": "0" * 64})
+        AgentEntry.model_validate({"id": b"a", "token_sha256": "0" * 64, "server_key": "1" * 64})
     with pytest.raises(ValidationError):
         AgentsFile.model_validate({"agents": [entry]})  # a list is not a tuple
 

@@ -72,10 +72,12 @@ TARGETS: dict[str, list[str]] = {
     ],
     "agents": [
         "test_agent_tokens.py",
+        "test_server_identity.py",
         "test_mutation_gaps.py",
     ],
     "client": [
         "test_client.py",
+        "test_client_proof.py",
         "test_sdk.py",
         "test_agent_tokens.py",
         "test_client_redirects.py",
@@ -86,6 +88,7 @@ TARGETS: dict[str, list[str]] = {
     ],
     "sdk": [
         "test_sdk.py",
+        "test_client_proof.py",
         "test_agent_tokens.py",
         "test_mutation_gaps.py",
         "test_sdk_async_waits.py",
@@ -95,6 +98,7 @@ TARGETS: dict[str, list[str]] = {
         "test_approval_wait_deadline.py",
     ],
     "fingerprint": ["test_fingerprint.py"],
+    "identity": ["test_identity.py"],
     "api": [
         "test_api.py",
         "test_hardening.py",
@@ -123,6 +127,7 @@ TARGETS: dict[str, list[str]] = {
         "test_sticky_rejections.py",
         "test_crash_logging.py",
         "test_default_ignorable.py",
+        "test_server_identity.py",
     ],
     "audit": [
         "test_audit.py",
@@ -145,6 +150,7 @@ TARGETS: dict[str, list[str]] = {
         "test_mcp_proxy_large_numbers.py",
         "test_approval_wait_deadline.py",
         "test_mcp_proxy_hint.py",
+        "test_mcp_proxy_identity.py",
         "test_mcp_proxy_messages.py",
         "test_mcp_proxy_request_ids.py",
         "test_mcp_proxy_startup.py",
@@ -153,6 +159,8 @@ TARGETS: dict[str, list[str]] = {
     "approvals_cli": [
         "test_approvals_cli.py",
         "test_approvals_cli_edges.py",
+        "test_approvals_cli_proof.py",
+        "test_client_redirects.py",
         "test_approvals_flood.py",
         "test_approval_hygiene.py",
         "test_required_action_hash.py",

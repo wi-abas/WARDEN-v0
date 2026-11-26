@@ -13,7 +13,7 @@ is backed by code and tests, and what it leaves open. Short version: [SECURITY.m
 | **Policy file** | Controls every decision | `policies/*.json` (trusted config) |
 | **Approvals** | A human's "yes" to one exact action | Memory + state (no arguments) in the audit DB |
 | **Audit log** | Evidence of what was decided and approved | SQLite, hash-chained |
-| **Agent tokens** | Who an agent is (with `--agents`) | Agents file: SHA-256 hashes only |
+| **Agent tokens** | Who an agent is (with `--agents`) | Agents file: SHA-256 hashes, and the keys that prove Warden (mode 600) |
 | **Admin key** | Approves actions | `WARDEN_ADMIN_KEY` / printed once |
 
 ## Who attacks (and what they can do)
@@ -54,6 +54,7 @@ is backed by code and tests, and what it leaves open. Short version: [SECURITY.m
 | Edit audit history (A3) | Hash chain; every write read back; triggers and views refused; `audit verify`; checkpoints kept elsewhere catch full rewrites and a cut end | `tests/test_audit_chain.py`, `tests/test_audit_checkpoint.py` |
 | Policy typos that silently disable rules (A4) | Invisible/edge-space rule values fail to load; `warden check` warnings W001–W019; `warden test` | `tests/test_policy_typos.py`, `tests/test_check.py`, `tests/test_policy_tests.py` |
 | Leak secrets through Warden (A1) | Arguments never logged or stored (crashes log only the error type); errors never echo input | `tests/test_hardening.py`, `tests/test_http_errors.py`, `tests/test_crash_logging.py` |
+| Take Warden's port to collect tokens, arguments or the admin key, or to answer allow (A2) | With a token or the admin key: Warden proves itself on that connection before anything secret is sent, and answers are signed (not without `--agents`) | `tests/test_client_proof.py`, `tests/test_server_identity.py`, `tests/test_approvals_cli_proof.py`, `tests/test_mcp_proxy_identity.py` |
 | Redirect a client to steal its token (A2) | Clients refuse every redirect | `tests/test_client_redirects.py` |
 | Dodge a deny rule with invisible characters (A1) | Default-ignorable characters count as hidden everywhere | `tests/test_default_ignorable.py` |
 | Use one approval on two servers, or undo a newer "no" (A1) | Revision-checked updates; the database is the truth | `tests/test_shared_approvals_database.py`, `tests/test_restore_vs_rejection.py` |

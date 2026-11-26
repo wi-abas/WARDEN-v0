@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.5.0 (2026-11-26, alpha)
+
+### Security
+- Warden proves its identity. With an agent token (SDK, MCP proxy) or the admin key
+  (`warden approvals`), nothing secret is sent before that, and only signed answers count;
+  otherwise deny. The agents file now holds a secret `server_key` per agent (add agents
+  again) and must not be readable by others. Without `--agents` nothing is proven.
+
 ## v0.4.2 (2026-11-26, alpha)
 
 ### Security

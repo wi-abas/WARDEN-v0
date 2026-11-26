@@ -1,8 +1,8 @@
-# Design: proving that Warden is Warden (not built yet)
+# Design: proving that Warden is Warden (built: option 1)
 
 ## Problem
 
-Clients trust whatever listens on Warden's URL. If Warden is stopped and another local
+Without this, clients trust whatever listens on Warden's URL. If Warden is stopped and another local
 program listens on port 8000, it receives the agent token and the tool arguments, and its
 `allow` makes the tool run. `warden approvals` has the same problem with the admin key.
 Agent tokens prove the agent to Warden; nothing proves Warden to the agent.
@@ -48,31 +48,59 @@ Keys:
 Steps, on **one** TCP connection (`http.client`, `auto_open = 0` so it can't reconnect):
 
 1. The client connects and reads the peer's numeric address from the socket
-   (`getpeername`): `addr = "127.0.0.1:8000"` (or `"[::1]:8000"`).
+   (`getpeername`): `addr = "127.0.0.1:8000"` (or `"[::1]:8000"`), and its own
+   (`getsockname`): `caddr = "127.0.0.1:54321"`.
 2. Client: `POST /v1/hello` with `{"key_id": ..., "nonce": N}`, `N` = 32 random bytes as
    hex, fresh for every question. No token, no arguments.
-3. Server: `{"mac": hex(HMAC(K, "warden-hello-v1\n" + N + "\n" + addr))}`. Here `addr` is the
-   server's **own** socket address (ASGI `scope["server"]`), never the `Host` header.
-   Unknown `key_id`: 401.
+3. Server: `{"mac": hex(HMAC(K, "warden-hello-v1\n" + N + "\n" + addr + "\n" + caddr))}`.
+   Here `addr` is the server's **own** socket address (ASGI `scope["server"]`) and `caddr`
+   its peer (`scope["client"]`), never a header. Unknown `key_id`: 401.
 4. The client compares with `hmac.compare_digest`. Mismatch: close, nothing more is sent.
 5. Client: `POST /v1/evaluate` as today (bearer token included), plus the header
    `Warden-Nonce: N`.
 6. Server: answers as today, plus the header `Warden-Mac: hex(HMAC(K, M))`, where
-   `M = "warden-answer-v1\n" + N + "\n" + addr + "\n" + method + "\n" + path_and_query +
-   "\n" + hex(SHA256(request body)) + "\n" + status + "\n" + hex(Retry-After or "") + "\n" +
+   `M = "warden-answer-v1\n" + N + "\n" + addr + "\n" + caddr + "\n" + method + "\n" +
+   hex(path_and_query) + "\n" + hex(SHA256(request body)) + "\n" + status + "\n" + hex(Retry-After or "") + "\n" +
    hex(SHA256(response body))`, over the exact bytes.
 7. The client checks the MAC over the bytes it sent and received **before** parsing. Only
    then does the answer (also its `Retry-After`) count.
 
 Admin endpoints use the same steps with the admin key's `K`.
 Why `addr` is signed: an impostor on 8000 could otherwise pass the hello on to a Warden on
-another port. Why the request is signed: an `allow` for one action can't be used for
+another port. Why `caddr` is signed too: see below. Why the request is signed: an `allow` for one action can't be used for
 another. Why `N` is fresh: old answers can't be replayed. The labels keep a hello MAC
 from being an answer MAC.
 
-The server keeps no hello state. `hello` gets the host check and body limit that other
-endpoints have, and a fixed budget of its own: no agent is proven yet, so it can't use
-per-agent limits. The token must belong to the agent whose `K` signs the answer: after the
+**`caddr` (a flaw in the first version of this note).** The server's address alone isn't
+enough. An impostor takes a connection while Warden is down, frees the port at once, waits
+until Warden runs on that same port, and passes the hello on: `addr` is the same. With
+`caddr` in the MAC, Warden signs the impostor's own client address, which can't be the
+victim's: that connection exists. Uvicorn by default takes the client address from
+`X-Forwarded-For` (with a port), which the impostor could write, so `serve` turns that off,
+and a request with that header gets no proof and no signature (400), however Warden is run.
+
+**What is signed.** Every answer to a request with exactly one valid `Warden-Nonce` and
+exactly one valid secret for that path, also 4xx/5xx and refusals by middleware. Not
+signed, so denied by the client: an answer given before the whole body was read (411, 413,
+a foreign `Host`), Uvicorn's own 400, and a crash while signing. The body limit still
+counts every byte that arrives; the signer only hashes them in passing.
+
+**Timeout.** One deadline covers connecting, hello and question (single bytes don't extend
+it). No proof in time: "couldn't prove". After the proof, a timeout or lost connection is
+`unreachable`, as before: that connection was Warden's, and it never allows.
+
+**Hello budgets.** The server keeps no hello state. `hello` has the host check and body
+limit of the other endpoints. A hello isn't authenticated, so a single budget would let any
+program starve all agents. Instead each known key has its own (6,000 per minute, or four
+times the agent's request limit if that is more: an agent over its limit must still get its
+signed 429), and unknown `key_id`s share another (600 per minute). A hello costs about as
+much as `/health`. Key ids are sent in the clear, so a program that was an impostor once
+knows one and can use up that agent's hellos (that agent is then denied).
+
+**Not an oracle.** Anyone who knows a `key_id` can have MACs made, but only for the
+caller's own connection, and with the hello label. `key_id`s are looked up by comparing all
+of them in constant time. Nonces and MACs are in bodies and headers, so never in the access
+log. The token must belong to the agent whose `K` signs the answer: after the
 token check, the server takes `K` from the authenticated agent.
 
 ## Where the secrets live, and setup
@@ -89,8 +117,8 @@ export WARDEN_AGENT_TOKEN=wdn_...   # nothing else to copy to the client
 ```
 
 `server_key` is required: an agents file without it refuses to start, naming the agents to
-remove and add again (the key can't be computed from the hash). `warden serve` also
-refuses an agents file that group or others can **read** (today: only write). Rotating a
+delete and add again (the key can't be computed from the hash). `warden serve` also
+refuses an agents file that group or others can **read** (not only write). Rotating a
 token rotates `K`. The token is still sent in step 5, so a stolen agents file lets someone
 imitate Warden, but not the agent.
 
@@ -103,6 +131,8 @@ imitate Warden, but not the agent.
 - A failed proof is never retried as unproven, and not as `unreachable` either: a polling
   wait ends with the deny. Connection refused or lost stays `unreachable` (a restart).
 - An HTTP error without a valid MAC is a plain deny; its reason and `Retry-After` are ignored.
+- `warden approvals` prints nothing from an unproven answer. A hello 401 is "the key is
+  wrong, or it isn't Warden": which one can't be known.
 - Server: any error while signing means a 500 without a MAC, which the client denies.
   `K` is never logged, shown in a repr or put in an error.
 
@@ -117,20 +147,26 @@ server without `--agents` is denied (unknown `key_id`).
 ## Threat model
 
 Stops: a program that took Warden's port (or `::1` behind `localhost`), changed or replayed
-answers, an answer for another action, relaying to a Warden on another address, downgrade.
+answers, an answer for another action, relaying to a Warden on another address or (later)
+on the same one, downgrade.
 
 Doesn't cover:
 
 - Whoever can read the agents file, the token, the admin key or either process's memory;
   often any program of the same OS user.
 - Root, or anyone who can sniff or inject on loopback: there is no encryption.
-- Someone who can forward the **same** address to the real Warden (e.g. local firewall rules).
-- Clients that don't check (curl, the README's plain-HTTP example, `/docs`, the agent example),
-  and everything without `--agents`.
+- Anything between client and Warden that keeps both addresses (firewall rules, as root).
+  A forwarder that changes one (`ssh -L`, container port mapping) makes every call denied.
+- Clients that don't check (curl, the README's plain-HTTP example, `/docs`, `examples/agent.py`
+  without `WARDEN_AGENT_TOKEN`), and everything without `--agents`.
+- A guessable `WARDEN_ADMIN_KEY`: `key_id` lets an impostor test guesses offline. Agent
+  tokens and the generated admin key are random, so this only concerns a key chosen by hand
+  (Warden checks its length, not its randomness).
+- Finding out that Warden is expected: an impostor sees the hello (a key id, a nonce).
 - A real Warden with a bad policy, or denial of service by taking the port (the result is
   deny).
 
-## Tests to write
+## Tests
 
 1. Impostor that always answers allow, with a token set: deny, tool not run, and it never
    received the token or any argument (SDK sync, SDK async, proxy).
