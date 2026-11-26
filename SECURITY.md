@@ -51,7 +51,9 @@ Assuming the agent runtime calls Warden and obeys the answer:
 - **Agent impersonation** (with `--agents`): the agent id comes from a token; only token
   hashes are stored (plus a secret key per agent with which Warden proves itself, so keep
   the agents file private); lookups are constant-time; one agent can't use another's approval.
-- **Flooding by one agent**: per-agent rate limits and pending-approval caps.
+- **Flooding by one agent**: per-agent rate limits and pending-approval caps. Identity
+  handshakes (`/v1/hello`) count against an agent's (or the admin's) budget only when the
+  caller proves it holds the key, so a program that saw a key id can't lock its owner out.
 - **Arguments read back from a database copy**: stored `action_hash` values are keyed
   (HMAC-SHA256) with a secret in its own file (`<audit-db>.hash-key`, mode 600), so a
   backup of the database alone can't be checked against guessed amounts or recipients.

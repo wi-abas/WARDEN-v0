@@ -45,6 +45,7 @@ import sys
 import threading
 import time
 import unicodedata
+from collections import OrderedDict
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -115,9 +116,12 @@ APPROVALS_PATH = "/v1/approvals"
 # How often one agent (or the admin) may say hello. Every question needs one, so agents
 # with higher request limits get more: see _hello_limits.
 HELLOS_PER_MINUTE = 6000
-# Hellos nobody's key belongs to. A budget of their own, so a program without a token
-# can't use up the agents'.
+# Hellos that don't prove their key (unknown key_id, or no valid client_mac). A budget of
+# their own, so a program that only knows a key id can't use up the agents' or admin's.
 UNKNOWN_HELLOS_PER_MINUTE = 600
+# Client nonces seen with a valid client_mac in the last minute (a replayed one counts as
+# unknown). At most this many are kept; beyond that, hellos count as unknown (fail safe).
+MAX_SEEN_HELLO_NONCES = 200_000
 CANT_PROVE = "can't prove Warden's identity on this connection"
 # Rejected requests are recorded by a background worker, never on the server's main
 # loop: if the database is locked (e.g. someone has it open), a synchronous write would
@@ -560,6 +564,8 @@ class Hello(BaseModel):
 
     key_id: str = Field(pattern=identity.KEY_ID_PATTERN)
     nonce: str = Field(pattern=identity.NONCE_PATTERN)
+    # Optional (plain HTTP clients may leave it out): see identity.client_hello_mac.
+    client_mac: str | None = Field(default=None, pattern=identity.NONCE_PATTERN)
 
 
 def _hello_limits(limits: Limits, agent_ids: list[str]) -> Limits:
@@ -628,6 +634,7 @@ class _Warden:
     _window_start: float = -1e18
     _window_count: int = 0  # mutation-ok: reset on the first rejection
     _suppressed: int = 0
+    _seen_hello_nonces: OrderedDict[str, float] = field(default_factory=OrderedDict, repr=False)
 
     def __post_init__(self) -> None:
         if self.limiter is None:
@@ -658,18 +665,45 @@ class _Warden:
         """Prove this is Warden, on this very connection, to whoever holds the secret
         behind key_id. No secret is sent here: the caller doesn't trust us yet."""
         found = self._find_key(body.key_id)
-        if found is None:
-            if wait := self._unknown_hellos.acquire(":unknown"):
-                return self.refuse_rate_limited(request.scope, wait)
-            return self.reject(request, 401, "unknown key_id")
-        name, key = found
-        if wait := self._hellos.acquire(name):
-            return self.refuse_rate_limited(request.scope, wait)
         try:
             server, client = connection_ends(request.scope)
         except ValueError:
+            ends = None
+        else:
+            ends = server, client
+        proven = (
+            found is not None
+            and ends is not None
+            and body.client_mac is not None
+            and identity.same_mac(
+                identity.client_hello_mac(found[1], body.nonce, *ends), body.client_mac
+            )
+            and self._first_use(body.nonce)
+        )
+        # Only a caller that holds the key spends that agent's (or the admin's) budget.
+        if found is not None and proven:
+            wait = self._hellos.acquire(found[0])
+        else:
+            wait = self._unknown_hellos.acquire(":unknown")
+        if wait:
+            return self.refuse_rate_limited(request.scope, wait)
+        if found is None:
+            return self.reject(request, 401, "unknown key_id")
+        if ends is None:
             return self.reject(request, 400, CANT_PROVE)
-        return JSONResponse({"mac": identity.hello_mac(key, body.nonce, server, client)})
+        return JSONResponse({"mac": identity.hello_mac(found[1], body.nonce, *ends)})
+
+    def _first_use(self, nonce: str) -> bool:
+        """True the first time `nonce` comes with a valid client_mac in the last minute."""
+        now = self.clock()
+        with self._limit_lock:
+            seen = self._seen_hello_nonces
+            while seen and next(iter(seen.values())) <= now - 60:
+                seen.popitem(last=False)
+            if nonce in seen or len(seen) >= MAX_SEEN_HELLO_NONCES:
+                return False
+            seen[nonce] = now
+            return True
 
     def _find_key(self, key_id: str) -> tuple[str, bytes] | None:
         agent = None if self.agents is None else self.agents.find_key(key_id)

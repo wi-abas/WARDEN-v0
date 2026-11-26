@@ -15,6 +15,11 @@
 - Email rules refuse MIME encoded-words (`=?utf-8?q?...?=@x.com`) and local parts
   starting with `-` or `|` (option and pipe injection in sendmail-style tools).
 
+- `/v1/hello` takes an optional `client_mac` (the SDK, proxy and `warden approvals` send
+  it). Only hellos with a valid one count against that agent's or the admin's budget;
+  others share the budget for unknown callers. Before, a program that had seen a key id
+  could use up an agent's or the admin's hellos, so nobody could approve while it flooded.
+
 ### Changed
 - Agent tokens are on by default. `warden serve` refuses to start without `--agents`
   unless `--no-auth` (or `WARDEN_NO_AUTH=1`). The SDK's default client and `warden proxy`
