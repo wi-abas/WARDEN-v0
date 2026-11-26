@@ -330,7 +330,12 @@ def init_policy(path: Path) -> int:
     if path.exists():
         print(f"warden: {path} already exists, not overwriting it", file=sys.stderr)
         return 1
+    # Folders made here are 755 whatever the umask: with umask 002 they'd be group-writable,
+    # and serve refuses a policy reached through such a folder.
+    missing = [p for p in (path.parent, *path.parent.parents) if not p.exists()]
     path.parent.mkdir(parents=True, exist_ok=True)
+    for folder in missing:
+        folder.chmod(0o755)
     path.write_text(starter_policy(), encoding="utf-8")
     path.chmod(0o644)  # others may read, only you may change it (serve refuses otherwise)
     print(f"Created {path}. Next:")
