@@ -27,6 +27,7 @@ from warden import cli, identity
 from warden.agents import AgentsError, add_agent, load_agents, read_agents_file, remove_agent
 from warden.api import AnswerSigner, CrashGuard, StartupError, create_app
 from warden.audit import SQLiteAuditLog
+from warden.client import WardenClient
 from warden.settings import Settings, SettingsError, resolve
 
 READ = {"tool": "read_file", "arguments": {"path": "/a"}}
@@ -74,8 +75,14 @@ class Wire:
         raw = response.read()
         return response.status, {k.lower(): v for k, v in response.getheaders()}, raw
 
-    def hello(self, key: bytes, nonce: str = NONCE, **headers: str) -> tuple[int, Any]:
-        body = json.dumps({"key_id": identity.key_id(key), "nonce": nonce}).encode()
+    def hello(
+        self, key: bytes, nonce: str = NONCE, *, proven: bool = True, **headers: str
+    ) -> tuple[int, Any]:
+        """A hello as a real client sends it (with client_mac), or without (`proven`)."""
+        data = {"key_id": identity.key_id(key), "nonce": nonce}
+        if proven:
+            data["client_mac"] = identity.client_hello_mac(key, nonce, self.server, self.client)
+        body = json.dumps(data).encode()
         status, _, raw = self.send("POST", "/v1/hello", body, headers)
         return status, json.loads(raw)
 
@@ -302,7 +309,11 @@ def test_the_client_address_cant_be_forged(url: str, tokens: dict[str, str], nam
     passes a hello on could write its victim's address there."""
     victim = Wire(url)
     relay, k = Wire(url), key(tokens["agent-a"])
-    status, answer = relay.hello(k, **{name: victim.client})
+    hello = {"key_id": identity.key_id(k), "nonce": NONCE}
+    status, _, raw = relay.send(
+        "POST", "/v1/hello", json.dumps(hello).encode(), {name: victim.client}
+    )
+    answer = json.loads(raw)
     assert status == 400 and answer["decision"] == "deny" and "mac" not in answer
     body = json.dumps(READ).encode()
     headers = {**bearer(tokens["agent-a"]), name: victim.client}
@@ -348,15 +359,16 @@ def test_one_agent_cant_use_up_anothers_hellos(
         a, b = key(tokens["agent-a"]), key(tokens["agent-b"])
         for _ in range(warden.api.HELLOS_PER_MINUTE):
             assert w._hellos.acquire("agent-a") == 0
-        status, answer = wire.hello(a)
+        fresh = identity.new_nonce  # real clients never reuse a nonce
+        status, answer = wire.hello(a, fresh())
         assert status == 429 and answer["decision"] == "deny" and "mac" not in answer
         # Nor can a program without any token:
         for _ in range(warden.api.UNKNOWN_HELLOS_PER_MINUTE):
             assert w._unknown_hellos.acquire(":unknown") == 0
-        assert wire.hello(b"nobody's")[0] == 429
-        assert wire.hello(b)[0] == 200 and wire.hello(key(ADMIN_KEY))[0] == 200
+        assert wire.hello(b"nobody's", fresh())[0] == 429
+        assert wire.hello(b, fresh())[0] == 200 and wire.hello(key(ADMIN_KEY), fresh())[0] == 200
         now[0] += 1  # refills
-        assert wire.hello(a)[0] == 200 and wire.hello(b"nobody's")[0] == 401
+        assert wire.hello(a, fresh())[0] == 200 and wire.hello(b"nobody's", fresh())[0] == 401
 
 
 @pytest.mark.parametrize(("limit", "hellos"), [(1, 6000), (5000, 20000), (90_000, 100_000)])
@@ -628,3 +640,94 @@ def test_keys_nonces_and_arguments_appear_nowhere(
         assert value not in text, "in a log or repr"
         assert value.encode() not in stored, "in the database"
     assert repr(k)[2:-1] not in text
+
+
+# --- Hello budgets: only a caller that holds the key spends it ----------------------------
+
+
+@pytest.fixture
+def frozen_clock(app: FastAPI) -> list[float]:
+    now = [0.0]
+    w = app.state.warden
+    w._hellos._clock = w._unknown_hellos._clock = lambda: now[0]
+    w.clock = lambda: now[0]
+    return now
+
+
+def drain_unknown(app: FastAPI) -> None:
+    for _ in range(warden.api.UNKNOWN_HELLOS_PER_MINUTE):
+        assert app.state.warden._unknown_hellos.acquire(":unknown") == 0
+
+
+@pytest.mark.parametrize("who", ["agent-a", "admin"])
+def test_flooding_hellos_with_a_known_key_id_cant_lock_out_its_owner(
+    app: FastAPI, tokens: dict[str, str], frozen_clock: list[float], who: str
+) -> None:
+    """The key id travels in the clear. A program that saw it sends hellos without
+    client_mac: they come out of the shared unknown budget, never the owner's."""
+    k = key(tokens[who] if who != "admin" else ADMIN_KEY)
+    with live_server(app) as url:
+        flood = Wire(url)
+        for _ in range(warden.api.UNKNOWN_HELLOS_PER_MINUTE):
+            assert flood.hello(k, identity.new_nonce(), proven=False)[0] == 200
+        assert flood.hello(k, identity.new_nonce(), proven=False)[0] == 429
+        # The owner (a real client, with client_mac) still gets through.
+        assert Wire(url).hello(k, identity.new_nonce())[0] == 200
+        client = WardenClient(url, token=tokens["agent-a"])
+        assert client.evaluate("read_file", {"path": "/a"}).allowed
+
+
+def test_a_wrong_or_replayed_client_mac_counts_as_unknown(
+    app: FastAPI, tokens: dict[str, str], frozen_clock: list[float]
+) -> None:
+    k = key(tokens["agent-a"])
+    with live_server(app) as url:
+        wire = Wire(url)
+        nonce = identity.new_nonce()
+        assert wire.hello(k, nonce)[0] == 200  # first use: agent-a's budget
+        drain_unknown(app)
+        assert wire.hello(k, nonce)[0] == 429  # the same nonce again: unknown budget
+        wrong = {
+            "key_id": identity.key_id(k),
+            "nonce": identity.new_nonce(),
+            "client_mac": "0" * 64,
+        }
+        assert wire.send("POST", "/v1/hello", json.dumps(wrong).encode(), {})[0] == 429
+        # A client_mac made for another connection (relayed) doesn't match this one.
+        other = Wire(url)
+        fresh = identity.new_nonce()
+        relayed = {
+            "key_id": identity.key_id(k),
+            "nonce": fresh,
+            "client_mac": identity.client_hello_mac(k, fresh, other.server, other.client),
+        }
+        assert wire.send("POST", "/v1/hello", json.dumps(relayed).encode(), {})[0] == 429
+        assert wire.hello(k, identity.new_nonce())[0] == 200  # a real one still works
+
+
+def test_without_client_mac_a_hello_is_still_answered(url: str, tokens: dict[str, str]) -> None:
+    """Plain HTTP clients may leave client_mac out: same answer, shared budget."""
+    wire, k = Wire(url), key(tokens["agent-b"])
+    status, answer = wire.hello(k, proven=False)
+    assert status == 200
+    assert answer["mac"] == identity.hello_mac(k, NONCE, wire.server, wire.client)
+
+
+@pytest.mark.parametrize("bad", ["", "x" * 64, "A" * 64, "0" * 63])
+def test_malformed_client_mac_is_refused(url: str, tokens: dict[str, str], bad: str) -> None:
+    body = {"key_id": identity.key_id(key(tokens["agent-a"])), "nonce": NONCE, "client_mac": bad}
+    assert Wire(url).send("POST", "/v1/hello", json.dumps(body).encode(), {})[0] == 422
+
+
+def test_seen_nonces_expire_and_are_capped(
+    app: FastAPI, frozen_clock: list[float], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    w = app.state.warden
+    assert w._first_use("a" * 64) and not w._first_use("a" * 64)
+    frozen_clock[0] += 60
+    assert w._first_use("a" * 64)  # a minute later it is forgotten
+    monkeypatch.setattr(warden.api, "MAX_SEEN_HELLO_NONCES", 1)
+    assert not w._first_use("b" * 64)  # full: counts as unknown (fail safe)
+    frozen_clock[0] += 61
+    assert w._first_use("b" * 64)
+    assert "a" * 64 not in repr(w)

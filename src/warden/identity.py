@@ -65,6 +65,15 @@ def hello_mac(key: bytes, nonce: str, server: str, client: str) -> str:
     return _mac(key, ["warden-hello-v1", nonce, server, client])
 
 
+def client_hello_mac(key: bytes, nonce: str, server: str, client: str) -> str:
+    """Sent WITH the hello: shows Warden that the caller holds `key`, so the hello counts
+    against that agent's (or the admin's) budget. Without it (or wrong), the hello counts
+    against the shared budget for unknown callers, so a program that only knows a key id
+    can't use up anyone's hellos. Reveals nothing secret, and is bound to this connection's
+    ends: replaying it on another connection doesn't match."""
+    return _mac(key, ["warden-client-hello-v1", nonce, server, client])
+
+
 def answer_mac(
     key: bytes,
     *,

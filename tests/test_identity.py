@@ -7,7 +7,16 @@ from typing import Any
 import pytest
 
 from warden import identity
-from warden.identity import address, answer_mac, hello_mac, is_nonce, key_id, new_nonce, same_mac
+from warden.identity import (
+    address,
+    answer_mac,
+    client_hello_mac,
+    hello_mac,
+    is_nonce,
+    key_id,
+    new_nonce,
+    same_mac,
+)
 
 TOKEN = "wdn_" + "A" * 43
 NONCE = "0123456789abcdef" * 4
@@ -163,3 +172,15 @@ def test_odd_addresses_are_refused(bad: object) -> None:
 def test_odd_secrets_dont_raise() -> None:
     """An error here would quote the secret."""
     assert identity.proof_key("wdn_\udcff") != identity.proof_key("wdn_")
+
+
+VECTOR_CLIENT_HELLO = "aca286eb25cdd10901557b2be1e3788346b63ca6e59b98bdeb828de1c0ab8000"
+
+
+def test_client_hello_vector_and_construction() -> None:
+    assert client_hello_mac(KEY, NONCE, SERVER, CLIENT) == VECTOR_CLIENT_HELLO
+    message = f"warden-client-hello-v1\n{NONCE}\n{SERVER}\n{CLIENT}".encode()
+    assert VECTOR_CLIENT_HELLO == hmac.new(KEY, message, hashlib.sha256).hexdigest()
+    # Never the same as Warden's own hello MAC: one can't stand in for the other.
+    assert VECTOR_CLIENT_HELLO != hello_mac(KEY, NONCE, SERVER, CLIENT)
+    assert client_hello_mac(KEY, NONCE, SERVER, "127.0.0.1:1") != VECTOR_CLIENT_HELLO

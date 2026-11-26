@@ -207,7 +207,13 @@ def _check_hello(
     connection: _OneConnection, key: bytes, nonce: str, server: str, client: str
 ) -> None:
     """Raise unless the other end proves that it has `key`. Sends no secret."""
-    hello = json.dumps({"key_id": identity.key_id(key), "nonce": nonce}).encode()
+    hello = json.dumps(
+        {
+            "key_id": identity.key_id(key),
+            "nonce": nonce,
+            "client_mac": identity.client_hello_mac(key, nonce, server, client),
+        }
+    ).encode()
     try:
         connection.request("POST", identity.HELLO_PATH, hello, {"content-type": "application/json"})
         response = connection.getresponse()

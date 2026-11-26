@@ -50,8 +50,11 @@ Steps, on **one** TCP connection (`http.client`, `auto_open = 0` so it can't rec
 1. The client connects and reads the peer's numeric address from the socket
    (`getpeername`): `addr = "127.0.0.1:8000"` (or `"[::1]:8000"`), and its own
    (`getsockname`): `caddr = "127.0.0.1:54321"`.
-2. Client: `POST /v1/hello` with `{"key_id": ..., "nonce": N}`, `N` = 32 random bytes as
-   hex, fresh for every question. No token, no arguments.
+2. Client: `POST /v1/hello` with `{"key_id": ..., "nonce": N, "client_mac": C}`, `N` = 32
+   random bytes as hex, fresh for every question, and
+   `C = hex(HMAC(K, "warden-client-hello-v1\n" + N + "\n" + addr + "\n" + caddr))`
+   (optional; it only decides which budget the hello counts against, see below).
+   No token, no arguments.
 3. Server: `{"mac": hex(HMAC(K, "warden-hello-v1\n" + N + "\n" + addr + "\n" + caddr))}`.
    Here `addr` is the server's **own** socket address (ASGI `scope["server"]`) and `caddr`
    its peer (`scope["client"]`), never a header. Unknown `key_id`: 401.
@@ -89,13 +92,18 @@ counts every byte that arrives; the signer only hashes them in passing.
 it). No proof in time: "couldn't prove". After the proof, a timeout or lost connection is
 `unreachable`, as before: that connection was Warden's, and it never allows.
 
-**Hello budgets.** The server keeps no hello state. `hello` has the host check and body
-limit of the other endpoints. A hello isn't authenticated, so a single budget would let any
-program starve all agents. Instead each known key has its own (6,000 per minute, or four
-times the agent's request limit if that is more: an agent over its limit must still get its
-signed 429), and unknown `key_id`s share another (600 per minute). A hello costs about as
-much as `/health`. Key ids are sent in the clear, so a program that was an impostor once
-knows one and can use up that agent's hellos (that agent is then denied).
+**Hello budgets.** `hello` has the host check and body limit of the other endpoints. A hello
+with a valid `client_mac` (the caller holds K) counts against that key's own budget (6,000
+per minute, or four times the agent's request limit if that is more: an agent over its limit
+must still get its signed 429). Every other hello (unknown `key_id`, no `client_mac`, a wrong
+one, one made for another connection, or a nonce already used with one in the last minute)
+counts against a shared budget for unknown callers (600 per minute). Key ids are sent in
+the clear, so before this a program that was an impostor once could use up that agent's (or
+the admin's) hellos; now it only uses up the shared budget. The server remembers the nonces
+of the last minute that came with a valid `client_mac` (at most 200,000; when full, hellos
+count as unknown). `client_mac` never changes the answer: a hello without one is answered
+the same way, so plain HTTP clients keep working, sharing the unknown budget. It reveals
+nothing about K, and a relayed one doesn't match the relay's connection.
 
 **Not an oracle.** Anyone who knows a `key_id` can have MACs made, but only for the
 caller's own connection, and with the hello label. `key_id`s are looked up by comparing all
