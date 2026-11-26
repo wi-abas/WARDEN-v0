@@ -45,6 +45,9 @@ Keys:
 - Admin: the same formula with the admin key (the server has it).
 - `key_id = hex(SHA256("warden-key-id-v1\n" + K))[:32]`: says which key, reveals nothing.
 
+Fixed test values for clients in other languages: [identity-test-vectors.json](../identity-test-vectors.json).
+A TypeScript client: [examples/typescript/warden-client.ts](../../examples/typescript/warden-client.ts).
+
 Steps, on **one** TCP connection (`http.client`, `auto_open = 0` so it can't reconnect):
 
 1. The client connects and reads the peer's numeric address from the socket
