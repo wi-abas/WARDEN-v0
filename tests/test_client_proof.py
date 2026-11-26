@@ -124,9 +124,16 @@ BAD_HELLOS: dict[str, Callable[[socket.socket], bytes]] = {
 }
 
 
+READ_THE_HELLO = {"500", "201", "uppercase", "truncated", "oversized"}
+
+
 @pytest.mark.parametrize("which", BAD_HELLOS)
 def test_bad_hello_answers(which: str) -> None:
     def act(sock: socket.socket) -> None:
+        # Read the hello before answering (the valid_hello cases read it themselves). Data
+        # never read is lost when the client closes, and the test then saw nothing.
+        if which not in READ_THE_HELLO:
+            read_message(sock)
         sock.sendall(BAD_HELLOS[which](sock))
         if which == "bad length":
             sock.shutdown(socket.SHUT_WR)
