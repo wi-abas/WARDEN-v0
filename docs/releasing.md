@@ -8,7 +8,7 @@ no PyPI token to leak.
 > trusted publisher, see step 1). Until the first upload succeeds, the name
 > `agent-warden` on PyPI could be claimed by **someone else**: don't `pip install` or
 > `pip download` it, and don't tell users to. Install the git tag instead (needs `git`):
-> `pip install "git+https://github.com/wi-abas/agent-warden@v0.4.2"`
+> `pip install "git+https://github.com/wi-abas/agent-warden@v0.5.0"`
 
 ## One-time setup (by hand, by the repository owner)
 
@@ -36,8 +36,8 @@ no PyPI token to leak.
    under the new version. Commit to `main` (through a pull request, CI green).
 2. Tag and push:
    ```sh
-   git tag -a v0.4.2 -m "v0.4.2"
-   git push origin v0.4.2
+   git tag -a v0.5.0 -m "v0.5.0"
+   git push origin v0.5.0
    ```
 3. The workflow checks that the tag matches the version, runs every check, builds,
    writes an SBOM, attests the files, then waits for your approval in the `pypi`
@@ -53,8 +53,8 @@ no PyPI token to leak.
 Only once the release is really on PyPI (not yet, see the top):
 
 ```sh
-pip download agent-warden==0.4.2 --no-deps -d check/
-gh attestation verify check/agent_warden-0.4.2-py3-none-any.whl --repo wi-abas/agent-warden
+pip download agent-warden==0.5.0 --no-deps -d check/
+gh attestation verify check/agent_warden-0.5.0-py3-none-any.whl --repo wi-abas/agent-warden
 ```
 
 The attestation proves the file was built by this repository's release workflow from
