@@ -295,39 +295,20 @@ Each of these is covered by tests in `tests/`.
 
 ## Known limitations
 
-- **Agent tokens can be switched off.** With `--no-auth`, any process on this machine can
-  call `/v1/evaluate` with any `agent_id` (and dodge per-agent limits by inventing new ones),
-  and agents can't tell Warden from another program that took its port.
-- **Per-agent rules need agent tokens.** A rule can list the agents it applies to
-  (`"agents": ["billing-agent"]`), but only with `--agents`: without tokens `warden serve`
-  refuses to start, since anyone could claim any agent id. A stolen token is that agent,
-  with all its permissions.
+The complete, maintained list is in [SECURITY.md](SECURITY.md#what-warden-does-not-protect-against).
+The ones that matter most:
+
 - **Warden is a checkpoint, not a sandbox.** An agent can skip asking. The MCP proxy and
   the SDK enforce the answer only for calls that go through them.
-- **Nested conditions don't search lists**, and argument lists only cover top-level names.
-- **Argument lists check names, not types.** An argument's type is only checked when a
-  rule's condition compares it.
-- **Text checks see text.** Paths and emails are checked for common tricks (`//`, `/./`,
-  `/../`, backslashes; spaces, display names, recipient lists, trailing dots), but Warden
-  doesn't resolve symlinks or URL-decode. Prefer "allow only..." rules for paths and emails.
-- **Without a tool argument list, arguments no rule mentions aren't checked.** Add a
-  `tools` entry for every tool with "deny when..." rules.
-- **The admin key is one shared secret, not real user accounts.** Any program that can
-  read your terminal output can approve. There's no record of *who* approved.
-- **A rejection sticks for the exact action only.** After a human says no, the same
-  agent asking for the same action is refused for 15 minutes (configurable); a slightly
-  changed action is a new approval.
-- **After a restart, pending approvals can't be approved until the agent asks again**
-  (arguments are never written to disk, so the human couldn't see them).
-- **The audit log is tamper-evident, not tamper-proof.** Someone who can edit the file
-  can rewrite the whole chain; save checkpoints elsewhere with `warden audit head` and
-  check them with `warden audit verify --expect FILE`.
-- **Import name clash.** The package installs as `agent-warden` but is imported as `warden`,
-  the same import name as the unrelated `warden` package on PyPI. Don't install both in one
-  environment.
-- **The policy file is trusted.** Whoever can edit it controls every decision.
-- **The MCP proxy checks at most 64 tool calls at once.** Further calls are refused
-  ("too many calls in progress"), not queued; the agent has to retry them.
+- **`--no-auth` turns off agent identity.** Any local program can then claim any
+  `agent_id`, and agents can't tell Warden from another program that took its port.
+- **The policy file and the admin key are trusted.** Whoever can edit the policy controls
+  every decision; the admin key is one shared secret, with no record of *who* approved.
+- **Text checks see text.** Paths, URLs and emails are checked for common tricks, but
+  Warden doesn't resolve paths or decode URLs. Prefer "allow only..." rules, and give
+  every tool with "deny when..." rules an argument list.
+- **The audit log is tamper-evident, not tamper-proof.** Save checkpoints elsewhere with
+  `warden audit head`.
 
 ## Development
 
