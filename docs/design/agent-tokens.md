@@ -42,7 +42,8 @@ agent's approval if it knows the id and the exact action.
 
 Protects against: a local process impersonating another agent; using another agent's
 approval; spoofed agent ids in the audit log; timing attacks on token comparison;
-token theft from the agents file (only hashes on disk).
+token theft from the agents file (only token hashes on disk; its `server_key`s can imitate
+Warden to the agents, not an agent to Warden).
 
 ## What it doesn't cover
 

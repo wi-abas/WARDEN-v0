@@ -45,7 +45,7 @@ is backed by code and tests, and what it leaves open. Short version: [SECURITY.m
 | Keep asking until a human gives in (A1) | A rejected or revoked action stays refused for `rejection_window_seconds` (default 15 min); only an admin can lift it | `tests/test_sticky_rejections.py` |
 | Mislead the approver with hidden characters (A1) | Escaped display + warnings | `tests/test_approval_display.py` |
 | Checked ≠ executed (A1) | SDK and proxy run exactly the checked object; proxy forwards re-encoded JSON, refuses extra params and top-level keys, reused ids, batches, unknown methods | `tests/test_sdk.py`, `tests/test_mcp_proxy.py`, `tests/test_mcp_proxy_messages.py`, `tests/test_mcp_proxy_request_ids.py`, fuzz target `proxy` |
-| Pretend to be another agent (A1, A2) | Agent tokens (`--agents`): id from a secret, hashes only, constant-time lookup | `tests/test_agent_tokens.py` |
+| Pretend to be another agent (A1, A2) | Agent tokens (`--agents`): id from a secret, token hashes only (plus the keys that prove Warden), constant-time lookup | `tests/test_agent_tokens.py` |
 | Use another agent's permissions (A1) | Per-agent rules (`agents`) need tokens: `serve` refuses a per-agent rule without `--agents` or with an unknown name; most restrictive still wins | `tests/test_per_agent_rules.py` |
 | Flood Warden (A1) | 64 KB bodies (counted as received, `Transfer-Encoding` refused); per-agent rate limits and pending-approval caps; capped rejection logging | `tests/test_body_limit.py`, `tests/test_rate_limits.py`, `tests/test_rejection_rate_limit.py` |
 | Freeze the server via a locked DB (A2) | Rejection records written in the background | `tests/test_locked_database.py` |

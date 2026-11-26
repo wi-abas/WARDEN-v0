@@ -48,8 +48,9 @@ Assuming the agent runtime calls Warden and obeys the answer:
 - **A writable policy**: `warden serve` refuses a policy or agents file that its group or
   other users can write, that another non-root user owns, or that is reached through a
   folder or symlink they could replace. ACLs aren't checked, and only startup is.
-- **Agent impersonation** (with `--agents`): the agent id comes from a token; only hashes
-  are stored; lookups are constant-time; one agent can't use another's approval.
+- **Agent impersonation** (with `--agents`): the agent id comes from a token; only token
+  hashes are stored (plus a secret key per agent with which Warden proves itself, so keep
+  the agents file private); lookups are constant-time; one agent can't use another's approval.
 - **Flooding by one agent**: per-agent rate limits and pending-approval caps.
 - **Silent history edits**: the audit log is a hash chain; `warden audit verify` reports
   the first edited, deleted or inserted row.
