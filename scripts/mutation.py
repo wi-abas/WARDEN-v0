@@ -31,6 +31,7 @@ TARGETS: dict[str, list[str]] = {
     "engine": [
         "test_engine.py",
         "test_respelled_paths.py",
+        "test_email_encoded_words.py",
         "test_conditions.py",
         "test_nested_arguments.py",
         "test_text_tricks.py",
