@@ -12,6 +12,9 @@
   `src/../.env`, `a//b`, also with backslashes) can't be checked and denies. A deny rule
   for exactly `.env` was dodged by `./.env`.
 
+- Email rules refuse MIME encoded-words (`=?utf-8?q?...?=@x.com`) and local parts
+  starting with `-` or `|` (option and pipe injection in sendmail-style tools).
+
 ### Changed
 - Tool names may contain uppercase letters (MCP servers use camelCase, like `getIssue`).
   Matching is case-sensitive, so another spelling has no rule and is denied by default.

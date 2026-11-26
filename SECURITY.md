@@ -123,8 +123,9 @@ Assuming the agent runtime calls Warden and obeys the answer:
   with checkpoints kept elsewhere (`warden audit head`, `warden audit verify --expect`). They can also change approval state
   stored in the same file. A trigger can't make Warden allow without a record, but one
   added and removed again leaves no trace.
-- **Text read differently by the tool.** Email rules don't decode MIME encoded-words
-  (`=?utf-8?q?...?=@x.com`) or refuse local parts starting with `-` or `|`. URL rules refuse
+- **Text read differently by the tool.** Email rules refuse MIME encoded-words
+  (`=?utf-8?q?...?=@x.com`) and local parts starting with `-` or `|`, but don't know
+  every mail program's quirks (quoted local parts are refused, comments too). URL rules refuse
   known disguised dot segments but don't decode URLs. A compared text that is a path with
   `.`, `..` or empty segments (`./.env`, `a/../.env`, `a//b`) is refused, but paths aren't
   resolved: denying exactly `.env` doesn't stop `config/.env` (use `endswith "/.env"` too).

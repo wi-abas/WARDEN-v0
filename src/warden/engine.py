@@ -325,7 +325,8 @@ def _url_host(url: str, condition: Condition) -> str:
 
 def _is_plain_email(text: str) -> bool:
     """Exactly one bare address: no spaces, no display names, no lists, no trailing dot,
-    and a plain name before the "@" (not empty, no routing tricks, no stray dots)."""
+    no MIME encoded-words, and a plain name before the "@" (not empty, no routing tricks,
+    no stray dots, not starting with "-" or "|")."""
     if text.count("@") != 1:
         return False
     local = text.split("@", 1)[0]
@@ -338,6 +339,11 @@ def _is_plain_email(text: str) -> bool:
         and not local.startswith(".")
         and not local.endswith(".")
         and ".." not in local
+        # MIME encoded-words ("=?utf-8?q?...?=") are decoded by some mail software into
+        # a different address than the text compared.
+        and "=?" not in text
+        # "-x@..." is read as an option, "|cmd@..." as a pipe by sendmail-style tools.
+        and not local.startswith(("-", "|"))
     )
 
 
