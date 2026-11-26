@@ -125,9 +125,9 @@ Assuming the agent runtime calls Warden and obeys the answer:
   added and removed again leaves no trace.
 - **Text read differently by the tool.** Email rules don't decode MIME encoded-words
   (`=?utf-8?q?...?=@x.com`) or refuse local parts starting with `-` or `|`. URL rules refuse
-  known disguised dot segments but don't decode URLs. `..` is refused for `startswith` and
-  for rule values containing `/`; other text comparisons don't interpret paths, so denying
-  exactly `.env` doesn't stop `./.env`.
+  known disguised dot segments but don't decode URLs. A compared text that is a path with
+  `.`, `..` or empty segments (`./.env`, `a/../.env`, `a//b`) is refused, but paths aren't
+  resolved: denying exactly `.env` doesn't stop `config/.env` (use `endswith "/.env"` too).
 - **Floods without a valid token.** Invalid requests count toward a budget only with a valid
   agent token; others, and 411/413 refusals, are not rate limited.
 - **URL paths in logs.** They are kept in the audit and access logs (query strings are not).

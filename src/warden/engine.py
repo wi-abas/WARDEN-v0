@@ -206,6 +206,18 @@ def _is_clean_path(text: str) -> bool:
     return not _has_dot_segment(text)
 
 
+def _respelled_path(text: str) -> bool:
+    """A path written another way than its plain name: "./.env", "a/../.env", "a//b",
+    "/secret/." or "dir\\..\\x". A file tool reads them as a different text than the one
+    compared, so a rule for exactly ".env" (no "/" in it, so not checked as a path) would
+    be dodged. Never a normal value to compare as text: uncheckable, so deny."""
+    if not ("/" in text or "\\" in text) or _looks_like_url(text):
+        return False
+    text = text.replace("\\", "/")
+    stripped = text.strip("/")
+    return "//" in stripped or _has_dot_segment(text)
+
+
 def _has_dot_segment(text: str) -> bool:
     """ ".", "..", and any other segment made only of dots and spaces ("...", ".. ", " "):
     Windows and tools that strip trailing dots/spaces read ".. " as ".." (a way out).
@@ -359,6 +371,8 @@ def _check_text_shape(actual: str, expected: list[str], condition: Condition) ->
         if not _is_clean_url(actual) or _has_disguised_escape(actual):
             raise _UncheckableArgument(condition.label, _UNCLEAN_URL)
         return  # a URL may legitimately contain "@" in its path: skip the email check
+    if _respelled_path(actual):
+        raise _UncheckableArgument(condition.label, _UNCLEAN_PATH)
     if any(_looks_like_domain(e) for e in expected) and not _is_clean_domain_text(actual):
         raise _UncheckableArgument(condition.label, _UNCLEAN_HOST)
     if any(_looks_like_path(e) for e in expected) and not _is_clean_path(actual):

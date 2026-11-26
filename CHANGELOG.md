@@ -8,6 +8,10 @@
   database was enough to recover guessable arguments (amounts, recipients) by hashing
   candidates. Approvals pending from before this change no longer match (ask again).
 
+- A compared text that is a path written with `.`, `..` or empty segments (`./.env`,
+  `src/../.env`, `a//b`, also with backslashes) can't be checked and denies. A deny rule
+  for exactly `.env` was dodged by `./.env`.
+
 ### Changed
 - Tool names may contain uppercase letters (MCP servers use camelCase, like `getIssue`).
   Matching is case-sensitive, so another spelling has no rule and is denied by default.
