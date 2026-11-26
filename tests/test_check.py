@@ -313,3 +313,69 @@ def test_w020_tool_names_differing_only_in_case(tmp_path: Path) -> None:
 def test_w020_not_raised_for_one_spelling(tmp_path: Path) -> None:
     policy = {"rules": [r("a", "getIssue", "allow"), r("b", "getIssue", "deny")]}
     assert "W020" not in codes(tmp_path, policy)
+
+
+def _amount(op: str, value: int) -> dict[str, Any]:
+    return {"arg": "amount", "op": op, "value": value}
+
+
+@pytest.mark.parametrize("op", ["lt", "lte"])
+def test_w021_allow_with_a_cap_but_no_minimum(tmp_path: Path, op: str) -> None:
+    policy = {"rules": [r("pay-small", "pay", "allow", _amount(op, 500))]}
+    report = check_policy(write(tmp_path, policy))
+    [warning] = [w for w in report.warnings if w.startswith("W021")]
+    assert f'rule "pay-small" allows "amount" {op} 500 with no minimum' in warning
+
+
+def test_w021_names_the_nested_argument(tmp_path: Path) -> None:
+    cap = {"arg": ["order", "total"], "op": "lte", "value": 9}
+    report = check_policy(write(tmp_path, {"rules": [r("a", "pay", "allow", cap)]}))
+    assert any('allows "order.total" lte 9' in w for w in report.warnings)
+
+
+@pytest.mark.parametrize(
+    "rules",
+    [
+        # A minimum in the same rule.
+        [r("a", "pay", "allow", _amount("gte", 0), _amount("lte", 500))],
+        [r("a", "pay", "allow", _amount("gt", -1), _amount("lt", 500))],
+        # A stricter rule for the tool catches small values.
+        [
+            r("a", "pay", "allow", _amount("lte", 500)),
+            r("no-negative", "pay", "deny", _amount("lt", 0)),
+        ],
+        [
+            r("a", "pay", "allow", _amount("lte", 500)),
+            r("ask-small", "pay", "require_approval", _amount("lte", 0)),
+        ],
+        # Not an allow rule.
+        [r("a", "pay", "deny", _amount("lte", 500))],
+        [r("a", "pay", "require_approval", _amount("lt", 500))],
+    ],
+)
+def test_w021_not_raised_when_small_values_are_handled(
+    tmp_path: Path, rules: list[dict[str, Any]]
+) -> None:
+    assert "W021" not in codes(tmp_path, {"rules": rules})
+
+
+@pytest.mark.parametrize(
+    "rules",
+    [
+        # The minimum is on another argument, or the deny rule is for another tool.
+        [r("a", "pay", "allow", {"arg": "fee", "op": "gte", "value": 0}, _amount("lte", 5))],
+        [r("a", "pay", "allow", _amount("lte", 5)), r("b", "refund", "deny", _amount("lt", 0))],
+        # A stricter rule on another argument, or catching big values, doesn't help.
+        [
+            r("a", "pay", "allow", _amount("lte", 5)),
+            r("b", "pay", "deny", {"arg": "fee", "op": "lt", "value": 0}),
+        ],
+        [r("a", "pay", "allow", _amount("lte", 5)), r("b", "pay", "deny", _amount("gt", 5))],
+        # An allow rule doesn't catch anything.
+        [r("a", "pay", "allow", _amount("lte", 5)), r("b", "pay", "allow", _amount("lt", 0))],
+    ],
+)
+def test_w021_raised_when_nothing_stops_negative_values(
+    tmp_path: Path, rules: list[dict[str, Any]]
+) -> None:
+    assert "W021" in codes(tmp_path, {"rules": rules})
