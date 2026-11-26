@@ -65,7 +65,8 @@ A rule can add `when` conditions. It then matches only if **all** of them hold:
             { "arg": "amount", "op": "lte", "value": 500 } ] }
 ```
 
-The `gte 0` matters: without it, `-500` is "at most 500" and would be allowed.
+The `gte 0` matters: without it, `-500` is "at most 500" and would be allowed
+(`warden check` warns, W021).
 
 | `op` | Meaning | `value` |
 |---|---|---|
@@ -424,6 +425,7 @@ do what you meant:
 | W018 | A deny rule compares a host name case-sensitively (`EVIL.COM` slips past) |
 | W019 | An `allow` rule uses `endswith` with a bare domain (`"mycompany.com"` also matches `"evilmycompany.com"`) |
 | W020 | Two tool names differ only in upper/lower case (`getIssue` and `getissue` are different tools) |
+| W021 | An `allow` rule caps a number (`lt`/`lte`) with no minimum, so `-1000000000` is allowed too |
 
 `--agents FILE` checks the agent names that per-agent rules and `limits.agents` use.
 Without it, a policy with per-agent rules gets a note (not a warning) that

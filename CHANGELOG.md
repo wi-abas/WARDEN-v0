@@ -12,6 +12,8 @@
 - Tool names may contain uppercase letters (MCP servers use camelCase, like `getIssue`).
   Matching is case-sensitive, so another spelling has no rule and is denied by default.
   `warden check` warns when two tool names differ only in case (W020).
+- `warden check` warns when an `allow` rule caps a number (`lt`/`lte`) with no minimum and
+  no stricter rule catches small values (W021): `amount lte 500` also allowed `-1000000000`.
 
 ## v0.5.0 (2026-11-26, alpha)
 

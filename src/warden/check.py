@@ -43,6 +43,8 @@ Warnings: the policy loads, but probably doesn't do what you meant:
         matches "evilmycompany.com". Start it with "@" or ".".
 - W020  two tool names differ only in upper/lower case ("getIssue" and "getissue"):
         tool names are case-sensitive, so a rule for one never applies to the other.
+- W021  an "allow" rule caps a number (lt / lte) but sets no minimum: "amount lte 500"
+        also allows -1000000000. Add "gte": 0 (or the real minimum), or a deny rule.
 
 W003 and W004 take a rule's "agents" into account: a rule for every agent can make a
 per-agent rule dead, but a per-agent deny never kills a rule for every agent.
@@ -147,6 +149,33 @@ def _agent_warnings(policy: Policy, known_agents: list[str] | None) -> list[str]
     return out
 
 
+def _no_minimum_warnings(rules: list[Rule]) -> list[str]:
+    """W021: an allow rule with only an upper bound on a number. Negative amounts (a
+    refund disguised as a payment) slip through unless something else stops them: a lower
+    bound in the same rule, or a stricter rule for the tool catching small values."""
+    out: list[str] = []
+    for rule in rules:
+        if rule.effect is not Decision.ALLOW:
+            continue
+        lower = {c.path for c in rule.when if c.op in {Op.GT, Op.GTE}}
+        for c in rule.when:
+            if c.op not in {Op.LT, Op.LTE} or c.path in lower:
+                continue
+            caught = any(
+                other.tool == rule.tool
+                and other.effect is not Decision.ALLOW
+                and any(o.op in {Op.LT, Op.LTE} and o.path == c.path for o in other.when)
+                for other in rules
+            )
+            if not caught:
+                out.append(
+                    f'W021: rule "{rule.id}" allows "{c.label}" {c.op.value} '
+                    f"{c.value} with no minimum, so -1000000000 is allowed too. Add a "
+                    f'"gte" condition (e.g. 0) or a deny rule for values below the minimum.'
+                )
+    return out
+
+
 def _warnings(policy: Policy) -> list[str]:
     out: list[str] = []
     rules = sorted(policy.rules, key=lambda r: r.id)
@@ -200,6 +229,8 @@ def _warnings(policy: Policy) -> list[str]:
                 out.append(f'W004: rule "{rule.id}" duplicates rule "{seen[key]}".')
             else:
                 seen[key] = rule.id
+
+    out.extend(_no_minimum_warnings(rules))
 
     for rule in rules:
         spec = policy.tools.get(rule.tool)
