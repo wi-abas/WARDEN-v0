@@ -36,9 +36,10 @@ From this review:
   project's own (AI-assisted) reviews.
 - **PyPI name not claimed.** The trusted publisher isn't set up, so `agent-warden` isn't on
   PyPI and someone else could register it. Install from the repository until then.
-- **The identity protocol is Python-only.** Other languages must reimplement it from
-  [design/server-identity.md](design/server-identity.md); the fixed test vectors live in
-  `tests/test_identity.py`.
+- **The identity protocol has two clients: Python and a small TypeScript example**
+  ([examples/typescript/warden-client.ts](../examples/typescript/warden-client.ts)). Other
+  languages reimplement it from [design/server-identity.md](design/server-identity.md) and
+  check themselves against [identity-test-vectors.json](identity-test-vectors.json).
 - **A backup of the whole data folder holds both the database and the hash key**, which
   together still allow guessing arguments.
 - **Paths aren't resolved**: denying exactly `.env` doesn't stop `config/.env`.
