@@ -121,7 +121,7 @@ HELLOS_PER_MINUTE = 6000
 UNKNOWN_HELLOS_PER_MINUTE = 600
 # Client nonces seen with a valid client_mac in the last minute (a replayed one counts as
 # unknown). At most this many are kept; beyond that, hellos count as unknown (fail safe).
-MAX_SEEN_HELLO_NONCES = 200_000
+MAX_SEEN_HELLO_NONCES = 200_000  # mutation-ok: a size cap; the test sets it to 1
 CANT_PROVE = "can't prove Warden's identity on this connection"
 # Rejected requests are recorded by a background worker, never on the server's main
 # loop: if the database is locked (e.g. someone has it open), a synchronous write would

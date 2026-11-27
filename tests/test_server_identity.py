@@ -731,3 +731,13 @@ def test_seen_nonces_expire_and_are_capped(
     frozen_clock[0] += 61
     assert w._first_use("b" * 64)
     assert "a" * 64 not in repr(w)
+
+
+def test_only_expired_nonces_are_forgotten(app: FastAPI, frozen_clock: list[float]) -> None:
+    w = app.state.warden
+    assert w._first_use("a" * 64)
+    frozen_clock[0] += 30
+    assert w._first_use("b" * 64)
+    frozen_clock[0] += 31  # "a" is past a minute, "b" isn't
+    assert not w._first_use("b" * 64)
+    assert w._first_use("a" * 64)
