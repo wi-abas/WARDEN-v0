@@ -199,6 +199,78 @@ def load_config(path: Path) -> ProxyConfig:
         raise ConfigError(f"{path}: can't read it ({type(exc).__name__})") from None
 
 
+# An exact version: "pkg@1.2.3" (npx, uvx) or "pkg==1.2.3" (uvx, pipx).
+_EXACT_VERSION = re.compile(
+    r".(@|==)(v?\d+\.\d+\.\d+([-+.][0-9A-Za-z.\-+]*)?|[0-9a-f]{40})$"  # or a git commit
+)
+# Text that is very likely a real secret, by its well-known prefix.
+_SECRET_VALUE = re.compile(
+    r"^(sk-ant-|sk-proj-|sk_live_|rk_live_|ghp_|gho_|ghs_|github_pat_|glpat-|xox[abprs]-|"
+    r"AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_\-]{20}|npm_[0-9A-Za-z]{20}|hf_[0-9A-Za-z]{20}|"
+    r"-----BEGIN [A-Z ]*PRIVATE KEY-----)"
+)
+_FLAG_WITH_VALUE = {"--from", "-p", "--package", "--with", "--python", "--spec"}
+
+
+def _package_arg(args: tuple[str, ...]) -> str | None:
+    """The package an npx / uvx / pipx command line starts: the value of --from, -p,
+    --package or --spec, else the first argument that isn't a flag."""
+    rest = iter(args)
+    for arg in rest:
+        if arg in {"--from", "-p", "--package", "--spec"}:
+            return next(rest, None)
+        if arg in _FLAG_WITH_VALUE:
+            next(rest, None)
+        elif not arg.startswith("-"):
+            return arg
+    return None
+
+
+def config_warnings(config: ProxyConfig) -> list[str]:
+    """Risks in how the server is started that the proxy can't check for you. Warnings
+    only, printed at start: the server runs with your permissions, so what it is matters.
+    Never contains an environment value."""
+    out = []
+    program = Path(config.server.command).name.lower().removesuffix(".cmd").removesuffix(".exe")
+    args = config.server.args
+    runner: str | None = None
+    rest: tuple[str, ...] = ()
+    if program in {"npx", "bunx", "pnpx", "uvx"}:
+        runner, rest = program, args
+    elif program == "pipx" and args[:1] == ("run",):
+        runner, rest = "pipx run", args[1:]
+    elif program == "uv" and args[:2] == ("tool", "run"):
+        runner, rest = "uv tool run", args[2:]
+    if runner is not None:
+        package = _package_arg(rest)
+        if package is not None and not _EXACT_VERSION.search(package):
+            name = re.sub(r"(?<=.)[@=<>!~^].*", "", package)  # without its version
+            if name.startswith("git+"):
+                example = f"{name}@<commit>"
+            elif runner in {"npx", "bunx", "pnpx"}:
+                example = f"{name}@1.2.3"
+            else:
+                example = f"{name}==1.2.3"
+            out.append(
+                f"{runner} starts {package!r} without an exact version: each start may "
+                f"download whatever was published last. Pin it, e.g. {example}."
+            )
+    if program in {"docker", "podman"} and "run" in args:
+        if not any("@sha256:" in arg for arg in args):
+            out.append(
+                f"{program} run without an image digest (image@sha256:...): the tag can be "
+                f"moved to a different image."
+            )
+    for name, value in sorted(config.server.env.items()):
+        if _SECRET_VALUE.match(value):
+            out.append(
+                f"server.env {name!r} looks like a real secret key, written in the config "
+                f"file (easy to commit or share). Set it in the MCP client's env instead: "
+                f"the server gets the proxy's environment."
+            )
+    return out
+
+
 class Checker(Protocol):
     def evaluate(
         self, tool: str, arguments: dict[str, JsonValue], approval_id: str | None = None

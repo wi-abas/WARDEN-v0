@@ -307,7 +307,14 @@ def run_proxy(args: argparse.Namespace) -> int:
     """`warden proxy`: config file and/or flags, then relay stdin/stdout until done."""
     import logging
 
-    from warden.mcp_proxy import ConfigError, ProxyConfig, load_config, serve_stdio
+    from warden.mcp_proxy import (
+        ConfigError,
+        ProxyConfig,
+        config_warnings,
+        load_config,
+        serve_stdio,
+    )
+    from warden.policy import replaceable_by_others
 
     # stdout carries the MCP protocol: every human-readable line goes to stderr.
     logging.basicConfig(stream=sys.stderr, level=logging.INFO, format="warden proxy: %(message)s")
@@ -341,6 +348,11 @@ def run_proxy(args: argparse.Namespace) -> int:
             f"warden proxy: invalid settings ({'; '.join(describe_errors(exc))})", file=sys.stderr
         )
         return 2
+    warnings = config_warnings(config)
+    if args.config and (why := replaceable_by_others(args.config)):
+        warnings.append(f"{args.config}: another user could replace it ({why})")
+    for warning in warnings:
+        print(f"warden proxy: warning: {warning}", file=sys.stderr)
     return serve_stdio(config, no_auth=args.no_auth)
 
 
