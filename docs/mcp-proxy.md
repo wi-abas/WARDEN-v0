@@ -78,6 +78,19 @@ file, flags work too: `warden proxy --agent-id cursor --tool-prefix fs. -- npx -
 If the server can't be started (no such command, for example), the proxy says so on stderr
 and exits with code 2. Nothing is relayed.
 
+At start the proxy warns (on stderr, then starts anyway) about risks in how the server is
+launched, since the server runs with your permissions:
+
+- `npx` / `bunx` / `uvx` / `uv tool run` / `pipx run` without an exact version
+  (`pkg@1.2.3`, `pkg==1.2.3`, or a commit for `git+` URLs): every start may download
+  whatever was published last. The example config above gets this warning: pin the
+  version you reviewed.
+- `docker run` / `podman run` without an image digest (`image@sha256:...`).
+- A `server.env` value that looks like a real secret key (`sk-ant-`, `ghp_`, `AKIA...`,
+  a private key): set it in the MCP client's `env` instead, so it isn't in a file that's
+  easy to commit. The value is never printed.
+- A config file another user could replace.
+
 ## 3. Point your client at the proxy
 
 **Claude Desktop** (`claude_desktop_config.json`; Cursor's `~/.cursor/mcp.json` has the

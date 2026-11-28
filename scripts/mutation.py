@@ -164,6 +164,7 @@ TARGETS: dict[str, list[str]] = {
         "test_mcp_proxy_request_ids.py",
         "test_mcp_proxy_startup.py",
         "test_mcp_proxy_stuck_server.py",
+        "test_mcp_proxy_config_warnings.py",
     ],
     "approvals_cli": [
         "test_approvals_cli.py",

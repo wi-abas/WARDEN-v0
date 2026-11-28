@@ -26,6 +26,9 @@
   could use up an agent's or the admin's hellos, so nobody could approve while it flooded.
 
 ### Added
+- `warden proxy` warns at start about unpinned `npx`/`uvx`/`pipx` packages, `docker run`
+  without an image digest, secret keys written in `server.env`, and a config file another
+  user could replace.
 - `warden check` warnings W022 (a command allowed by `startswith` without
   `no_shell_syntax`), W023 (an allowed path prefix that is a whole disk or home folder) and
   W024 (an allowed host that shows whatever is sent to it, like `webhook.site`).
