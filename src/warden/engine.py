@@ -78,6 +78,7 @@ class _UncheckableArgument(Exception):
 # Fixed reasons for text that is shaped to slip past a comparison. Never the value itself.
 _HIDDEN_CHARS = "hidden or look-alike characters"
 _UNCLEAN_PATH = "not a clean path: '..', '.', '//', '%', backslash or edge spaces"
+_FILE_NAME_SPELLING = "a file name read differently: final '/', '.' or space, ':' stream, or ABC~1"
 _UNCLEAN_URL = "not a clean URL"
 _UNCLEAN_EMAIL = "not one plain email address"
 _UNCLEAN_HOST = "not a clean host name"
@@ -216,6 +217,52 @@ def _respelled_path(text: str) -> bool:
     text = text.replace("\\", "/")
     stripped = text.strip("/")
     return "//" in stripped or _has_dot_segment(text)
+
+
+# A Windows short name ("PROGRA~1", "ENV~1.TXT"): which file it names depends on the disk.
+_SHORT_NAME = re.compile(r"(?:^|[/\\])[^/\\~\s]{1,6}~[0-9]+(?:\.[^/\\.\s]{0,3})?(?=$|[/\\])")
+
+
+def _file_system_reading(text: str, drop_final_slash: bool) -> str:
+    """The text as a file system reads it, where that differs from the letters: Windows
+    drops trailing dots and spaces from each name (".env." is ".env") and reads
+    "name::$DATA" or "name:stream" as the file "name"; with `drop_final_slash`, "dir/"
+    names the same thing as "dir" (on every system)."""
+    parts = re.split(r"([/\\])", text)
+    for i, part in enumerate(parts):
+        if i == 0 and re.fullmatch("[A-Za-z]:", part):
+            continue  # a drive letter, "C:"
+        name, colon, stream = part.partition(":")
+        if colon and not any(ch.isspace() for ch in stream):
+            part = name
+        if part.strip(". "):  # names made only of dots are refused elsewhere
+            part = part.rstrip(". ")
+        parts[i] = part
+    reading = "".join(parts)
+    if drop_final_slash:
+        reading = reading.rstrip("/\\") or reading
+    return reading
+
+
+def _both_readings(
+    matches: Callable[[str, str], bool], condition: Condition, drop_final_slash: bool
+) -> Callable[[str, str], bool]:
+    """`matches`, but the text as written and as a file system reads it must give the same
+    answer: "/workspace/.env." must not dodge a rule for "/workspace/.env". If they
+    disagree, the text can't be checked. When they agree nothing changes, so ordinary
+    text with a dot or a colon in it isn't refused."""
+
+    def check(text: str, option: str) -> bool:
+        answer = matches(text, option)
+        read = matches(
+            _file_system_reading(text, drop_final_slash),
+            _file_system_reading(option, drop_final_slash),
+        )
+        if answer != read:
+            raise _UncheckableArgument(condition.label, _FILE_NAME_SPELLING)
+        return answer
+
+    return check
 
 
 def _has_dot_segment(text: str) -> bool:
@@ -379,6 +426,8 @@ def _check_text_shape(actual: str, expected: list[str], condition: Condition) ->
         return  # a URL may legitimately contain "@" in its path: skip the email check
     if _respelled_path(actual):
         raise _UncheckableArgument(condition.label, _UNCLEAN_PATH)
+    if _SHORT_NAME.search(actual):
+        raise _UncheckableArgument(condition.label, _FILE_NAME_SPELLING)
     if any(_looks_like_domain(e) for e in expected) and not _is_clean_domain_text(actual):
         raise _UncheckableArgument(condition.label, _UNCLEAN_HOST)
     if any(_looks_like_path(e) for e in expected) and not _is_clean_path(actual):
@@ -460,7 +509,11 @@ def _holds(condition: Condition, arguments: dict[str, JsonValue]) -> bool:
         # not allow "workspace/../x". (URLs were checked above, in their own way.)
         if op is Op.STARTSWITH and not _looks_like_url(expected) and _climbs_out(actual):
             raise _UncheckableArgument(condition.label, _UNCLEAN_PATH)
-        affix_test = str.startswith if op is Op.STARTSWITH else str.endswith
+        affix_test: Callable[[str, str], bool] = (
+            str.startswith if op is Op.STARTSWITH else str.endswith
+        )
+        if not _looks_like_url(actual):
+            affix_test = _both_readings(affix_test, condition, op is Op.ENDSWITH)
         return _any_match(actual, [expected], condition, affix_test)
 
     if op is Op.CONTAINS:
@@ -485,7 +538,10 @@ def _holds(condition: Condition, arguments: dict[str, JsonValue]) -> bool:
         texts = [c for c in choices if isinstance(c, str)]
         _check_unicode(actual, condition)
         _check_text_shape(actual, texts, condition)
-        found = _any_match(actual, texts, condition, str.__eq__)
+        same: Callable[[str, str], bool] = str.__eq__
+        if not _looks_like_url(actual):
+            same = _both_readings(same, condition, drop_final_slash=True)
+        found = _any_match(actual, texts, condition, same)
     else:
         found = any(_comparable(actual, choice) and actual == choice for choice in choices)
     if op is Op.NEQ:
