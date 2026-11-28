@@ -26,6 +26,9 @@
   could use up an agent's or the admin's hellos, so nobody could approve while it flooded.
 
 ### Added
+- `warden check` warnings W022 (a command allowed by `startswith` without
+  `no_shell_syntax`), W023 (an allowed path prefix that is a whole disk or home folder) and
+  W024 (an allowed host that shows whatever is sent to it, like `webhook.site`).
 - `warden check --format json|github`: the report as JSON, or as GitHub Actions
   annotations on the pull request.
 - Condition op `no_shell_syntax` (no value): the text uses only letters, digits, spaces
