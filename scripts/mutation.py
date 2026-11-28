@@ -191,6 +191,7 @@ EXEMPT: dict[str, str] = {
     "test_typescript_client.py": "tests examples/typescript/warden-client.ts",
     "test_check.py": "check isn't a target",
     "test_check_formats.py": "check isn't a target",
+    "test_check_risky_allows.py": "check isn't a target",
     "test_deep_nesting.py": "one parser limit across many modules, not their logic",
     "test_default_policy.py": "tests the shipped policy file",
     "test_demo.py": "tests the demo",
