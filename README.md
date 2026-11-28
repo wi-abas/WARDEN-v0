@@ -373,6 +373,11 @@ nothing secret is sent until Warden has proven itself, and only signed answers c
 program that takes Warden's port gets nothing and can't make a tool run. Re-create agents
 with `warden agent add` when upgrading.
 
+Done in v0.6.0 (alpha): agent tokens on by default (`--no-auth` to opt out), a keyed
+`action_hash`, `no_shell_syntax` for command rules, more `warden check` warnings with JSON
+and GitHub output, proxy start-up warnings, a TypeScript client with test vectors, and
+fixes for path, email and handshake tricks found in two reviews. See the changelog.
+
 Next, shaped by feedback from early users:
 
 1. Argument types in tool argument lists
