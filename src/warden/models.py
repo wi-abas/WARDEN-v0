@@ -137,10 +137,14 @@ class Op(StrEnum):
     # The text argument contains this text (or any of a list of texts). Compares text,
     # not meaning ("rm -fr" doesn't contain "rm -rf"): only for deny / require_approval.
     CONTAINS = "contains"
+    # The text uses only plain characters (letters, digits, space, - _ . / : = , @ + %):
+    # no ";", "|", "$", quotes, ... a shell would act on (takes no value).
+    NO_SHELL_SYNTAX = "no_shell_syntax"
 
 
 NUMBER_OPS = {Op.GT, Op.GTE, Op.LT, Op.LTE}
 PRESENCE_OPS = {Op.EXISTS, Op.MISSING}
+VALUELESS_OPS = PRESENCE_OPS | {Op.NO_SHELL_SYNTAX}
 TEXT_OPS = {Op.EQ, Op.NEQ, Op.IN, Op.STARTSWITH, Op.ENDSWITH, Op.CONTAINS}  # may use ignore_case
 
 
@@ -214,7 +218,7 @@ class Condition(BaseModel):
         return ".".join(self.path)
 
     op: Op
-    value: JsonValue = None  # required for every op except exists / missing
+    value: JsonValue = None  # required for every op except exists / missing / no_shell_syntax
     # Compare text without caring about upper/lower case, e.g. email domains.
     ignore_case: bool = False
     # host_in only: the URL schemes this condition accepts (replaces http + https).
@@ -259,7 +263,7 @@ class Condition(BaseModel):
         # Catch policy mistakes at load time, e.g. "gt" with a text value.
         if self.schemes is not None and self.op is not Op.HOST_IN:
             raise ValueError("'schemes' only works with 'host_in'")
-        if self.op in PRESENCE_OPS and self.value is not None:
+        if self.op in VALUELESS_OPS and self.value is not None:
             raise ValueError(f"'{self.op}' takes no value")
         if self.op in NUMBER_OPS and not is_number(self.value):
             raise ValueError(f"'{self.op}' needs a number value")
