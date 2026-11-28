@@ -49,6 +49,7 @@ def warnings_for(command: str, *args: str, env: dict[str, str] | None = None) ->
         ),
         ("uv", ["tool", "run", "pkg"], "pkg", "pkg==1.2.3"),
         ("pipx", ["run", "--spec", "pkg", "tool"], "pkg", "pkg==1.2.3"),
+        ("pipx", ["run", "pkg"], "pkg", "pkg==1.2.3"),
     ],
 )
 def test_unpinned_packages(command: str, args: list[str], package: str, example: str) -> None:
@@ -76,6 +77,7 @@ def test_unpinned_packages(command: str, args: list[str], package: str, example:
         ("pipx", ["run", "pkg==1.0.0"]),
         ("uv", ["run", "server.py"]),
         ("pipx", ["install", "pkg"]),
+        ("mytool", ["tool", "run", "pkg"]),  # only uv's "tool run" is a runner
         ("node", ["server.js"]),
         ("npx", ["-y"]),
         ("uvx", ["--from"]),
