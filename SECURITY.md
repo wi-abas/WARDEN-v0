@@ -137,6 +137,9 @@ Assuming the agent runtime calls Warden and obeys the answer:
   case-insensitive disks, `\\?\` prefixes) can't be seen from the text.
 - **Floods without a valid token.** Invalid requests count toward a budget only with a valid
   agent token; others, and 411/413 refusals, are not rate limited.
+- **Data sent to an allowed host.** `host_in` limits where a request goes, not what it
+  carries: data in a URL's path or query (or a request body) reaches an allowed host.
+  Only exact URLs (`eq` / `in`) or narrow prefixes limit that ([policies.md](docs/policies.md)).
 - **URL paths in logs.** They are kept in the audit and access logs (query strings are not).
 - **Re-asking with a slightly different action.** A sticky rejection covers the exact
   action only: one changed character in the arguments (or, without agent tokens, a new

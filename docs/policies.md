@@ -100,6 +100,13 @@ The `gte 0` matters: without it, `-500` is "at most 500" and would be allowed
   policy and in requests; the Unicode form is refused because different software
   converts it differently. A host with characters that can't be in a host name
   (`evil.net;.example.com`) denies the request, also when a text rule compares a URL.
+- **An allowed host can still receive data.** `host_in` decides *where* a request goes,
+  not *what* it carries: `https://api.example.com/x?d=SECRET` or
+  `https://api.example.com/SECRET` pass an allow list for `api.example.com`. If an agent
+  could read secrets and an allowed host could store what it's sent (a paste site, an
+  issue tracker, a webhook), allow exact URLs with `eq` / `in`, or a narrow
+  `startswith "https://api.example.com/v1/status"`, and send the rest to a human with
+  `otherwise`.
 - **`host_in` and URL schemes.** By default `host_in` only accepts `http://` and
   `https://` URLs (any case). Any other scheme (`ftp://`, `gopher://`, `file://`,
   `ws://`, ...) can't be checked by the condition, and **the whole request is denied**,
