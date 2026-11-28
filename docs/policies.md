@@ -125,6 +125,13 @@ The `gte 0` matters: without it, `-500` is "at most 500" and would be allowed
   In a URL's path (compared as text; `host_in` only looks at the host), ordinary escapes (`%20`, `caf%C3%A9`) are fine; hidden dot segments
   (`..;/`, `..%20/`), control characters (`%00`), overlong UTF-8 (`%c0%ae`) and malformed
   escapes (`%u002e`, a lone `%`) are denied.
+- For `startswith`, `endswith`, `eq`, `neq` and `in`, the text is also compared the way a
+  file system reads it: Windows drops trailing dots and spaces (`.env.` opens `.env`) and
+  reads `name::$DATA` / `name:stream` as `name`, and `dir/` names the same as `dir`
+  (for `endswith`, `eq`, `in`). If the two readings give different answers, the request is
+  denied; `/workspace/.env.` can't dodge a deny rule for `.env`. Windows short names
+  (`ENV~1`, `PROGRA~1`) are always denied: which file they name depends on the disk. When
+  both readings agree nothing changes, so `/workspace/src/` or `Note: done` work as before.
 - An email address a rule compares must be one plain address: no display name, list or
   quotes, and a normal name before the `@` (not empty, no `%`, `!`, `:` or `\`, no
   leading, trailing or double dots). Those are routing tricks some mail software still

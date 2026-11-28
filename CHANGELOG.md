@@ -12,6 +12,11 @@
   `src/../.env`, `a//b`, also with backslashes) can't be checked and denies. A deny rule
   for exactly `.env` was dodged by `./.env`.
 
+- File names a file system reads differently from their letters can't dodge a rule:
+  `.env.`, `.env::$DATA`, `.env:stream` (Windows), `.ssh/` (a final slash) and Windows
+  short names (`ENV~1`). `startswith`, `endswith` and `eq`/`in` compare the text as written
+  and as read; if the answers differ, the request is denied.
+
 - Email rules refuse MIME encoded-words (`=?utf-8?q?...?=@x.com`) and local parts
   starting with `-` or `|` (option and pipe injection in sendmail-style tools).
 

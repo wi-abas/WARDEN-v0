@@ -26,6 +26,7 @@ Severity is for Warden's own threat model (a local checkpoint trusted by its ope
 | 5 | Low | **MIME encoded-words and `-`/`|` local parts passed email rules.** `=?utf-8?q?evil=40x.com?=@mycompany.com` passed an allow list for `@mycompany.com`. | Refused as not a plain address (deny). | #31 |
 | 6 | Usability (fail closed) | **camelCase MCP tools were always denied.** | Tool names may contain uppercase letters, matched case-sensitively; `warden check` W020 warns on case-only differences. | #28 |
 | 7 | Policy hygiene | **`amount lte 500` also allowed `-1000000000`, with no warning.** | `warden check` W021. | #29 |
+| 8 | Low | **File-system spellings dodged deny rules.** `/workspace/.env.`, `.env::$DATA`, `.env:stream`, `ENV~1` (Windows) and `.ssh/` (a final slash, every system) passed rules for `.env` or `/.ssh`. Found in a follow-up review on 2026-11-28. | Text is compared as written and as a file system reads it; different answers deny. Short names always deny. | #39 |
 
 ## Still open
 
@@ -42,4 +43,5 @@ From this review:
   check themselves against [identity-test-vectors.json](identity-test-vectors.json).
 - **A backup of the whole data folder holds both the database and the hash key**, which
   together still allow guessing arguments.
-- **Paths aren't resolved**: denying exactly `.env` doesn't stop `config/.env`.
+- **Paths aren't resolved**: denying exactly `.env` doesn't stop `config/.env`, and
+  symlinks or hard links can't be seen from the text.

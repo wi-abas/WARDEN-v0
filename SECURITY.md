@@ -130,8 +130,11 @@ Assuming the agent runtime calls Warden and obeys the answer:
   (`=?utf-8?q?...?=@x.com`) and local parts starting with `-` or `|`, but don't know
   every mail program's quirks (quoted local parts are refused, comments too). URL rules refuse
   known disguised dot segments but don't decode URLs. A compared text that is a path with
-  `.`, `..` or empty segments (`./.env`, `a/../.env`, `a//b`) is refused, but paths aren't
-  resolved: denying exactly `.env` doesn't stop `config/.env` (use `endswith "/.env"` too).
+  `.`, `..` or empty segments (`./.env`, `a/../.env`, `a//b`) is refused, and so is one a
+  file system reads differently for the rule (`.env.`, `.env::$DATA`, `.ssh/`, short names
+  like `ENV~1`). But paths aren't resolved: denying exactly `.env` doesn't stop
+  `config/.env` (use `endswith "/.env"` too), and symlinks and other aliases (hard links,
+  case-insensitive disks, `\\?\` prefixes) can't be seen from the text.
 - **Floods without a valid token.** Invalid requests count toward a budget only with a valid
   agent token; others, and 411/413 refusals, are not rate limited.
 - **URL paths in logs.** They are kept in the audit and access logs (query strings are not).
