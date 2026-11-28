@@ -426,3 +426,50 @@ def format_report(path: Path, report: Report) -> str:
 
     lines.append(f"{count(len(report.errors), 'error')}, {count(len(report.warnings), 'warning')}.")
     return "\n".join(lines)
+
+
+_CODE = re.compile(r"(W\d{3}): ")
+
+
+def _split_code(warning: str) -> tuple[str | None, str]:
+    """("W021", "rule ...") from "W021: rule ...", or (None, text) if it has no code."""
+    match = _CODE.match(warning)
+    return (match[1], warning[match.end() :]) if match else (None, warning)
+
+
+def format_json(path: Path, report: Report) -> str:
+    """The report as one JSON object, for scripts and CI."""
+    warnings = []
+    for warning in report.warnings:
+        code, message = _split_code(warning)
+        warnings.append({"code": code, "message": message})
+    return json.dumps(
+        {
+            "file": str(path),
+            "valid": not report.errors,
+            "rules": report.rules,
+            "tools": report.tools,
+            "errors": report.errors,
+            "warnings": warnings,
+            "notes": report.notes,
+        },
+        indent=2,
+        ensure_ascii=False,
+    )
+
+
+def _escape(text: str, *, prop: bool = False) -> str:
+    """GitHub Actions workflow-command escaping (a newline would end the command)."""
+    text = text.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+    return text.replace(":", "%3A").replace(",", "%2C") if prop else text
+
+
+def format_github(path: Path, report: Report) -> str:
+    """Annotations GitHub Actions shows on the pull request, then the usual report."""
+    file = _escape(str(path), prop=True)
+    lines = [f"::error file={file},title=warden check::{_escape(e)}" for e in report.errors]
+    for warning in report.warnings:
+        code, message = _split_code(warning)
+        title = _escape(f"warden check {code}" if code else "warden check", prop=True)
+        lines.append(f"::warning file={file},title={title}::{_escape(message)}")
+    return "\n".join([*lines, format_report(path, report)])

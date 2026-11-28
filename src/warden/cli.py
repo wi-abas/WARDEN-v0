@@ -7,6 +7,7 @@ warden serve           start the server; options: --policy FILE --port N
 warden init [FILE]     create a starter policy (default policies/default.json)
 warden check FILE      validate a policy file; exit 1 on errors
 warden check --strict  ...also exit 1 on warnings (useful in CI)
+warden check --format json|github   ...machine-readable report / GitHub Actions annotations
 warden check --agents FILE   ...also check the agent names per-agent rules use
 warden schema          print the JSON Schema for policy files
 warden test FILE [--policy FILE]        run policy tests (example requests + expected decisions)
@@ -45,7 +46,7 @@ from warden.agents import (
     remove_agent,
 )
 from warden.audit import DEFAULT_AUDIT_PATH, read_error, verify_chain
-from warden.check import check_policy, format_report
+from warden.check import check_policy, format_github, format_json, format_report
 from warden.policy import DEFAULT_POLICY_PATH, Policy, describe_errors
 from warden.settings import SettingsError, resolve
 
@@ -111,6 +112,12 @@ def main(argv: list[str] | None = None) -> int:
     check = commands.add_parser("check", help="validate a policy file")
     check.add_argument("policy", nargs="?", type=Path, default=DEFAULT_POLICY_PATH)
     check.add_argument("--strict", action="store_true", help="exit 1 on warnings too")
+    check.add_argument(
+        "--format",
+        choices=["text", "json", "github"],
+        default="text",
+        help="text (default), json, or github (annotations for GitHub Actions)",
+    )
     check.add_argument(
         "--agents", type=Path, help="agents file: check the agent names the policy uses"
     )
@@ -191,7 +198,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "check":
         report = check_policy(args.policy, args.agents)
-        print(format_report(args.policy, report))
+        formatter = {"json": format_json, "github": format_github}.get(args.format, format_report)
+        print(formatter(args.policy, report))
         return 1 if report.errors or (args.strict and report.warnings) else 0
 
     try:

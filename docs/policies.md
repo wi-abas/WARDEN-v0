@@ -458,6 +458,15 @@ for everyone.
 
 Exit code `1` on errors; with `--strict`, also on warnings (useful in CI).
 
+`--format json` prints the report as one JSON object (`valid`, `rules`, `tools`,
+`errors`, `warnings` as `{code, message}`, `notes`). `--format github` prints GitHub
+Actions annotations, so errors and warnings show up on the pull request, followed by the
+usual report:
+
+```yaml
+- run: uv run warden check policy.json --strict --format github
+```
+
 ## Testing a policy
 
 `warden check` finds rules that look wrong; `warden test` proves the policy decides what
