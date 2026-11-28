@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## v0.6.0 (2026-11-28, alpha)
+
+Upgrading: `warden serve` now needs `--agents` (or `--no-auth` on purpose), and approvals
+pending from before are asked again (the `action_hash` is keyed now).
 
 ### Security
 - The `action_hash` is keyed (HMAC-SHA256) with a per-install secret in
