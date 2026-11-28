@@ -33,6 +33,7 @@ TARGETS: dict[str, list[str]] = {
         "test_respelled_paths.py",
         "test_file_name_spellings.py",
         "test_no_shell_syntax.py",
+        "test_ip_spellings.py",
         "test_email_encoded_words.py",
         "test_conditions.py",
         "test_nested_arguments.py",
