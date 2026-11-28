@@ -223,6 +223,12 @@ def _respelled_path(text: str) -> bool:
 _SHORT_NAME = re.compile(r"(?:^|[/\\])[^/\\~\s]{1,6}~[0-9]+(?:\.[^/\\.\s]{0,3})?(?=$|[/\\])")
 
 
+# no_shell_syntax: an allow list of characters a shell doesn't act on. "=" only inside a
+# word: zsh expands a word starting with it ("=ls" is "/bin/ls").
+_PLAIN_COMMAND = re.compile(r"[A-Za-z0-9 _\-./:=,@+%]*")
+_ZSH_EQUALS = re.compile(r"(?:^| )=")
+
+
 def _file_system_reading(text: str, drop_final_slash: bool) -> str:
     """The text as a file system reads it, where that differs from the letters: Windows
     drops trailing dots and spaces from each name (".env." is ".env") and reads
@@ -468,6 +474,11 @@ def _holds(condition: Condition, arguments: dict[str, JsonValue]) -> bool:
         raise _MissingArgument
     expected = condition.value
     op = condition.op
+
+    if op is Op.NO_SHELL_SYNTAX:
+        if not isinstance(actual, str):
+            raise _UncheckableArgument(condition.label)
+        return _PLAIN_COMMAND.fullmatch(actual) is not None and not _ZSH_EQUALS.search(actual)
 
     if op is Op.HOST_IN:
         if not isinstance(actual, str) or not isinstance(expected, list):

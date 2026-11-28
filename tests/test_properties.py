@@ -77,6 +77,7 @@ def conditions(draw: st.DrawFn) -> dict[str, Any]:
                 "exists",
                 "missing",
                 "host_in",
+                "no_shell_syntax",
             ]
         )
     )
