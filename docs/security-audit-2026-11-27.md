@@ -28,6 +28,25 @@ Severity is for Warden's own threat model (a local checkpoint trusted by its ope
 | 7 | Policy hygiene | **`amount lte 500` also allowed `-1000000000`, with no warning.** | `warden check` W021. | #29 |
 | 8 | Low | **File-system spellings dodged deny rules.** `/workspace/.env.`, `.env::$DATA`, `.env:stream`, `ENV~1` (Windows) and `.ssh/` (a final slash, every system) passed rules for `.env` or `/.ssh`. Found in a follow-up review on 2026-11-28. | Text is compared as written and as a file system reads it; different answers deny. Short names always deny. | #39 |
 
+## Follow-up, 2026-11-28
+
+A comparison with another agent-security project (a config scanner with a regex-based
+runtime hook) and four research passes over it. Payloads were run against Warden's engine
+before anything was changed.
+
+- **Fixed:** finding #8 above (file-system spellings, #39).
+- **Hardening added:** `no_shell_syntax` for command prefixes (#40); `warden check`
+  W022–W024 (#44) and `--format json|github` (#43); proxy start-up warnings about
+  unpinned packages, image digests and secrets in `server.env` (#45).
+- **Documented, not changed:** an allowed host can still receive data in a URL's path or
+  query (#41; a query-only check was rejected as false confidence). IP and local-name
+  spellings are pinned as denied by host allow lists (#42).
+- **Proposals for review:** [Claude Code hook](design/claude-code-hook.md),
+  [`init --from-mcp`](design/init-from-mcp.md), [presets](design/presets.md).
+- **Checked and not applicable:** prose prompt-injection payloads (Warden doesn't read
+  prose), regex deny lists, LLM-based analysis (against Warden's rule of no LLM in
+  decisions).
+
 ## Still open
 
 The complete list is in [SECURITY.md](../SECURITY.md#what-warden-does-not-protect-against).
